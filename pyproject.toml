@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tiramisu-workspace"
+version = "0.1.0"
+description = "Durable, long-running business agents"
+readme = "README.md"
+requires-python = ">=3.13,<3.15"
+license = "MIT"
+dependencies = [
+  "alembic>=1.16,<2",
+  "asyncpg>=0.30,<1",
+  "fastapi>=0.116,<1",
+  "openai-agents>=0.17,<1",
+  "pydantic>=2.12,<3",
+  "pydantic-settings>=2.11,<3",
+  "pyyaml>=6,<7",
+  "sqlalchemy[asyncio]>=2.0.43,<3",
+  "temporalio>=1.26,<2",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.scripts]
+tiramisu-api = "tiramisu_agents.api.main:run"
+
+[dependency-groups]
+dev = [
+  "httpx>=0.28,<1",
+  "pyright>=1.1.405,<2",
+  "pytest>=8.4,<10",
+  "pytest-asyncio>=1.1,<2",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/src/tiramisu_agents"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+asyncio_mode = "auto"
+testpaths = ["backend/tests"]
+
+[tool.pyright]
+include = ["backend/src", "backend/tests"]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/**/*.py" = ["S101"]

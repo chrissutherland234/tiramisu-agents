@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: tiramisu_test
+          POSTGRES_USER: tiramisu
+          POSTGRES_PASSWORD: tiramisu
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tiramisu -d tiramisu_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TIRAMISU_DATABASE_URL: postgresql+asyncpg://tiramisu_app:tiramisu_app@localhost:5432/tiramisu_test
+      TIRAMISU_MIGRATION_DATABASE_URL: postgresql+asyncpg://tiramisu:tiramisu@localhost:5432/tiramisu_test
+      TIRAMISU_RUN_DB_TESTS: "1"
+      PGPASSWORD: tiramisu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      - run: uv sync --locked --all-groups
+      - run: >-
+          psql -h localhost -U tiramisu -d tiramisu_test
+          -c "CREATE ROLE tiramisu_app LOGIN PASSWORD 'tiramisu_app' NOSUPERUSER NOCREATEDB NOCREATEROLE"
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pyright
+      - run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
