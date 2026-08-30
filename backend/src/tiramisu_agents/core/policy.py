@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from uuid import UUID
 
 from tiramisu_agents.core.contracts.decisions import (
     AgentDecision,
@@ -33,11 +34,18 @@ def validate_decision(
     policy: DecisionPolicy,
     *,
     workflow_now: datetime,
+    expected_event_ids: frozenset[UUID] | None = None,
 ) -> AgentDecision:
     """Return the unchanged decision if it fits policy; otherwise fail closed."""
 
     if workflow_now.tzinfo is None or workflow_now.utcoffset() is None:
         raise ValueError("workflow_now must be timezone-aware")
+
+    if (
+        expected_event_ids is not None
+        and frozenset(decision.based_on_event_ids) != expected_event_ids
+    ):
+        raise DecisionRejected("decision must be based on exactly the events in this turn")
 
     if len(decision.actions) > policy.max_actions_per_turn:
         raise DecisionRejected("decision exceeds the maximum actions per turn")

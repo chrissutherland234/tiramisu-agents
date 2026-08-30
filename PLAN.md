@@ -868,9 +868,9 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
 - [ ] Implement quarantine resolution, late correlation, and replay.
 - [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling.
-- [ ] Implement the bounded, proposal-only OpenAI Agents SDK Activity.
+- [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, bounded PostgreSQL event context loader, and deterministic scripted-runner path. Workflow consumption remains gated on the action gateway.
 - [ ] Implement application-owned conversation history, context assembly, provenance-aware memory, and compaction.
-- [ ] Implement typed decision validation.
+- [x] Implement initial typed decision validation for exact event lineage, allowed actions and wake events, per-turn action limits, and timer bounds.
 - [ ] Implement the action permission gateway.
 - [ ] Implement policy evaluation and durable approvals.
 - [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries.
@@ -902,6 +902,7 @@ Recommended initial journey:
 
 ### Phase 4 — Configurable client processes
 
+- [x] Add immutable YAML process-definition contracts, validation, fingerprinting, trigger resolution, and deterministic policy/instruction compilation for the fictional process. Persistence and the authoring/publication lifecycle remain outstanding.
 - [ ] Add the process-definition draft, validation, evaluation, approval, publication, and retirement lifecycle.
 - [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition.
 - [ ] Add tenant prompt and policy configuration.

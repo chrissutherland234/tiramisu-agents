@@ -28,6 +28,14 @@ The API uses a least-privilege `tiramisu_app` database role; Alembic uses the se
 
 The pure kernel and scripted-agent tests remain integration-free: they require no Docker, Temporal, PostgreSQL, network access, or provider credentials.
 
+## Agent-turn foundation
+
+Versioned process definitions under `process_definitions/` are validated and compiled into deterministic decision policy before use. A PostgreSQL context loader builds a bounded process-and-event snapshot, and the proposal-only Temporal Activity can run either a deterministic `ScriptedAgent` or the OpenAI Agents SDK adapter.
+
+The OpenAI adapter has no tools or handoffs, permits exactly one SDK turn, and requests a strict structured output. Provider-specific action parameters cross that SDK boundary as encoded JSON and are converted back into the kernel's typed `AgentDecision`; deterministic policy then checks event lineage, allowed actions, wake events, action limits, and timer bounds.
+
+This Activity is intentionally not yet invoked by the mailbox workflow. The next slice is the durable action gateway and proposal ledger; wiring model decisions into orchestration before that exists could silently discard or bypass proposed actions. No current worker path makes a live OpenAI request.
+
 ## Development event path
 
 The current vertical slice accepts canonical events, deduplicates them in PostgreSQL, correlates them to one process or leaves them quarantined, and transactionally schedules Temporal delivery. The dispatcher uses Signal-With-Start and workflow-level event deduplication, so retrying an uncertain delivery is safe.
