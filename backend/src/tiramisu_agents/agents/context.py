@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tiramisu_agents.core.contracts.events import CanonicalEvent
+from tiramisu_agents.core.contracts.knowledge import FactObservation
 from tiramisu_agents.core.contracts.processes import (
     ActionResultContext,
     AgentTurnInput,
@@ -203,6 +204,9 @@ class PostgresAgentContextLoader:
                 idempotency_key=row.ActionAttempt.idempotency_key,
                 provider_reference=row.ActionAttempt.provider_reference,
                 result=row.ActionAttempt.result,
+                facts=tuple(
+                    FactObservation.model_validate(fact) for fact in row.ActionAttempt.facts
+                ),
                 error=row.ActionAttempt.error,
                 operator_resolution_id=(
                     row.ActionReconciliationDecision.id
@@ -231,6 +235,22 @@ class PostgresAgentContextLoader:
                 process_type=process.process_type,
                 process_definition_version=process.definition_version,
                 status=ProcessStatus(process.status),
+                authoritative_facts=process.authoritative_facts,
+                customer_claims=process.customer_claims,
+                fact_provenance=process.fact_provenance,
+                memory_summary=process.memory_summary,
+                memory_summary_source_event_ids=tuple(
+                    UUID(value) for value in process.memory_summary_source_event_ids
+                ),
+                memory_summary_source_review_command_ids=tuple(
+                    UUID(value) for value in process.memory_summary_source_review_command_ids
+                ),
+                memory_summary_source_action_attempt_ids=tuple(
+                    UUID(value) for value in process.memory_summary_source_action_attempt_ids
+                ),
+                memory_summary_source_timer_ids=tuple(process.memory_summary_source_timer_ids),
+                open_commitments=tuple(process.open_commitments),
+                state_version=process.state_version,
             ),
             events=events,
             reviews=reviews,

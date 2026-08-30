@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
+from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.core.ports.actions import (
     ActionAdapter,
     DefinitiveActionFailure,
@@ -130,6 +131,13 @@ class StubBusinessState:
                     external_id=message_reference,
                 ),
             ),
+            facts=(
+                FactObservation(
+                    key="customer.last_message",
+                    kind=FactKind.CUSTOMER_CLAIM,
+                    value=content,
+                ),
+            ),
             payload={"content": content, "in_reply_to": message_reference},
         )
 
@@ -156,6 +164,23 @@ class StubBusinessState:
                     provider="stub.booking.v1",
                     resource_type="booking",
                     external_id=booking_reference,
+                ),
+            ),
+            facts=(
+                FactObservation(
+                    key="booking.reference",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=booking_reference,
+                ),
+                FactObservation(
+                    key="booking.status",
+                    kind=FactKind.AUTHORITATIVE,
+                    value="confirmed",
+                ),
+                FactObservation(
+                    key="booking.slot",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=booking.slot,
                 ),
             ),
             payload={"booking_reference": booking_reference, "slot": booking.slot},
@@ -189,6 +214,28 @@ class StubBusinessState:
                     provider="stub.booking.v1",
                     resource_type="booking",
                     external_id=payment.booking_reference,
+                ),
+            ),
+            facts=(
+                FactObservation(
+                    key="payment.reference",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=payment_reference,
+                ),
+                FactObservation(
+                    key="payment.status",
+                    kind=FactKind.AUTHORITATIVE,
+                    value="completed",
+                ),
+                FactObservation(
+                    key="payment.amount_minor",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=payment.amount_minor,
+                ),
+                FactObservation(
+                    key="payment.currency",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=payment.currency,
                 ),
             ),
             payload={
@@ -242,6 +289,13 @@ class StubMessagingAdapter(_StatefulActionAdapter):
         return ProviderActionResult(
             provider_reference=reference,
             result={"message_reference": reference, "sent": True},
+            facts=(
+                FactObservation(
+                    key="messaging.last_outbound_reference",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=reference,
+                ),
+            ),
         )
 
 
@@ -260,6 +314,13 @@ class StubBookingAdapter(_StatefulActionAdapter):
             return ProviderActionResult(
                 provider_reference=f"availability_{request.idempotency_key[:16]}",
                 result={"slots": list(slots)},
+                facts=(
+                    FactObservation(
+                        key="booking.available_slots",
+                        kind=FactKind.AUTHORITATIVE,
+                        value=list(slots),
+                    ),
+                ),
             )
         if request.action_type != "propose_booking":
             raise DefinitiveActionFailure(
@@ -278,6 +339,23 @@ class StubBookingAdapter(_StatefulActionAdapter):
         return ProviderActionResult(
             provider_reference=reference,
             result={"booking_reference": reference, "status": "proposed", "slot": slot},
+            facts=(
+                FactObservation(
+                    key="booking.reference",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=reference,
+                ),
+                FactObservation(
+                    key="booking.status",
+                    kind=FactKind.AUTHORITATIVE,
+                    value="proposed",
+                ),
+                FactObservation(
+                    key="booking.slot",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=slot,
+                ),
+            ),
         )
 
 
@@ -308,6 +386,28 @@ class StubPaymentAdapter(_StatefulActionAdapter):
                 "amount_minor": amount_minor,
                 "currency": currency,
             },
+            facts=(
+                FactObservation(
+                    key="payment.reference",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=reference,
+                ),
+                FactObservation(
+                    key="payment.status",
+                    kind=FactKind.AUTHORITATIVE,
+                    value="pending",
+                ),
+                FactObservation(
+                    key="payment.amount_minor",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=amount_minor,
+                ),
+                FactObservation(
+                    key="payment.currency",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=currency,
+                ),
+            ),
         )
 
 
@@ -341,6 +441,18 @@ class StubCalendarAdapter(_StatefulActionAdapter):
         return ProviderActionResult(
             provider_reference=reference,
             result={"calendar_reference": reference, "created": True},
+            facts=(
+                FactObservation(
+                    key="calendar.reference",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=reference,
+                ),
+                FactObservation(
+                    key="calendar.status",
+                    kind=FactKind.AUTHORITATIVE,
+                    value="created",
+                ),
+            ),
         )
 
 

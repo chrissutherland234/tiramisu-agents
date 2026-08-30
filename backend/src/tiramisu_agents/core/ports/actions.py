@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from tiramisu_agents.core.contracts.knowledge import FactObservation
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderActionRequest:
@@ -15,6 +17,7 @@ class ProviderActionRequest:
 class ProviderActionResult:
     provider_reference: str
     result: dict[str, Any]
+    facts: tuple[FactObservation, ...] = ()
 
 
 class ActionAdapter(Protocol):

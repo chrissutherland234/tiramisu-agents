@@ -26,6 +26,7 @@ from tiramisu_agents.core.contracts.actions import (
 )
 from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision, DecisionStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
+from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
 from tiramisu_agents.core.ports.actions import AmbiguousActionOutcome, ProviderActionResult
 from tiramisu_agents.db.models.actions import (
@@ -37,12 +38,13 @@ from tiramisu_agents.db.models.actions import (
     ApprovalRequest,
 )
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
-from tiramisu_agents.db.models.processes import ProcessInstance
+from tiramisu_agents.db.models.processes import ProcessInstance, ProcessStateRevision
 from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, ReviewThread
 from tiramisu_agents.db.models.tenancy import Tenant
 from tiramisu_agents.db.session import create_engine, create_session_factory, set_tenant_context
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
+from tiramisu_agents.processes.state import ProcessStateService
 from tiramisu_agents.reviews.service import ReviewConflict, ReviewService
 from tiramisu_agents.temporal.activities.action_gateway import (
     ActionGatewayActivities,
@@ -70,6 +72,9 @@ async def _delete_tenant_data(
     admin_factory: async_sessionmaker[AsyncSession], tenant_id: UUID
 ) -> None:
     async with admin_factory.begin() as session:
+        await session.execute(
+            delete(ProcessStateRevision).where(ProcessStateRevision.tenant_id == tenant_id)
+        )
         for model in (
             ActionReconciliationDecision,
             ActionAttempt,
@@ -209,6 +214,16 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         assert first[1].outcome is PermissionOutcome.ALLOW
         assert first[1].approval_request_id is None
 
+        async with runtime_factory.begin() as session:
+            projected = await ProcessStateService().apply_decision(
+                session,
+                tenant_id=tenant_id,
+                process_instance_id=ingested.process_instance_id,
+                agent_turn_id=turn_id,
+                decision=decision,
+            )
+        assert projected.status == "review"
+
         activity_result = await ActionGatewayActivities(
             runtime_factory,
             ProcessDefinitionRegistry([definition]),
@@ -284,6 +299,13 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         availability_result = ProviderActionResult(
             provider_reference="stub:availability-1",
             result={"slots": ["2026-09-02T14:00:00+00:00"]},
+            facts=(
+                FactObservation(
+                    key="booking.available_slots",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=["2026-09-02T14:00:00+00:00"],
+                ),
+            ),
         )
         availability_adapter = StubActionAdapter(
             [
@@ -332,6 +354,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         assert ambiguous.status == "unknown"
         assert reconciled.status == "succeeded"
         assert reconciled.provider_reference == availability_result.provider_reference
+        assert reconciled.facts == availability_result.facts
         assert len(availability_adapter.requests) == 1
 
         unresolved = await executor.execute(

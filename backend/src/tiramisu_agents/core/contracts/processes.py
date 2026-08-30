@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tiramisu_agents.core.contracts.actions import ActionAttemptStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent
+from tiramisu_agents.core.contracts.knowledge import FactObservation
 
 
 class ReviewTurnContext(BaseModel):
@@ -41,6 +42,7 @@ class ActionResultContext(BaseModel):
     idempotency_key: str = Field(min_length=64, max_length=64)
     provider_reference: str | None = None
     result: dict[str, Any] | None = None
+    facts: tuple[FactObservation, ...] = ()
     error: str | None = None
     operator_resolution_id: UUID | None = None
     operator_actor_id: UUID | None = None
@@ -66,8 +68,15 @@ class ProcessSnapshot(BaseModel):
     process_definition_version: str = Field(min_length=1, max_length=100)
     status: ProcessStatus
     authoritative_facts: dict[str, Any] = Field(default_factory=dict)
+    customer_claims: dict[str, Any] = Field(default_factory=dict)
+    fact_provenance: dict[str, dict[str, Any]] = Field(default_factory=dict)
     memory_summary: str | None = None
+    memory_summary_source_event_ids: tuple[UUID, ...] = ()
+    memory_summary_source_review_command_ids: tuple[UUID, ...] = ()
+    memory_summary_source_action_attempt_ids: tuple[UUID, ...] = ()
+    memory_summary_source_timer_ids: tuple[str, ...] = ()
     open_commitments: tuple[str, ...] = ()
+    state_version: int = Field(default=0, ge=0)
 
 
 class AgentTurnInput(BaseModel):

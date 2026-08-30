@@ -12,7 +12,7 @@ from tiramisu_agents.db.models.actions import (
     ApprovalRequest,
 )
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
-from tiramisu_agents.db.models.processes import ProcessInstance
+from tiramisu_agents.db.models.processes import ProcessInstance, ProcessStateRevision
 from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, ReviewThread
 from tiramisu_agents.db.models.tenancy import Tenant
 
@@ -28,6 +28,7 @@ __all__ = [
     "ExternalCorrelation",
     "OutboxMessage",
     "ProcessInstance",
+    "ProcessStateRevision",
     "ReviewMessage",
     "ReviewThread",
     "Tenant",

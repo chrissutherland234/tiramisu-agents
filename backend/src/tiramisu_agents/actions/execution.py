@@ -16,6 +16,7 @@ from tiramisu_agents.core.contracts.actions import (
     ApprovalStatus,
     PermissionOutcome,
 )
+from tiramisu_agents.core.contracts.knowledge import FactObservation
 from tiramisu_agents.core.ports.actions import (
     AmbiguousActionOutcome,
     DefinitiveActionFailure,
@@ -45,6 +46,7 @@ class ActionExecutionResult:
     idempotency_key: str
     provider_reference: str | None
     result: dict[str, object] | None
+    facts: tuple[FactObservation, ...]
     error: str | None
 
 
@@ -317,6 +319,7 @@ class ActionExecutor:
             ActionAttemptStatus.SUCCEEDED,
             provider_reference=provider_result.provider_reference,
             result=provider_result.result,
+            facts=provider_result.facts,
         )
 
     async def _record_failure(
@@ -342,6 +345,7 @@ class ActionExecutor:
         *,
         provider_reference: str | None = None,
         result: dict[str, object] | None = None,
+        facts: tuple[FactObservation, ...] = (),
         error: str | None = None,
     ) -> ActionExecutionResult:
         async with self._session_factory.begin() as session:
@@ -362,6 +366,7 @@ class ActionExecutor:
             attempt.status = status.value
             attempt.provider_reference = provider_reference
             attempt.result = result
+            attempt.facts = [fact.model_dump(mode="json") for fact in facts]
             attempt.error = error[:2000] if error else None
             attempt.completed_at = datetime.now(UTC)
             request.status = status.value
@@ -377,5 +382,6 @@ class ActionExecutor:
             idempotency_key=attempt.idempotency_key,
             provider_reference=attempt.provider_reference,
             result=attempt.result,
+            facts=tuple(FactObservation.model_validate(fact) for fact in attempt.facts),
             error=attempt.error,
         )

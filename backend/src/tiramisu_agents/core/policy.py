@@ -65,6 +65,20 @@ def validate_decision(
     ):
         raise DecisionRejected("decision must be based on exactly the timers in this turn")
 
+    memory = decision.memory_update
+    if not set(memory.summary_source_event_ids).issubset(decision.based_on_event_ids):
+        raise DecisionRejected("memory summary cites an event outside this turn")
+    if not set(memory.summary_source_review_command_ids).issubset(
+        decision.based_on_review_command_ids
+    ):
+        raise DecisionRejected("memory summary cites a review command outside this turn")
+    if not set(memory.summary_source_action_attempt_ids).issubset(
+        decision.based_on_action_attempt_ids
+    ):
+        raise DecisionRejected("memory summary cites an action result outside this turn")
+    if not set(memory.summary_source_timer_ids).issubset(decision.based_on_timer_ids):
+        raise DecisionRejected("memory summary cites a timer outside this turn")
+
     if len(decision.actions) > policy.max_actions_per_turn:
         raise DecisionRejected("decision exceeds the maximum actions per turn")
 

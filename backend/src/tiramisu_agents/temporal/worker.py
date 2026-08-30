@@ -20,6 +20,7 @@ from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.temporal.activities.action_execution import ActionExecutionActivities
 from tiramisu_agents.temporal.activities.action_gateway import ActionGatewayActivities
 from tiramisu_agents.temporal.activities.agent_turn import AgentTurnActivities
+from tiramisu_agents.temporal.activities.process_state import ProcessStateActivities
 from tiramisu_agents.temporal.dispatcher import TemporalOutboxDispatcher
 from tiramisu_agents.temporal.workflows.mailbox import ProcessMailboxWorkflow
 
@@ -48,6 +49,7 @@ async def serve(tenant_ids: tuple[UUID, ...]) -> None:
             OpenAIAgentsTurnRunner(model=settings.openai_model),
         )
         gateway_activities = ActionGatewayActivities(session_factory, registry)
+        state_activities = ProcessStateActivities(session_factory, registry)
         definition = registry.get("enquiry_to_booking", "1")
         bindings = stub_business_bindings(StubBusinessState())
         if set(bindings) != set(definition.allowed_actions):
@@ -61,6 +63,7 @@ async def serve(tenant_ids: tuple[UUID, ...]) -> None:
         activities = [
             agent_activities.run_agent_turn,
             gateway_activities.persist_agent_actions,
+            state_activities.persist_process_state,
             execution_activities.execute_action,
             execution_activities.reconcile_action,
         ]

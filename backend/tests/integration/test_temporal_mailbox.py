@@ -20,6 +20,12 @@ from tiramisu_agents.temporal.workflows.mailbox import (
 )
 
 
+@activity.defn(name="persist_process_state")
+async def persist_process_state(_command: dict[str, Any]) -> dict[str, Any]:
+    """Stand in for the database projection in workflow-only integration tests."""
+    return {"version": 1, "status": "active"}
+
+
 @pytest.mark.asyncio
 async def test_mailbox_deduplicates_events_and_wakes_for_events_and_timers() -> None:
     task_queue = f"mailbox-test-{uuid4()}"
@@ -229,6 +235,7 @@ async def test_mailbox_runs_event_timer_and_review_turns_single_flight() -> None
             activities=[
                 run_agent_turn,
                 persist_agent_actions,
+                persist_process_state,
                 execute_action,
                 reconcile_action,
             ],
@@ -393,7 +400,12 @@ async def test_mailbox_runs_result_turn_after_approved_action_executes() -> None
             environment.client,
             task_queue=task_queue,
             workflows=[ProcessMailboxWorkflow],
-            activities=[run_agent_turn, persist_agent_actions, execute_action],
+            activities=[
+                run_agent_turn,
+                persist_agent_actions,
+                persist_process_state,
+                execute_action,
+            ],
         ),
     ):
         handle = await environment.client.start_workflow(
@@ -544,7 +556,12 @@ async def test_autonomous_result_cannot_arm_a_timer_while_an_approval_is_pending
             environment.client,
             task_queue=task_queue,
             workflows=[ProcessMailboxWorkflow],
-            activities=[run_agent_turn, persist_agent_actions, execute_action],
+            activities=[
+                run_agent_turn,
+                persist_agent_actions,
+                persist_process_state,
+                execute_action,
+            ],
         ),
     ):
         handle = await environment.client.start_workflow(

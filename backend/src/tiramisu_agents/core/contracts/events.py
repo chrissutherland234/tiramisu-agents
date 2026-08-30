@@ -7,6 +7,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from tiramisu_agents.core.contracts.knowledge import FactObservation
+
 
 class Sensitivity(StrEnum):
     PUBLIC = "public"
@@ -39,6 +41,7 @@ class CanonicalEvent(BaseModel):
     schema_version: int = Field(default=1, ge=1)
     sensitivity: Sensitivity = Sensitivity.CONFIDENTIAL
     external_references: tuple[ExternalReference, ...] = ()
+    facts: tuple[FactObservation, ...] = ()
     payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("occurred_at", "received_at")

@@ -367,6 +367,24 @@ class ProcessMailboxWorkflow:
                 ),
             )
             actions_json = str(action_result["actions_json"])
+            await workflow.execute_activity(
+                "persist_process_state",
+                {
+                    "tenant_id": self._tenant_id,
+                    "process_instance_id": self._process_instance_id,
+                    "process_definition_id": self._process_definition_id,
+                    "process_definition_version": self._process_definition_version,
+                    "agent_turn_id": turn_id,
+                    "event_ids": event_ids,
+                    "workflow_now": workflow_now,
+                    "decision_json": decision_json,
+                    "review_command_ids": review_command_ids,
+                    "action_attempt_ids": action_attempt_ids,
+                    "timer_ids": timer_ids,
+                },
+                start_to_close_timeout=timedelta(minutes=1),
+                retry_policy=RetryPolicy(maximum_attempts=5),
+            )
             actions = cast(list[dict[str, Any]], json.loads(actions_json))
             execution_results: list[dict[str, Any]] = []
             requires_approval = False

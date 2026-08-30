@@ -64,7 +64,31 @@ class MemoryUpdate(BaseModel):
 
     summary: str | None = Field(default=None, max_length=4000)
     summary_source_event_ids: tuple[UUID, ...] = ()
+    summary_source_review_command_ids: tuple[UUID, ...] = ()
+    summary_source_action_attempt_ids: tuple[UUID, ...] = ()
+    summary_source_timer_ids: tuple[str, ...] = ()
     open_commitments: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def require_bounded_memory_provenance(self) -> "MemoryUpdate":
+        sources = (
+            self.summary_source_event_ids,
+            self.summary_source_review_command_ids,
+            self.summary_source_action_attempt_ids,
+            self.summary_source_timer_ids,
+        )
+        if self.summary is None and any(sources):
+            raise ValueError("memory summary sources require a summary")
+        if self.summary is not None and not any(sources):
+            raise ValueError("a memory summary requires source provenance")
+        for values in sources:
+            if len(values) != len(set(values)):
+                raise ValueError("memory summary source IDs must be unique")
+        if any(not commitment.strip() for commitment in self.open_commitments):
+            raise ValueError("open commitments cannot be blank")
+        if len(self.open_commitments) != len(set(self.open_commitments)):
+            raise ValueError("open commitments must be unique")
+        return self
 
 
 class AgentDecision(BaseModel):

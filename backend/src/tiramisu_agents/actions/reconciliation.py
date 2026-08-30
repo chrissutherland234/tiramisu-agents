@@ -11,6 +11,7 @@ from tiramisu_agents.core.contracts.actions import (
     ActionAttemptStatus,
     OperatorActionResolution,
 )
+from tiramisu_agents.core.contracts.knowledge import FactObservation
 from tiramisu_agents.db.models.actions import (
     ActionAttempt,
     ActionReconciliationDecision,
@@ -156,5 +157,6 @@ class ActionReconciliationService:
             idempotency_key=attempt.idempotency_key,
             provider_reference=attempt.provider_reference,
             result=attempt.result,
+            facts=tuple(FactObservation.model_validate(fact) for fact in attempt.facts),
             error=attempt.error,
         )

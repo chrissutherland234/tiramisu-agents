@@ -8,6 +8,7 @@ from tiramisu_agents.core.contracts.decisions import (
     AgentDecision,
     DecisionStatus,
     EventWakeCondition,
+    MemoryUpdate,
     TimerWakeCondition,
 )
 from tiramisu_agents.core.contracts.events import CanonicalEvent
@@ -29,6 +30,35 @@ def test_canonical_event_requires_timezone_aware_timestamps() -> None:
 def test_waiting_decision_requires_a_wake_condition() -> None:
     with pytest.raises(ValidationError, match="wake condition"):
         AgentDecision(based_on_event_ids=(), status=DecisionStatus.WAITING)
+
+
+def test_memory_summary_requires_explicit_source_provenance() -> None:
+    with pytest.raises(ValidationError, match="requires source provenance"):
+        MemoryUpdate(summary="The customer asked for Tuesday afternoon.")
+
+
+def test_policy_rejects_memory_provenance_outside_the_turn() -> None:
+    event_id = uuid4()
+    decision = AgentDecision(
+        based_on_event_ids=(event_id,),
+        status=DecisionStatus.ACTIVE,
+        memory_update=MemoryUpdate(
+            summary="The customer asked for Tuesday afternoon.",
+            summary_source_event_ids=(uuid4(),),
+        ),
+    )
+    policy = DecisionPolicy(
+        allowed_action_types=frozenset(),
+        allowed_wake_event_types=frozenset(),
+    )
+
+    with pytest.raises(DecisionRejected, match="memory summary cites an event outside this turn"):
+        validate_decision(
+            decision,
+            policy,
+            workflow_now=datetime.now(UTC),
+            expected_event_ids=frozenset({event_id}),
+        )
 
 
 def test_policy_accepts_an_allowed_bounded_decision() -> None:

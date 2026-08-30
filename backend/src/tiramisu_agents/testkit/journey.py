@@ -11,6 +11,7 @@ from tiramisu_agents.adapters.stubs.business import StubBusinessState
 from tiramisu_agents.core.contracts.actions import PermissionOutcome
 from tiramisu_agents.core.contracts.decisions import ActionProposal
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
+from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.core.ports.actions import ProviderActionRequest, ProviderActionResult
 from tiramisu_agents.processes.definitions import ProcessDefinition
 
@@ -87,6 +88,23 @@ class FictionalJourneyDriver:
                     provider="stub.crm.v1",
                     resource_type="customer",
                     external_id=customer_id,
+                ),
+            ),
+            facts=(
+                FactObservation(
+                    key="customer.identifier",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=customer_id,
+                ),
+                FactObservation(
+                    key="customer.email",
+                    kind=FactKind.AUTHORITATIVE,
+                    value=email,
+                ),
+                FactObservation(
+                    key="customer.initial_request",
+                    kind=FactKind.CUSTOMER_CLAIM,
+                    value=message,
                 ),
             ),
             payload={"customer_id": customer_id, "email": email, "message": message},

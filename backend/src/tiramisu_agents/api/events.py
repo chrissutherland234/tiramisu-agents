@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tiramisu_agents.api.settings import Settings
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference, Sensitivity
+from tiramisu_agents.core.contracts.knowledge import FactObservation
 from tiramisu_agents.events.ingestion import (
     EventIngestionService,
     ProcessBootstrap,
@@ -33,6 +34,7 @@ class IngestEventRequest(BaseModel):
     schema_version: int = Field(default=1, ge=1)
     sensitivity: Sensitivity = Sensitivity.CONFIDENTIAL
     external_references: tuple[ExternalReference, ...] = ()
+    facts: tuple[FactObservation, ...] = ()
     payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("occurred_at")
@@ -99,6 +101,7 @@ async def ingest_event(
         schema_version=body.schema_version,
         sensitivity=body.sensitivity,
         external_references=body.external_references,
+        facts=body.facts,
         payload=body.payload,
     )
     session_factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory

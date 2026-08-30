@@ -238,6 +238,9 @@ class ActionAttempt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_reference: Mapped[str | None] = mapped_column(String(500))
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    facts: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, server_default=text("'[]'::jsonb"), nullable=False
+    )
     error: Mapped[str | None] = mapped_column(String(2000))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

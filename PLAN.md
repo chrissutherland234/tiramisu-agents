@@ -858,7 +858,7 @@ The following architecture decision records are gates for the durable kernel:
 - [ ] Add data classification, log/trace redaction, Temporal payload encryption hooks, and retention configuration.
 - [x] Add formatting, linting, strict static typing, unit tests, dependency lockfiles, and CI.
 - [ ] Add correlated structured logging, tracing, metrics, health checks, and initial stuck-work alerts.
-- [ ] Add the reusable stub providers and scenario test kit.
+- [x] Add the reusable stub providers and scenario test kit.
 
 ### Phase 2 — Durable agent kernel
 
@@ -869,7 +869,8 @@ The following architecture decision records are gates for the durable kernel:
 - [ ] Implement quarantine resolution, late correlation, and replay.
 - [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Automatic single-flight event, timer, priority-review, and action-resolution turns are complete; batching, cancellation/takeover priority, and full tie rules remain.
 - [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, bounded PostgreSQL event/review/action-result context loader, deterministic scripted-runner path, and automatic workflow consumption through the action gateway.
-- [ ] Implement application-owned conversation history, context assembly, provenance-aware memory, and compaction.
+- [x] Implement bounded context assembly, sourced authoritative-fact/customer-claim projection, provenance-checked summaries and commitments, immutable state revisions, and deterministic lifecycle projection.
+- [ ] Implement application-owned conversation/message history, memory compaction, and compaction lineage.
 - [x] Implement initial typed decision validation for exact event lineage, allowed actions and wake events, per-turn action limits, and timer bounds.
 - [x] Implement the initial action permission gateway with fail-closed classification, idempotent proposal persistence, exact approval commands, pre-execution revalidation, and execution routing. Budgets and live safety overrides are tracked separately.
 - [x] Implement deterministic policy evaluation and durable exact-payload approvals.
