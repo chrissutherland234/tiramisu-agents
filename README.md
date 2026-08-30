@@ -36,6 +36,8 @@ The OpenAI adapter has no tools or handoffs, permits exactly one SDK turn, and r
 
 This Activity is intentionally not yet invoked by the mailbox workflow. The next slice is the durable action gateway and proposal ledger; wiring model decisions into orchestration before that exists could silently discard or bypass proposed actions. No current worker path makes a live OpenAI request.
 
+The first action-gateway stage is now present. Process definitions explicitly classify every proposed action as `allow`, `deny`, or `require_approval`; omitted actions fail closed. Separate retry-safe persistence records the stable action identity, immutable payload revision and hash, deterministic policy result, and—when required—an approval request bound by a database foreign key to that exact payload. A separate Temporal Activity performs this persistence after the model Activity, so retrying database work never reruns the model call. Action execution and approval commands are not connected yet.
+
 ## Development event path
 
 The current vertical slice accepts canonical events, deduplicates them in PostgreSQL, correlates them to one process or leaves them quarantined, and transactionally schedules Temporal delivery. The dispatcher uses Signal-With-Start and workflow-level event deduplication, so retrying an uncertain delivery is safe.

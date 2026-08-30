@@ -853,7 +853,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Add canonical event inbox, transactional outbox, external correlation registry, and quarantine persistence foundations.
 - [x] Add a tenant-allow-listed Temporal outbox delivery worker with recoverable claims and idempotent Signal-With-Start delivery.
 - [ ] Add operator-driven quarantine resolution and replay.
-- [ ] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations.
+- [ ] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations. Initial action requests, immutable first revisions, policy records, and exact-payload approval requests are complete; revision threads, attempts, and reconciliation remain.
 - [ ] Add autonomy budgets, communication policy, rate limits, and platform/tenant kill switches.
 - [ ] Add data classification, log/trace redaction, Temporal payload encryption hooks, and retention configuration.
 - [x] Add formatting, linting, strict static typing, unit tests, dependency lockfiles, and CI.
@@ -871,7 +871,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, bounded PostgreSQL event context loader, and deterministic scripted-runner path. Workflow consumption remains gated on the action gateway.
 - [ ] Implement application-owned conversation history, context assembly, provenance-aware memory, and compaction.
 - [x] Implement initial typed decision validation for exact event lineage, allowed actions and wake events, per-turn action limits, and timer bounds.
-- [ ] Implement the action permission gateway.
+- [ ] Implement the action permission gateway. Its fail-closed classification and idempotent proposal-persistence stages are complete; approval commands, pre-execution revalidation, budgets, and execution remain.
 - [ ] Implement policy evaluation and durable approvals.
 - [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries.
 - [ ] Implement action attempts, bounded retries, idempotent execution, ambiguous outcomes, and reconciliation.

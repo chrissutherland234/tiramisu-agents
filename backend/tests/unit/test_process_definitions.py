@@ -16,6 +16,7 @@ def test_example_process_definition_compiles_to_policy_and_instructions() -> Non
     assert registry.resolve_trigger("enquiry.created") is None
     assert registry.resolve_trigger("enquiry.created", include_drafts=True) == definition
     assert definition.decision_policy().max_actions_per_turn == 3
+    assert definition.action_policy().permissions["send_message"] == "require_approval"
     assert len(definition.fingerprint()) == 64
     assert "Never claim" in definition.compile_instructions()
 
@@ -29,6 +30,7 @@ def test_invalid_event_type_is_rejected() -> None:
         "goals": ["Do the thing"],
         "terminal_states": ["completed"],
         "allowed_actions": [],
+        "action_permissions": {},
         "allowed_wake_events": [],
         "limits": {
             "max_actions_per_turn": 1,

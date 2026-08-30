@@ -6,8 +6,10 @@ from datetime import timedelta
 from enum import StrEnum
 from hashlib import sha256
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from tiramisu_agents.core.action_policy import ConfiguredActionPolicy
+from tiramisu_agents.core.contracts.actions import PermissionOutcome
 from tiramisu_agents.core.contracts.processes import ProcessStatus
 from tiramisu_agents.core.policy import DecisionPolicy
 
@@ -48,6 +50,7 @@ class ProcessDefinition(BaseModel):
     goals: tuple[str, ...] = Field(min_length=1)
     terminal_states: tuple[ProcessStatus, ...] = Field(min_length=1)
     allowed_actions: tuple[str, ...] = ()
+    action_permissions: dict[str, PermissionOutcome]
     allowed_wake_events: tuple[str, ...] = ()
     limits: ProcessLimits
     review: ReviewConfiguration = Field(default_factory=ReviewConfiguration)
@@ -78,12 +81,27 @@ class ProcessDefinition(BaseModel):
             raise ValueError("action types must be unique")
         return values
 
+    @field_validator("action_permissions")
+    @classmethod
+    def validate_permission_action_types(
+        cls, values: dict[str, PermissionOutcome]
+    ) -> dict[str, PermissionOutcome]:
+        if any(not IDENTIFIER_PATTERN.fullmatch(value) for value in values):
+            raise ValueError("action permission keys must be snake_case identifiers")
+        return values
+
     @field_validator("goals")
     @classmethod
     def validate_goals(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         if any(not value.strip() for value in values):
             raise ValueError("goals cannot be blank")
         return values
+
+    @model_validator(mode="after")
+    def require_explicit_action_permissions(self) -> "ProcessDefinition":
+        if set(self.action_permissions) != set(self.allowed_actions):
+            raise ValueError("every allowed action must have exactly one permission classification")
+        return self
 
     def fingerprint(self) -> str:
         canonical = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
@@ -95,6 +113,12 @@ class ProcessDefinition(BaseModel):
             allowed_wake_event_types=frozenset(self.allowed_wake_events),
             max_actions_per_turn=self.limits.max_actions_per_turn,
             max_timer_horizon=timedelta(days=self.limits.maximum_timer_horizon_days),
+        )
+
+    def action_policy(self) -> ConfiguredActionPolicy:
+        return ConfiguredActionPolicy(
+            permissions=dict(self.action_permissions),
+            version=self.fingerprint(),
         )
 
     def compile_instructions(self) -> str:
