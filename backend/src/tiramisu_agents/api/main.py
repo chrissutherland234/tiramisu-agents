@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -23,8 +23,8 @@ class HealthResponse(BaseModel):
     environment: str
 
 
-async def health() -> HealthResponse:
-    settings = get_settings()
+async def health(request: Request) -> HealthResponse:
+    settings: Settings = request.app.state.settings
     return HealthResponse(
         status="ok",
         service="tiramisu-api",

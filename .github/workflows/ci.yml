@@ -68,3 +68,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker compose config --quiet
+      - run: POSTGRES_DB=tiramisu_override docker compose up -d --wait postgres
+      - run: >-
+          docker compose exec -T -e PGPASSWORD=tiramisu_app postgres
+          psql -h localhost -U tiramisu_app -d tiramisu_override
+          -tAc "SELECT current_database(), current_user"
+      - if: always()
+        run: POSTGRES_DB=tiramisu_override docker compose down -v

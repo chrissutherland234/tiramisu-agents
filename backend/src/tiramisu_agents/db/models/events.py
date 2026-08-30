@@ -92,6 +92,11 @@ class OutboxMessage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "status IN ('pending', 'publishing', 'published', 'failed')", name="status_valid"
         ),
         CheckConstraint("attempt_count >= 0", name="attempt_count_nonnegative"),
+        CheckConstraint(
+            "(status = 'publishing' AND claimed_at IS NOT NULL AND claim_token IS NOT NULL) "
+            "OR (status <> 'publishing' AND claimed_at IS NULL AND claim_token IS NULL)",
+            name="claim_state_consistent",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "process_instance_id"],
             ["process_instances.tenant_id", "process_instances.id"],
@@ -123,5 +128,6 @@ class OutboxMessage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     attempt_count: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_token: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
     last_error: Mapped[str | None] = mapped_column(String(2000))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

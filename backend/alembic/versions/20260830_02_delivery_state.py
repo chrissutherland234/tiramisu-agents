@@ -33,9 +33,43 @@ def upgrade() -> None:
     )
     op.add_column("event_inbox", sa.Column("correlation_reason", sa.String(500)))
     op.add_column("outbox_messages", sa.Column("claimed_at", sa.DateTime(timezone=True)))
+    op.add_column("outbox_messages", sa.Column("claim_token", sa.Uuid()))
+    op.create_check_constraint(
+        op.f("ck_outbox_messages_claim_state_consistent"),
+        "outbox_messages",
+        "(status = 'publishing' AND claimed_at IS NOT NULL AND claim_token IS NOT NULL) "
+        "OR (status <> 'publishing' AND claimed_at IS NULL AND claim_token IS NULL)",
+    )
+    op.drop_constraint(
+        op.f("ck_process_instances_status_valid"),
+        "process_instances",
+        type_="check",
+    )
+    op.create_check_constraint(
+        op.f("ck_process_instances_status_valid"),
+        "process_instances",
+        "status IN ('active', 'waiting', 'review', 'paused', 'completed', 'cancelled', 'failed')",
+    )
 
 
 def downgrade() -> None:
+    op.drop_constraint(
+        op.f("ck_process_instances_status_valid"),
+        "process_instances",
+        type_="check",
+    )
+    op.create_check_constraint(
+        op.f("ck_process_instances_status_valid"),
+        "process_instances",
+        "status IN ('active', 'waiting', 'review', 'completed', 'cancelled', 'failed')",
+    )
+    op.execute(
+        sa.text(
+            "ALTER TABLE outbox_messages "
+            "DROP CONSTRAINT IF EXISTS ck_outbox_messages_claim_state_consistent"
+        )
+    )
+    op.execute(sa.text("ALTER TABLE outbox_messages DROP COLUMN IF EXISTS claim_token"))
     op.drop_column("outbox_messages", "claimed_at")
     op.drop_column("event_inbox", "correlation_reason")
     op.alter_column(

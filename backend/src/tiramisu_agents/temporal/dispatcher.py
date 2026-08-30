@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.client import Client
 from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
@@ -26,6 +26,7 @@ class DispatchStatus(StrEnum):
     PUBLISHED = "published"
     RETRY_SCHEDULED = "retry_scheduled"
     FAILED = "failed"
+    CLAIM_LOST = "claim_lost"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,7 @@ class ClaimedMessage:
     destination: str
     payload: dict[str, Any]
     attempt_count: int
+    claim_token: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,13 +96,24 @@ class TemporalOutboxDispatcher:
 
         async with self._session_factory.begin() as session:
             await set_tenant_context(session, message.tenant_id)
-            stored = await session.get(OutboxMessage, message.id, with_for_update=True)
-            if stored is None:
-                raise RuntimeError("claimed outbox message disappeared")
-            stored.status = "published"
-            stored.published_at = datetime.now(UTC)
-            stored.claimed_at = None
-            stored.last_error = None
+            completed_id = await session.scalar(
+                update(OutboxMessage)
+                .where(
+                    OutboxMessage.id == message.id,
+                    OutboxMessage.status == "publishing",
+                    OutboxMessage.claim_token == message.claim_token,
+                )
+                .values(
+                    status="published",
+                    published_at=datetime.now(UTC),
+                    claimed_at=None,
+                    claim_token=None,
+                    last_error=None,
+                )
+                .returning(OutboxMessage.id)
+            )
+        if completed_id is None:
+            return DispatchResult(status=DispatchStatus.CLAIM_LOST, message_id=message.id)
         return DispatchResult(status=DispatchStatus.PUBLISHED, message_id=message.id)
 
     async def run_tenant(
@@ -140,7 +153,11 @@ class TemporalOutboxDispatcher:
             raise RuntimeError("Temporal outbox message has no process instance")
         stored.status = "publishing"
         stored.claimed_at = now
+        stored.claim_token = uuid4()
         stored.attempt_count += 1
+        claim_token = stored.claim_token
+        if claim_token is None:
+            raise RuntimeError("outbox claim token was not assigned")
         return ClaimedMessage(
             id=stored.id,
             tenant_id=stored.tenant_id,
@@ -148,22 +165,40 @@ class TemporalOutboxDispatcher:
             destination=stored.destination,
             payload=stored.payload,
             attempt_count=stored.attempt_count,
+            claim_token=claim_token,
         )
 
     async def _record_failure(self, message: ClaimedMessage, error: Exception) -> DispatchResult:
         error_text = f"{type(error).__name__}: {error}"[:2000]
         terminal = message.attempt_count >= self._max_attempts
+        next_available_at = datetime.now(UTC)
+        if not terminal:
+            multiplier = 2 ** (message.attempt_count - 1)
+            next_available_at += self._retry_base_delay * multiplier
         async with self._session_factory.begin() as session:
             await set_tenant_context(session, message.tenant_id)
-            stored = await session.get(OutboxMessage, message.id, with_for_update=True)
-            if stored is None:
-                raise RuntimeError("claimed outbox message disappeared")
-            stored.status = "failed" if terminal else "pending"
-            stored.claimed_at = None
-            stored.last_error = error_text
-            if not terminal:
-                multiplier = 2 ** (message.attempt_count - 1)
-                stored.available_at = datetime.now(UTC) + self._retry_base_delay * multiplier
+            updated_id = await session.scalar(
+                update(OutboxMessage)
+                .where(
+                    OutboxMessage.id == message.id,
+                    OutboxMessage.status == "publishing",
+                    OutboxMessage.claim_token == message.claim_token,
+                )
+                .values(
+                    status="failed" if terminal else "pending",
+                    claimed_at=None,
+                    claim_token=None,
+                    last_error=error_text,
+                    available_at=next_available_at,
+                )
+                .returning(OutboxMessage.id)
+            )
+        if updated_id is None:
+            return DispatchResult(
+                status=DispatchStatus.CLAIM_LOST,
+                message_id=message.id,
+                error=error_text,
+            )
         return DispatchResult(
             status=DispatchStatus.FAILED if terminal else DispatchStatus.RETRY_SCHEDULED,
             message_id=message.id,

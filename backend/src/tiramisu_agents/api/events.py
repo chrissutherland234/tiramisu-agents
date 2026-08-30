@@ -6,7 +6,7 @@ from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tiramisu_agents.api.settings import Settings
@@ -15,6 +15,7 @@ from tiramisu_agents.events.ingestion import (
     EventIngestionService,
     ProcessBootstrap,
     TenantNotFound,
+    TriggerReferenceRequired,
 )
 
 router = APIRouter(prefix="/v1/events", tags=["events"])
@@ -33,6 +34,13 @@ class IngestEventRequest(BaseModel):
     sensitivity: Sensitivity = Sensitivity.CONFIDENTIAL
     external_references: tuple[ExternalReference, ...] = ()
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("event timestamp must be timezone-aware")
+        return value
 
 
 class IngestEventResponse(BaseModel):
@@ -105,6 +113,11 @@ async def ingest_event(
     except TenantNotFound as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="tenant not found"
+        ) from error
+    except TriggerReferenceRequired as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
         ) from error
     return IngestEventResponse(
         event_id=result.event_id,

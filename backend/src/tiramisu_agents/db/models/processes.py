@@ -14,7 +14,8 @@ class ProcessInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "process_instances"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('active', 'waiting', 'review', 'completed', 'cancelled', 'failed')",
+            "status IN "
+            "('active', 'waiting', 'review', 'paused', 'completed', 'cancelled', 'failed')",
             name="status_valid",
         ),
         UniqueConstraint("tenant_id", "id", name="uq_process_instances_tenant_id_id"),
