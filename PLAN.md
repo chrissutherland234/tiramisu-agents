@@ -910,8 +910,8 @@ Recommended initial journey:
 - [ ] Add the tool and integration registry.
 - [ ] Add safe client-editable settings.
 - [ ] Add process simulation and validation before publication.
-- [ ] Add the operator instance timeline and wake-condition UI.
-- [ ] Add the full approval, proposal-diff, review-chat, revision-lineage, and manual-intervention UI.
+- [x] Add the initial tenant process list/detail API and operator instance timeline, durable wake-condition, sourced-fact/claim, memory, and commitment UI.
+- [ ] Add the full approval, proposal-diff, review-chat, revision-lineage, and manual-intervention UI. The initial exact-payload approve/reject/comment/request-revision queue and API are complete; diffs, complete thread history, expiry, takeover, and richer intervention remain.
 - [ ] Add event-quarantine, unknown-action, and reconciliation UI.
 - [ ] Define active-instance migration behavior.
 - [ ] Decide the public distribution name and registry strategy when the extension API is stable; only then publish signed/versioned Python distributions if useful. Container releases may proceed independently.

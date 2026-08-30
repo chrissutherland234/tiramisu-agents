@@ -68,6 +68,9 @@ class ProcessInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     open_commitments: Mapped[list[str]] = mapped_column(
         JSONB, server_default=text("'[]'::jsonb"), nullable=False
     )
+    current_wake_conditions: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, server_default=text("'[]'::jsonb"), nullable=False
+    )
     state_version: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
 
 
@@ -132,6 +135,7 @@ class ProcessStateRevision(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     memory_summary_source_timer_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     open_commitments: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    wake_conditions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     based_on_event_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     based_on_review_command_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     based_on_action_attempt_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)

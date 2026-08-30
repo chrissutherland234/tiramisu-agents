@@ -140,6 +140,9 @@ class ProcessStateService:
             ]
             process.memory_summary_source_timer_ids = list(memory.summary_source_timer_ids)
         process.open_commitments = list(memory.open_commitments)
+        process.current_wake_conditions = [
+            wake.model_dump(mode="json") for wake in decision.wake_conditions
+        ]
         process.authoritative_facts = authoritative
         process.customer_claims = claims
         process.fact_provenance = provenance
@@ -167,6 +170,7 @@ class ProcessStateService:
             ),
             memory_summary_source_timer_ids=list(process.memory_summary_source_timer_ids),
             open_commitments=list(process.open_commitments),
+            wake_conditions=list(process.current_wake_conditions),
             based_on_event_ids=[str(value) for value in decision.based_on_event_ids],
             based_on_review_command_ids=[
                 str(value) for value in decision.based_on_review_command_ids

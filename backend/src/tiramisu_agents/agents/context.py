@@ -2,9 +2,11 @@
 
 from uuid import UUID
 
+from pydantic import TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tiramisu_agents.core.contracts.decisions import WakeCondition
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.contracts.knowledge import FactObservation
 from tiramisu_agents.core.contracts.processes import (
@@ -26,6 +28,8 @@ from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.reviews import ReviewMessage, ReviewThread
 from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.processes.definitions import ProcessDefinition
+
+_wake_condition_adapter: TypeAdapter[WakeCondition] = TypeAdapter(WakeCondition)
 
 
 class AgentContextError(ValueError):
@@ -250,6 +254,10 @@ class PostgresAgentContextLoader:
                 ),
                 memory_summary_source_timer_ids=tuple(process.memory_summary_source_timer_ids),
                 open_commitments=tuple(process.open_commitments),
+                current_wake_conditions=tuple(
+                    _wake_condition_adapter.validate_python(value)
+                    for value in process.current_wake_conditions
+                ),
                 state_version=process.state_version,
             ),
             events=events,

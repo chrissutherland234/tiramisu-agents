@@ -65,3 +65,31 @@ async def test_health_uses_constructed_app_settings() -> None:
 
     assert response.status_code == 200
     assert response.json()["environment"] == "test"
+
+
+@pytest.mark.asyncio
+async def test_operator_api_is_disabled_without_development_opt_in() -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/processes",
+            headers={
+                "X-Tiramisu-Tenant-ID": "00000000-0000-0000-0000-000000000001",
+                "X-Tiramisu-Actor-ID": "00000000-0000-0000-0000-000000000002",
+            },
+        )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_operator_api_requires_both_unsafe_identity_headers() -> None:
+    custom_app = create_app(settings=Settings(allow_unsafe_development_tenant_header=True))
+    transport = ASGITransport(app=custom_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/processes",
+            headers={"X-Tiramisu-Tenant-ID": "00000000-0000-0000-0000-000000000001"},
+        )
+
+    assert response.status_code == 400

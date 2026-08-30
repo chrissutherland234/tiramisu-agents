@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tiramisu_agents import __version__
 from tiramisu_agents.api.events import fictional_trigger_rules
 from tiramisu_agents.api.events import router as events_router
+from tiramisu_agents.api.processes import router as processes_router
 from tiramisu_agents.api.settings import Settings, get_settings
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.events.ingestion import ProcessBootstrap
@@ -74,6 +75,7 @@ def create_app(
         tags=["operations"],
     )
     app.include_router(events_router)
+    app.include_router(processes_router)
 
     return app
 

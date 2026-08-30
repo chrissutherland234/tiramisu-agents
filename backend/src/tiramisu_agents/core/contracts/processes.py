@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from tiramisu_agents.core.contracts.actions import ActionAttemptStatus
+from tiramisu_agents.core.contracts.decisions import WakeCondition
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.contracts.knowledge import FactObservation
 
@@ -76,6 +77,7 @@ class ProcessSnapshot(BaseModel):
     memory_summary_source_action_attempt_ids: tuple[UUID, ...] = ()
     memory_summary_source_timer_ids: tuple[str, ...] = ()
     open_commitments: tuple[str, ...] = ()
+    current_wake_conditions: tuple[WakeCondition, ...] = ()
     state_version: int = Field(default=0, ge=0)
 
 

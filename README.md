@@ -42,7 +42,9 @@ Review commands are transactionally placed in the same PostgreSQL outbox as busi
 
 The mailbox orchestrates event, timer, conversational-review, and action-result turns automatically. Each wake runs one bounded agent Activity followed by idempotent action and process-state persistence. Provider outcomes are loaded from PostgreSQL into a separate follow-up turn, and only that new decision may install the next wake plan. Turns remain single-flight while Signals continue buffering; automatic action-result chains are capped.
 
-The current process projection separates provider/event-sourced authoritative facts from customer claims and records source provenance for both. Model-authored summaries and open commitments are stored separately, summaries must cite inputs from the exact bounded turn, and every applied decision creates an immutable versioned state revision. Activity retries reuse the existing revision, while terminal and paused process states fail closed. This is the durable memory foundation; application-owned message history and compaction remain future work.
+The current process projection separates provider/event-sourced authoritative facts from customer claims and records source provenance for both. Model-authored summaries and open commitments are stored separately, summaries must cite inputs from the exact bounded turn, and every applied decision creates an immutable versioned state revision containing its wake plan. Activity retries reuse the existing revision, while terminal and paused process states fail closed. This is the durable memory foundation; application-owned message history and compaction remain future work.
+
+The Vue operator console lists tenant processes and pending reviews, then presents the selected process's durable wake plan, memory, facts and claims, commitments, and combined event/decision/action/review timeline. Operators can comment, approve the exact payload, reject it, or provide revision feedback for another bounded agent turn. The corresponding tenant-scoped APIs are intentionally available only through the unsafe local-development identity headers until production authentication and authorization are implemented.
 
 The provider-neutral execution stage writes an action attempt before calling the provider, uses a stable payload-bound idempotency key, revalidates exact human approval immediately before dispatch, and distinguishes definitive failure from an ambiguous outcome. An unknown outcome triggers a lookup-only reconciliation Activity that cannot repeat the side effect. If the provider still cannot establish the truth, an operator may resolve it only with an immutable, attributed evidence record. That resolution is delivered transactionally through the outbox to the same Temporal mailbox and becomes authoritative context for another bounded agent turn.
 
@@ -59,7 +61,7 @@ TIRAMISU_ALLOW_UNSAFE_DEVELOPMENT_TENANT_HEADER=true
 TIRAMISU_LOAD_FICTIONAL_EXAMPLE_PROCESSES=true
 ```
 
-Then send canonical events to `POST /v1/events` with an `X-Tiramisu-Tenant-ID` header. The selected tenant must already exist. Run delivery and workflow polling with an explicit deployment allow-list:
+Then send canonical events to `POST /v1/events` with an `X-Tiramisu-Tenant-ID` header. The selected tenant must already exist. The local operator console additionally requires an arbitrary development `X-Tiramisu-Actor-ID` UUID; the Vue UI stores both IDs in browser local storage. Run delivery and workflow polling with an explicit deployment allow-list:
 
 ```bash
 uv run tiramisu-worker --tenant-id 00000000-0000-0000-0000-000000000001

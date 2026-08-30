@@ -208,8 +208,12 @@ async def test_process_state_projects_sourced_knowledge_and_versioned_memory() -
         assert context.process.memory_summary == ("The customer wants a Tuesday afternoon booking.")
         assert context.process.memory_summary_source_event_ids == (enquiry.event_id,)
         assert context.process.open_commitments == ()
+        assert context.process.current_wake_conditions == ()
         assert [revision.version for revision in revisions] == [1, 2]
         assert revisions[0].open_commitments == ["Confirm a suitable Tuesday slot"]
+        assert revisions[0].wake_conditions == [
+            {"type": "event", "event_type": "booking.confirmed"}
+        ]
         assert revisions[1].memory_summary == revisions[0].memory_summary
 
         with pytest.raises(ProcessStateConflict, match="terminal process state"):
