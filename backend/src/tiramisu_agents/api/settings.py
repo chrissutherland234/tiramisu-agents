@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     temporal_namespace: str = "default"
     temporal_task_queue: str = "tiramisu-agent"
     openai_model: str | None = Field(default=None)
+    allow_unsafe_development_tenant_header: bool = False
+    load_fictional_example_processes: bool = False
 
 
 @lru_cache

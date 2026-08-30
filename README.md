@@ -28,6 +28,25 @@ The API uses a least-privilege `tiramisu_app` database role; Alembic uses the se
 
 The pure kernel and scripted-agent tests remain integration-free: they require no Docker, Temporal, PostgreSQL, network access, or provider credentials.
 
+## Development event path
+
+The current vertical slice accepts canonical events, deduplicates them in PostgreSQL, correlates them to one process or leaves them quarantined, and transactionally schedules Temporal delivery. The dispatcher uses Signal-With-Start and workflow-level event deduplication, so retrying an uncertain delivery is safe.
+
+There is deliberately no unauthenticated production ingestion route. For local fictional-process testing only, set:
+
+```dotenv
+TIRAMISU_ALLOW_UNSAFE_DEVELOPMENT_TENANT_HEADER=true
+TIRAMISU_LOAD_FICTIONAL_EXAMPLE_PROCESSES=true
+```
+
+Then send canonical events to `POST /v1/events` with an `X-Tiramisu-Tenant-ID` header. The selected tenant must already exist. Run delivery and workflow polling with an explicit deployment allow-list:
+
+```bash
+uv run tiramisu-worker --tenant-id 00000000-0000-0000-0000-000000000001
+```
+
+The runtime role cannot enumerate tenants. Production authentication, tenant provisioning, webhook verification, and deployment-managed tenant assignments remain required before exposing ingestion externally.
+
 ## Public and private extensions
 
 The generic platform, test kit, stub adapters, and reusable provider adapters live here. Client-specific processes, prompts, policies, proprietary adapters, evaluations, and deployment composition belong in separate private client-pack repositories. Private packs must use the same extension manifest and contract tests as the fictional public example.

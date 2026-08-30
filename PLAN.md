@@ -850,8 +850,9 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Add and runtime-validate the local Temporal development service.
 - [x] Add forced PostgreSQL row-level security, composite tenant foreign keys, transaction-scoped tenant context, and separate local admin/runtime roles.
 - [ ] Establish tenant-aware API authentication and production database role provisioning.
-- [x] Add canonical event inbox, transactional outbox, and external correlation registry foundations.
-- [ ] Add event quarantine, resolution, and delivery workers.
+- [x] Add canonical event inbox, transactional outbox, external correlation registry, and quarantine persistence foundations.
+- [x] Add a tenant-allow-listed Temporal outbox delivery worker with recoverable claims and idempotent Signal-With-Start delivery.
+- [ ] Add operator-driven quarantine resolution and replay.
 - [ ] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations.
 - [ ] Add autonomy budgets, communication policy, rate limits, and platform/tenant kill switches.
 - [ ] Add data classification, log/trace redaction, Temporal payload encryption hooks, and retention configuration.
@@ -863,8 +864,9 @@ The following architecture decision records are gates for the durable kernel:
 
 - [ ] Implement `AgentWorkflow`.
 - [x] Implement the initial deterministic process mailbox with event deduplication, replaceable event/timer wake plans, state queries, and time-skipping tests.
-- [ ] Implement event ingestion and deduplication.
-- [ ] Implement correlation, quarantine resolution, transactional outbox delivery, and safe Signal-With-Start routing.
+- [x] Implement canonical event ingestion and source-event deduplication.
+- [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
+- [ ] Implement quarantine resolution, late correlation, and replay.
 - [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling.
 - [ ] Implement the bounded, proposal-only OpenAI Agents SDK Activity.
 - [ ] Implement application-owned conversation history, context assembly, provenance-aware memory, and compaction.

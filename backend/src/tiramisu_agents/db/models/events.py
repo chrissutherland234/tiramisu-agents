@@ -45,7 +45,7 @@ class ExternalCorrelation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     process_instance_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     provider: Mapped[str] = mapped_column(String(100), nullable=False)
     resource_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    external_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(500), nullable=False)
 
 
 class EventInbox(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -71,7 +71,7 @@ class EventInbox(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     process_instance_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
     source: Mapped[str] = mapped_column(String(100), nullable=False)
-    source_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_event_id: Mapped[str] = mapped_column(String(500), nullable=False)
     event_type: Mapped[str] = mapped_column(String(150), nullable=False)
     event_data: Mapped[dict[str, Any]] = mapped_column(
         JSONB, server_default=text("'{}'::jsonb"), nullable=False
@@ -79,6 +79,7 @@ class EventInbox(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     correlation_status: Mapped[str] = mapped_column(
         String(32), server_default="pending", nullable=False
     )
+    correlation_reason: Mapped[str | None] = mapped_column(String(500))
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -121,5 +122,6 @@ class OutboxMessage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     attempt_count: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(String(2000))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

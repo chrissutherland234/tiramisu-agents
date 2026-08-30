@@ -68,6 +68,19 @@ class ProcessMailboxWorkflow:
         self._process_instance_id = workflow_input.process_instance_id
 
         while not self._closed:
+            if not self._wake_records and self._wake_plan is None and self._buffered_events:
+                event = self._buffered_events.pop(0)
+                self._wake_records.append(
+                    WakeRecord(
+                        reason="process_started",
+                        event_id=event.event_id,
+                        event_type=event.event_type,
+                        timer_id=None,
+                        woke_at=workflow.now(),
+                    )
+                )
+                continue
+
             matching_index = self._matching_event_index()
             if matching_index is not None:
                 event = self._buffered_events.pop(matching_index)
