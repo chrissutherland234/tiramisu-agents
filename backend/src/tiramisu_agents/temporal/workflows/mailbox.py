@@ -35,6 +35,14 @@ class MailboxReview:
 
 
 @dataclass(frozen=True)
+class MailboxActionResolution:
+    command_id: str
+    action_request_id: str
+    action_attempt_id: str
+    status: str
+
+
+@dataclass(frozen=True)
 class WakePlan:
     """Wake conditions from the most recently accepted agent decision."""
 
@@ -59,6 +67,7 @@ class TurnRecord:
     turn_id: str
     event_ids: tuple[str, ...]
     review_command_ids: tuple[str, ...]
+    action_attempt_ids: tuple[str, ...]
     timer_ids: tuple[str, ...]
     decision_json: str | None
     actions_json: str | None
@@ -80,6 +89,7 @@ class MailboxState:
     process_instance_id: str
     buffered_events: tuple[MailboxEvent, ...]
     buffered_reviews: tuple[MailboxReview, ...]
+    buffered_action_resolutions: tuple[MailboxActionResolution, ...]
     wake_records: tuple[WakeRecord, ...]
     turn_records: tuple[TurnRecord, ...]
     execution_records: tuple[ExecutionRecord, ...]
@@ -100,6 +110,8 @@ class ProcessMailboxWorkflow:
         self._seen_event_ids: set[str] = set()
         self._buffered_reviews: list[MailboxReview] = []
         self._seen_review_command_ids: set[str] = set()
+        self._buffered_action_resolutions: list[MailboxActionResolution] = []
+        self._seen_action_resolution_ids: set[str] = set()
         self._wake_records: list[WakeRecord] = []
         self._turn_records: list[TurnRecord] = []
         self._execution_records: list[ExecutionRecord] = []
@@ -107,7 +119,6 @@ class ProcessMailboxWorkflow:
         self._turn_in_progress = False
         self._process_definition_id: str | None = None
         self._process_definition_version: str | None = None
-        self._deferred_decision_json: str | None = None
         self._wake_plan: WakePlan | None = None
         self._timer_due_at: datetime | None = None
         self._plan_revision = 0
@@ -150,14 +161,23 @@ class ProcessMailboxWorkflow:
                 )
                 self._clear_wake_plan()
                 if review.command_type == "approve":
-                    await self._execute_pending_action(
+                    execution = await self._execute_pending_action(
                         review.action_request_id, review.proposal_revision
                     )
+                    if execution is not None:
+                        await self._run_turn(action_attempt_ids=(str(execution["attempt_id"]),))
                 elif review.command_type in {"reject", "request_revision"}:
                     self._remove_pending_action(review.action_request_id)
                     await self._run_turn(review_command_ids=(review.command_id,))
                 elif review.command_type == "comment":
                     await self._run_turn(review_command_ids=(review.command_id,))
+                continue
+
+            if self._buffered_action_resolutions:
+                resolution = self._buffered_action_resolutions.pop(0)
+                self._remove_pending_action(resolution.action_request_id)
+                self._clear_wake_plan()
+                await self._run_turn(action_attempt_ids=(resolution.action_attempt_id,))
                 continue
 
             matching_index = self._matching_event_index()
@@ -200,6 +220,7 @@ class ProcessMailboxWorkflow:
                         self._closed
                         or self._plan_revision != awaited_revision
                         or bool(self._buffered_reviews)
+                        or bool(self._buffered_action_resolutions)
                         or (
                             not self._wake_records
                             and self._wake_plan is None
@@ -230,6 +251,14 @@ class ProcessMailboxWorkflow:
         self._buffered_reviews.append(review)
 
     @workflow.signal
+    def receive_action_resolution(self, resolution: MailboxActionResolution) -> None:
+        """Idempotently deliver one persisted operator reconciliation decision."""
+        if resolution.command_id in self._seen_action_resolution_ids:
+            return
+        self._seen_action_resolution_ids.add(resolution.command_id)
+        self._buffered_action_resolutions.append(resolution)
+
+    @workflow.signal
     def replace_wake_plan(self, plan: WakePlan) -> None:
         """Atomically replace the previous turn's wake conditions."""
         self._wake_plan = plan
@@ -247,6 +276,7 @@ class ProcessMailboxWorkflow:
             process_instance_id=self._process_instance_id,
             buffered_events=tuple(self._buffered_events),
             buffered_reviews=tuple(self._buffered_reviews),
+            buffered_action_resolutions=tuple(self._buffered_action_resolutions),
             wake_records=tuple(self._wake_records),
             turn_records=tuple(self._turn_records),
             execution_records=tuple(self._execution_records),
@@ -284,7 +314,9 @@ class ProcessMailboxWorkflow:
         *,
         event_ids: tuple[str, ...] = (),
         review_command_ids: tuple[str, ...] = (),
+        action_attempt_ids: tuple[str, ...] = (),
         timer_ids: tuple[str, ...] = (),
+        chain_depth: int = 0,
     ) -> None:
         if self._process_definition_id is None or self._process_definition_version is None:
             return
@@ -305,6 +337,7 @@ class ProcessMailboxWorkflow:
                         "event_ids": event_ids,
                         "workflow_now": workflow_now,
                         "review_command_ids": review_command_ids,
+                        "action_attempt_ids": action_attempt_ids,
                         "timer_ids": timer_ids,
                     },
                     start_to_close_timeout=timedelta(minutes=2),
@@ -326,6 +359,7 @@ class ProcessMailboxWorkflow:
                         "workflow_now": workflow_now,
                         "decision_json": decision_json,
                         "review_command_ids": review_command_ids,
+                        "action_attempt_ids": action_attempt_ids,
                         "timer_ids": timer_ids,
                     },
                     start_to_close_timeout=timedelta(minutes=1),
@@ -335,6 +369,7 @@ class ProcessMailboxWorkflow:
             actions_json = str(action_result["actions_json"])
             actions = cast(list[dict[str, Any]], json.loads(actions_json))
             execution_results: list[dict[str, Any]] = []
+            requires_approval = False
             for item in actions:
                 action_request_id = str(item["action_request_id"])
                 if item["outcome"] == "allow":
@@ -345,24 +380,39 @@ class ProcessMailboxWorkflow:
                         execution_results.append(execution)
                 elif item["outcome"] == "require_approval":
                     self._add_pending_action(action_request_id)
+                    requires_approval = True
+            result_attempt_ids = tuple(str(result["attempt_id"]) for result in execution_results)
+            chain_limit_reached = bool(result_attempt_ids) and chain_depth >= 5
             self._turn_records.append(
                 TurnRecord(
                     turn_id=turn_id,
                     event_ids=event_ids,
                     review_command_ids=review_command_ids,
+                    action_attempt_ids=action_attempt_ids,
                     timer_ids=timer_ids,
                     decision_json=decision_json,
                     actions_json=actions_json,
                     execution_results_json=json.dumps(
                         execution_results, sort_keys=True, separators=(",", ":")
                     ),
-                    error=None,
+                    error=(
+                        "automatic action-result chain limit reached"
+                        if chain_limit_reached
+                        else None
+                    ),
                 )
             )
-            if self._pending_action_request_ids:
-                self._deferred_decision_json = decision_json
+            if result_attempt_ids:
+                if not chain_limit_reached:
+                    await self._run_turn(
+                        action_attempt_ids=result_attempt_ids,
+                        chain_depth=chain_depth + 1,
+                    )
+                else:
+                    self._clear_wake_plan()
+            elif requires_approval or self._pending_action_request_ids:
+                self._clear_wake_plan()
             else:
-                self._deferred_decision_json = None
                 self._apply_decision_wake_plan(decision_json)
         except ActivityError as error:
             self._turn_records.append(
@@ -370,6 +420,7 @@ class ProcessMailboxWorkflow:
                     turn_id=turn_id,
                     event_ids=event_ids,
                     review_command_ids=review_command_ids,
+                    action_attempt_ids=action_attempt_ids,
                     timer_ids=timer_ids,
                     decision_json=None,
                     actions_json=None,
@@ -432,12 +483,43 @@ class ProcessMailboxWorkflow:
                     error=None,
                 )
             )
-            if result["status"] == "succeeded":
+            if result["status"] == "unknown":
+                try:
+                    reconciliation_activity = cast(
+                        dict[str, Any],
+                        await workflow.execute_activity(
+                            "reconcile_action",
+                            {
+                                "tenant_id": self._tenant_id,
+                                "process_instance_id": self._process_instance_id,
+                                "action_request_id": action_request_id,
+                                "revision": revision,
+                            },
+                            start_to_close_timeout=timedelta(minutes=2),
+                            retry_policy=RetryPolicy(maximum_attempts=3),
+                        ),
+                    )
+                    reconciled_json = str(reconciliation_activity["result_json"])
+                    result = cast(dict[str, Any], json.loads(reconciled_json))
+                    self._execution_records.append(
+                        ExecutionRecord(
+                            action_request_id=action_request_id,
+                            revision=revision,
+                            result_json=reconciled_json,
+                            error=None,
+                        )
+                    )
+                except ActivityError as reconciliation_error:
+                    self._execution_records.append(
+                        ExecutionRecord(
+                            action_request_id=action_request_id,
+                            revision=revision,
+                            result_json=None,
+                            error=str(reconciliation_error),
+                        )
+                    )
+            if result["status"] in {"succeeded", "failed"}:
                 self._remove_pending_action(action_request_id)
-                if not self._pending_action_request_ids and self._deferred_decision_json:
-                    deferred = self._deferred_decision_json
-                    self._deferred_decision_json = None
-                    self._apply_decision_wake_plan(deferred)
             return result
         except ActivityError as error:
             self._execution_records.append(

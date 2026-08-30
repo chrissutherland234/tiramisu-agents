@@ -103,6 +103,9 @@ class ActionRevision(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     based_on_review_command_ids: Mapped[list[str]] = mapped_column(
         JSONB, server_default=text("'[]'::jsonb"), nullable=False
     )
+    based_on_action_attempt_ids: Mapped[list[str]] = mapped_column(
+        JSONB, server_default=text("'[]'::jsonb"), nullable=False
+    )
     based_on_timer_ids: Mapped[list[str]] = mapped_column(
         JSONB, server_default=text("'[]'::jsonb"), nullable=False
     )
@@ -211,6 +214,13 @@ class ActionAttempt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "tenant_id",
             "process_instance_id",
             "action_request_id",
+            "id",
+            name="uq_action_attempt_ref",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "process_instance_id",
+            "action_request_id",
             "revision",
             "attempt_number",
             name="uq_action_attempt_number",
@@ -231,3 +241,39 @@ class ActionAttempt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(String(2000))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ActionReconciliationDecision(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "action_reconciliation_decisions"
+    __table_args__ = (
+        CheckConstraint("previous_status IN ('unknown', 'reconciling')", name="previous_valid"),
+        CheckConstraint("resolution IN ('succeeded', 'failed')", name="resolution_valid"),
+        ForeignKeyConstraint(
+            ["tenant_id", "process_instance_id", "action_request_id", "action_attempt_id"],
+            [
+                "action_attempts.tenant_id",
+                "action_attempts.process_instance_id",
+                "action_attempts.action_request_id",
+                "action_attempts.id",
+            ],
+            name="fk_action_reconciliation_decisions_attempt",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "process_instance_id",
+            "action_attempt_id",
+            name="uq_action_reconciliation_decision_attempt",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    process_instance_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    action_request_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    action_attempt_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    actor_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    previous_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    resolution: Mapped[str] = mapped_column(String(32), nullable=False)
+    evidence: Mapped[str] = mapped_column(String(10_000), nullable=False)
+    provider_reference: Mapped[str | None] = mapped_column(String(500))
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

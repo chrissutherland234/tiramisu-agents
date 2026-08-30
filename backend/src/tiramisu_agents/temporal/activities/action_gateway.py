@@ -26,6 +26,7 @@ class PersistActionsCommand:
     workflow_now: datetime
     decision_json: str
     review_command_ids: tuple[str, ...] = ()
+    action_attempt_ids: tuple[str, ...] = ()
     timer_ids: tuple[str, ...] = ()
 
 
@@ -60,6 +61,9 @@ class ActionGatewayActivities:
                 expected_event_ids=frozenset(UUID(value) for value in command.event_ids),
                 expected_review_command_ids=frozenset(
                     UUID(value) for value in command.review_command_ids
+                ),
+                expected_action_attempt_ids=frozenset(
+                    UUID(value) for value in command.action_attempt_ids
                 ),
                 expected_timer_ids=frozenset(command.timer_ids),
             )

@@ -167,6 +167,67 @@ class ActionExecutor:
             )
         return await self._record_success(tenant_id, action_request_id, key, provider_result)
 
+    async def reconcile(
+        self,
+        *,
+        tenant_id: UUID,
+        process_instance_id: UUID,
+        action_request_id: UUID,
+        revision: int,
+    ) -> ActionExecutionResult:
+        """Use provider lookup only; reconciliation never repeats the side effect."""
+
+        async with self._session_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            request, action_revision, _ = await self._load_authorized_action(
+                session,
+                tenant_id=tenant_id,
+                process_instance_id=process_instance_id,
+                action_request_id=action_request_id,
+                revision=revision,
+            )
+            adapter = self._adapters.resolve(request.action_type)
+            key = execution_idempotency_key(
+                tenant_id,
+                process_instance_id,
+                action_request_id,
+                revision,
+                action_revision.payload_hash,
+            )
+            attempt = await session.scalar(
+                select(ActionAttempt).where(
+                    ActionAttempt.tenant_id == tenant_id,
+                    ActionAttempt.idempotency_key == key,
+                )
+            )
+            if attempt is None:
+                raise ActionExecutionRejected("action has no execution attempt to reconcile")
+            if attempt.status in {
+                ActionAttemptStatus.SUCCEEDED.value,
+                ActionAttemptStatus.FAILED.value,
+            }:
+                return self._result(attempt)
+            attempt.status = ActionAttemptStatus.RECONCILING.value
+            request.status = ActionRequestStatus.RECONCILING.value
+
+        try:
+            recovered = await adapter.lookup(key)
+        except Exception as error:
+            return await self._record_unknown(
+                tenant_id,
+                action_request_id,
+                key,
+                f"reconciliation lookup failed: {type(error).__name__}: {error}",
+            )
+        if recovered is None:
+            return await self._record_unknown(
+                tenant_id,
+                action_request_id,
+                key,
+                "provider lookup could not establish the execution outcome",
+            )
+        return await self._record_success(tenant_id, action_request_id, key, recovered)
+
     async def _load_authorized_action(
         self,
         session: AsyncSession,
@@ -293,7 +354,10 @@ class ActionExecutor:
             )
             if attempt is None or request is None:
                 raise RuntimeError("action execution state disappeared")
-            if attempt.status == ActionAttemptStatus.SUCCEEDED.value:
+            if attempt.status in {
+                ActionAttemptStatus.SUCCEEDED.value,
+                ActionAttemptStatus.FAILED.value,
+            }:
                 return self._result(attempt)
             attempt.status = status.value
             attempt.provider_reference = provider_reference

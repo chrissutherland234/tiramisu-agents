@@ -64,6 +64,7 @@ async def serve(tenant_ids: tuple[UUID, ...]) -> None:
             agent_activities.run_agent_turn,
             gateway_activities.persist_agent_actions,
             execution_activities.execute_action,
+            execution_activities.reconcile_action,
         ]
         orchestrate_agent_turns = True
     dispatcher = TemporalOutboxDispatcher(

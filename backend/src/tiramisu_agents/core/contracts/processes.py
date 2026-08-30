@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tiramisu_agents.core.contracts.actions import ActionAttemptStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 
 
@@ -23,6 +24,27 @@ class ReviewTurnContext(BaseModel):
     proposal_parameters: dict[str, Any]
     proposal_payload_hash: str
     proposal_rationale: str
+
+
+class ActionResultContext(BaseModel):
+    """Authoritative provider outcome exposed to one bounded follow-up turn."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    attempt_id: UUID
+    action_request_id: UUID
+    revision: int = Field(ge=1)
+    action_type: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    parameters: dict[str, Any]
+    status: ActionAttemptStatus
+    adapter_id: str = Field(min_length=1, max_length=150)
+    idempotency_key: str = Field(min_length=64, max_length=64)
+    provider_reference: str | None = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    operator_resolution_id: UUID | None = None
+    operator_actor_id: UUID | None = None
+    operator_evidence: str | None = None
 
 
 class ProcessStatus(StrEnum):
@@ -55,5 +77,6 @@ class AgentTurnInput(BaseModel):
     process: ProcessSnapshot
     events: tuple[CanonicalEvent, ...]
     reviews: tuple[ReviewTurnContext, ...] = ()
+    action_results: tuple[ActionResultContext, ...] = ()
     timer_ids: tuple[str, ...] = ()
     instructions: str = Field(min_length=1)

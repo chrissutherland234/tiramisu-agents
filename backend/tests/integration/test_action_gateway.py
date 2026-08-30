@@ -13,16 +13,25 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.client import Client
 from tiramisu_agents.actions.execution import ActionExecutionRejected, ActionExecutor
 from tiramisu_agents.actions.gateway import ActionGateway, ActionPersistenceConflict
+from tiramisu_agents.actions.reconciliation import (
+    ActionReconciliationService,
+    ActionResolutionConflict,
+)
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
 from tiramisu_agents.adapters.stubs import StubActionAdapter, StubAmbiguousSuccess
-from tiramisu_agents.core.contracts.actions import PermissionOutcome
+from tiramisu_agents.core.contracts.actions import (
+    ActionResolution,
+    OperatorActionResolution,
+    PermissionOutcome,
+)
 from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision, DecisionStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
-from tiramisu_agents.core.ports.actions import ProviderActionResult
+from tiramisu_agents.core.ports.actions import AmbiguousActionOutcome, ProviderActionResult
 from tiramisu_agents.db.models.actions import (
     ActionAttempt,
     ActionPolicyRecord,
+    ActionReconciliationDecision,
     ActionRequest,
     ActionRevision,
     ApprovalRequest,
@@ -62,6 +71,7 @@ async def _delete_tenant_data(
 ) -> None:
     async with admin_factory.begin() as session:
         for model in (
+            ActionReconciliationDecision,
             ActionAttempt,
             ApprovalDecision,
             ReviewMessage,
@@ -137,6 +147,12 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                 parameters={"slot": "2026-09-02T10:00:00+00:00"},
                 rationale="Offer an available time.",
             ),
+            ActionProposal(
+                logical_action_key="availability_unknown_1",
+                action_type="find_available_slots",
+                parameters={"days": 14},
+                rationale="Exercise unresolved provider reconciliation.",
+            ),
         ),
     )
     gateway = ActionGateway()
@@ -205,16 +221,18 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                 agent_turn_id=str(turn_id),
                 event_ids=(str(event.event_id),),
                 workflow_now=datetime.now(UTC),
-                decision_json=decision.model_dump_json(),
+                decision_json=decision.model_copy(
+                    update={"actions": decision.actions[:3]}
+                ).model_dump_json(),
             )
         )
         assert len(json.loads(activity_result.actions_json)) == 3
 
         async with runtime_factory.begin() as session:
             await set_tenant_context(session, tenant_id)
-            assert await session.scalar(select(func.count()).select_from(ActionRequest)) == 3
-            assert await session.scalar(select(func.count()).select_from(ActionRevision)) == 3
-            assert await session.scalar(select(func.count()).select_from(ActionPolicyRecord)) == 3
+            assert await session.scalar(select(func.count()).select_from(ActionRequest)) == 4
+            assert await session.scalar(select(func.count()).select_from(ActionRevision)) == 4
+            assert await session.scalar(select(func.count()).select_from(ActionPolicyRecord)) == 4
             assert await session.scalar(select(func.count()).select_from(ApprovalRequest)) == 2
         async with runtime_factory.begin() as session:
             await set_tenant_context(session, other_tenant_id)
@@ -267,7 +285,12 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
             provider_reference="stub:availability-1",
             result={"slots": ["2026-09-02T14:00:00+00:00"]},
         )
-        availability_adapter = StubActionAdapter([StubAmbiguousSuccess(availability_result)])
+        availability_adapter = StubActionAdapter(
+            [
+                StubAmbiguousSuccess(availability_result),
+                AmbiguousActionOutcome("provider timed out with no lookup record"),
+            ]
+        )
         executor = ActionExecutor(
             runtime_factory,
             ActionAdapterRegistry(
@@ -310,6 +333,110 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         assert reconciled.status == "succeeded"
         assert reconciled.provider_reference == availability_result.provider_reference
         assert len(availability_adapter.requests) == 1
+
+        unresolved = await executor.execute(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            action_request_id=first[3].action_request_id,
+            revision=1,
+        )
+        still_unknown = await executor.reconcile(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            action_request_id=first[3].action_request_id,
+            revision=1,
+        )
+        assert unresolved.status == "unknown"
+        assert still_unknown.status == "unknown"
+        assert len(availability_adapter.requests) == 2
+
+        operator_resolution = OperatorActionResolution(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            action_attempt_id=unresolved.attempt_id,
+            actor_id=actor_id,
+            resolution=ActionResolution.SUCCEEDED,
+            evidence="Provider support confirmed booking reference availability-manual-1.",
+            provider_reference="availability-manual-1",
+            result={"slots": ["2026-09-03T10:00:00+00:00"]},
+        )
+        reconciliation_service = ActionReconciliationService()
+        async with runtime_factory.begin() as session:
+            operator_resolved = await reconciliation_service.resolve_unknown(
+                session, operator_resolution
+            )
+        async with runtime_factory.begin() as session:
+            assert (
+                await reconciliation_service.resolve_unknown(session, operator_resolution)
+                == operator_resolved
+            )
+        assert operator_resolved.status == "succeeded"
+        with pytest.raises(ActionResolutionConflict, match="different"):
+            async with runtime_factory.begin() as session:
+                await reconciliation_service.resolve_unknown(
+                    session,
+                    operator_resolution.model_copy(
+                        update={"decision_id": uuid4(), "evidence": "Conflicting evidence."}
+                    ),
+                )
+
+        result_turn_id = uuid4()
+        result_decision = AgentDecision(
+            based_on_event_ids=(),
+            based_on_action_attempt_ids=(unresolved.attempt_id,),
+            status=DecisionStatus.ACTIVE,
+            actions=(
+                ActionProposal(
+                    logical_action_key="availability_after_resolution",
+                    action_type="find_available_slots",
+                    parameters={"days": 2},
+                    rationale="Continue after the confirmed provider outcome.",
+                ),
+            ),
+        )
+        result_agent = ScriptedAgent([result_decision])
+        result_turn = await AgentTurnActivities(
+            runtime_factory,
+            ProcessDefinitionRegistry([definition]),
+            result_agent,
+        ).run_agent_turn(
+            AgentTurnCommand(
+                tenant_id=str(tenant_id),
+                process_instance_id=str(ingested.process_instance_id),
+                process_definition_id=definition.id,
+                process_definition_version=definition.version,
+                turn_id=str(result_turn_id),
+                event_ids=(),
+                workflow_now=datetime.now(UTC),
+                action_attempt_ids=(str(unresolved.attempt_id),),
+            )
+        )
+        assert result_agent.turn_inputs[0].action_results[0].operator_evidence
+        await ActionGatewayActivities(
+            runtime_factory,
+            ProcessDefinitionRegistry([definition]),
+        ).persist_agent_actions(
+            PersistActionsCommand(
+                tenant_id=str(tenant_id),
+                process_instance_id=str(ingested.process_instance_id),
+                process_definition_id=definition.id,
+                process_definition_version=definition.version,
+                agent_turn_id=str(result_turn_id),
+                event_ids=(),
+                workflow_now=datetime.now(UTC),
+                decision_json=result_turn.decision_json,
+                action_attempt_ids=(str(unresolved.attempt_id),),
+            )
+        )
+        async with runtime_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            result_revision = await session.scalar(
+                select(ActionRevision)
+                .join(ActionRequest, ActionRequest.id == ActionRevision.action_request_id)
+                .where(ActionRequest.agent_turn_id == result_turn_id)
+            )
+            assert result_revision is not None
+            assert result_revision.based_on_action_attempt_ids == [str(unresolved.attempt_id)]
 
         with pytest.raises(ActionExecutionRejected, match="not been approved"):
             await executor.execute(
@@ -412,7 +539,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
             await set_tenant_context(session, tenant_id)
             assert await session.scalar(select(func.count()).select_from(ReviewMessage)) == 3
             assert await session.scalar(select(func.count()).select_from(ApprovalDecision)) == 1
-            assert await session.scalar(select(func.count()).select_from(OutboxMessage)) == 4
+            assert await session.scalar(select(func.count()).select_from(OutboxMessage)) == 5
 
         temporal_client = _CapturingTemporalClient()
         dispatcher = TemporalOutboxDispatcher(
@@ -420,12 +547,13 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
             cast(Client, temporal_client),
             task_queue="review-delivery-test",
         )
-        dispatches = [await dispatcher.dispatch_one(tenant_id) for _ in range(4)]
+        dispatches = [await dispatcher.dispatch_one(tenant_id) for _ in range(5)]
         assert all(item.status is DispatchStatus.PUBLISHED for item in dispatches)
         assert [call["start_signal"] for call in temporal_client.calls] == [
             "receive_event",
             "receive_review",
             "receive_review",
+            "receive_action_resolution",
             "receive_review",
         ]
 

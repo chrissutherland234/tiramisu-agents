@@ -853,7 +853,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Add canonical event inbox, transactional outbox, external correlation registry, and quarantine persistence foundations.
 - [x] Add a tenant-allow-listed Temporal outbox delivery worker with recoverable claims and idempotent Signal-With-Start delivery.
 - [ ] Add operator-driven quarantine resolution and replay.
-- [ ] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations. Initial action requests, immutable first revisions, policy records, exact-payload approval requests, review threads/messages, and immutable human decisions are complete; replacement revisions, attempts, and reconciliation remain.
+- [x] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations, including exact action-result provenance and immutable evidence-backed operator resolution.
 - [ ] Add autonomy budgets, communication policy, rate limits, and platform/tenant kill switches.
 - [ ] Add data classification, log/trace redaction, Temporal payload encryption hooks, and retention configuration.
 - [x] Add formatting, linting, strict static typing, unit tests, dependency lockfiles, and CI.
@@ -862,19 +862,19 @@ The following architecture decision records are gates for the durable kernel:
 
 ### Phase 2 — Durable agent kernel
 
-- [ ] Implement `AgentWorkflow`. The process mailbox now automatically sequences bounded event, timer, and review agent turns with action persistence and exposes turn/pending-action state; execution resolution, lifecycle transitions, Continue-As-New, and production failure controls remain.
+- [ ] Implement `AgentWorkflow`. The process mailbox now sequences bounded event, timer, review, and action-result turns; executes or defers proposals; performs immediate lookup-only reconciliation; and exposes turn/pending-action state. Lifecycle transitions, delayed reconciliation schedules, Continue-As-New, and production failure controls remain.
 - [x] Implement the initial deterministic process mailbox with event deduplication, replaceable event/timer wake plans, state queries, and time-skipping tests.
 - [x] Implement canonical event ingestion and source-event deduplication.
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
 - [ ] Implement quarantine resolution, late correlation, and replay.
 - [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Automatic single-flight event, timer, and priority-review turns are complete; batching, cancellation/takeover priority, action resolution, and full tie rules remain.
-- [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, bounded PostgreSQL event context loader, and deterministic scripted-runner path. Workflow consumption remains gated on the action gateway.
+- [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, bounded PostgreSQL event/review/action-result context loader, deterministic scripted-runner path, and automatic workflow consumption through the action gateway.
 - [ ] Implement application-owned conversation history, context assembly, provenance-aware memory, and compaction.
 - [x] Implement initial typed decision validation for exact event lineage, allowed actions and wake events, per-turn action limits, and timer bounds.
 - [ ] Implement the action permission gateway. Its fail-closed classification and idempotent proposal-persistence stages are complete; approval commands, pre-execution revalidation, budgets, and execution remain.
 - [ ] Implement policy evaluation and durable approvals.
-- [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries. Durable threads, attributed messages, exact approve/reject transitions, row-lock serialization, idempotent commands, supersession requests, transactional outbox Signals, bounded review context, and replacement-turn provenance are complete; automatic workflow turn execution, operator Updates, and richer Queries remain.
-- [ ] Implement action attempts, bounded retries, idempotent execution, ambiguous outcomes, and reconciliation. Durable attempts, stable payload-bound idempotency keys, exact approval revalidation, autonomous/approved stub execution, unknown outcomes, and lookup-based recovery are complete; multi-attempt policy, background reconciliation, and operator resolution remain.
+- [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries. Durable threads, attributed messages, exact approve/reject transitions, row-lock serialization, idempotent commands, supersession requests, transactional outbox Signals, bounded review context, replacement-turn provenance, and automatic workflow turns are complete; operator Updates and richer Queries remain.
+- [ ] Implement action attempts, bounded retries, idempotent execution, ambiguous outcomes, and reconciliation. Durable attempts, stable payload-bound idempotency keys, exact approval revalidation, autonomous/approved stub execution, lookup-only automatic reconciliation, action-result turns, and evidence-backed operator resolution are complete; delayed/background schedules, multi-attempt policy, backoff, backlog operations, and compensation remain.
 - [ ] Implement the tenant integration registry and provider bindings. An explicit in-memory action-type registry and provider-neutral adapter contract are complete; tenant-configured bindings and credential resolution remain.
 - [ ] Implement budget, communication-policy, and safety-boundary enforcement.
 - [ ] Implement Continue-As-New with complete mailbox, wait, version, approval, and budget carry-forward.

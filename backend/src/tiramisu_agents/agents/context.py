@@ -7,12 +7,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.contracts.processes import (
+    ActionResultContext,
     AgentTurnInput,
     ProcessSnapshot,
     ProcessStatus,
     ReviewTurnContext,
 )
-from tiramisu_agents.db.models.actions import ActionRequest, ActionRevision, ApprovalRequest
+from tiramisu_agents.db.models.actions import (
+    ActionAttempt,
+    ActionReconciliationDecision,
+    ActionRequest,
+    ActionRevision,
+    ApprovalRequest,
+)
 from tiramisu_agents.db.models.events import EventInbox
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.reviews import ReviewMessage, ReviewThread
@@ -25,13 +32,22 @@ class AgentContextError(ValueError):
 
 
 class PostgresAgentContextLoader:
-    def __init__(self, *, max_events_per_turn: int = 50, max_reviews_per_turn: int = 20) -> None:
+    def __init__(
+        self,
+        *,
+        max_events_per_turn: int = 50,
+        max_reviews_per_turn: int = 20,
+        max_action_results_per_turn: int = 20,
+    ) -> None:
         if max_events_per_turn < 1:
             raise ValueError("max_events_per_turn must be positive")
         self._max_events_per_turn = max_events_per_turn
         if max_reviews_per_turn < 1:
             raise ValueError("max_reviews_per_turn must be positive")
         self._max_reviews_per_turn = max_reviews_per_turn
+        if max_action_results_per_turn < 1:
+            raise ValueError("max_action_results_per_turn must be positive")
+        self._max_action_results_per_turn = max_action_results_per_turn
 
     async def load(
         self,
@@ -42,10 +58,11 @@ class PostgresAgentContextLoader:
         turn_id: UUID,
         event_ids: tuple[UUID, ...],
         review_command_ids: tuple[UUID, ...] = (),
+        action_attempt_ids: tuple[UUID, ...] = (),
         timer_ids: tuple[str, ...] = (),
         definition: ProcessDefinition,
     ) -> AgentTurnInput:
-        if not event_ids and not review_command_ids and not timer_ids:
+        if not event_ids and not review_command_ids and not action_attempt_ids and not timer_ids:
             raise AgentContextError("an agent turn requires at least one wake source")
         if len(event_ids) > self._max_events_per_turn:
             raise AgentContextError("agent turn exceeds the event context limit")
@@ -55,6 +72,10 @@ class PostgresAgentContextLoader:
             raise AgentContextError("agent turn exceeds the review context limit")
         if len(review_command_ids) != len(set(review_command_ids)):
             raise AgentContextError("agent turn review command IDs must be unique")
+        if len(action_attempt_ids) > self._max_action_results_per_turn:
+            raise AgentContextError("agent turn exceeds the action result context limit")
+        if len(action_attempt_ids) != len(set(action_attempt_ids)):
+            raise AgentContextError("agent turn action attempt IDs must be unique")
         if any(not value.strip() for value in timer_ids) or len(timer_ids) != len(set(timer_ids)):
             raise AgentContextError("agent turn timer IDs must be nonblank and unique")
 
@@ -135,6 +156,73 @@ class PostgresAgentContextLoader:
             for command_id in review_command_ids
             for row in (reviews_by_id[command_id],)
         )
+        action_rows = (
+            await session.execute(
+                select(
+                    ActionAttempt,
+                    ActionRequest,
+                    ActionRevision,
+                    ActionReconciliationDecision,
+                )
+                .join(
+                    ActionRequest,
+                    ActionRequest.id == ActionAttempt.action_request_id,
+                )
+                .join(
+                    ActionRevision,
+                    (ActionRevision.action_request_id == ActionAttempt.action_request_id)
+                    & (ActionRevision.revision == ActionAttempt.revision),
+                )
+                .outerjoin(
+                    ActionReconciliationDecision,
+                    (ActionReconciliationDecision.action_attempt_id == ActionAttempt.id)
+                    & (ActionReconciliationDecision.tenant_id == ActionAttempt.tenant_id)
+                    & (
+                        ActionReconciliationDecision.process_instance_id
+                        == ActionAttempt.process_instance_id
+                    ),
+                )
+                .where(
+                    ActionAttempt.id.in_(action_attempt_ids),
+                    ActionAttempt.process_instance_id == process_instance_id,
+                )
+            )
+        ).all()
+        actions_by_id = {row.ActionAttempt.id: row for row in action_rows}
+        if set(actions_by_id) != set(action_attempt_ids):
+            raise AgentContextError("one or more action attempts are unavailable")
+        action_results = tuple(
+            ActionResultContext(
+                attempt_id=attempt_id,
+                action_request_id=row.ActionRequest.id,
+                revision=row.ActionAttempt.revision,
+                action_type=row.ActionRequest.action_type,
+                parameters=row.ActionRevision.parameters,
+                status=row.ActionAttempt.status,
+                adapter_id=row.ActionAttempt.adapter_id,
+                idempotency_key=row.ActionAttempt.idempotency_key,
+                provider_reference=row.ActionAttempt.provider_reference,
+                result=row.ActionAttempt.result,
+                error=row.ActionAttempt.error,
+                operator_resolution_id=(
+                    row.ActionReconciliationDecision.id
+                    if row.ActionReconciliationDecision is not None
+                    else None
+                ),
+                operator_actor_id=(
+                    row.ActionReconciliationDecision.actor_id
+                    if row.ActionReconciliationDecision is not None
+                    else None
+                ),
+                operator_evidence=(
+                    row.ActionReconciliationDecision.evidence
+                    if row.ActionReconciliationDecision is not None
+                    else None
+                ),
+            )
+            for attempt_id in action_attempt_ids
+            for row in (actions_by_id[attempt_id],)
+        )
         return AgentTurnInput(
             turn_id=turn_id,
             process=ProcessSnapshot(
@@ -146,6 +234,7 @@ class PostgresAgentContextLoader:
             ),
             events=events,
             reviews=reviews,
+            action_results=action_results,
             timer_ids=timer_ids,
             instructions=definition.compile_instructions(),
         )

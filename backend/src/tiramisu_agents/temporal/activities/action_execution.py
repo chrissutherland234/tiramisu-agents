@@ -29,8 +29,18 @@ class ActionExecutionActivities:
 
     @activity.defn(name="execute_action")
     async def execute_action(self, command: ExecuteActionCommand) -> ExecuteActionResult:
+        return await self._run(command, reconcile=False)
+
+    @activity.defn(name="reconcile_action")
+    async def reconcile_action(self, command: ExecuteActionCommand) -> ExecuteActionResult:
+        return await self._run(command, reconcile=True)
+
+    async def _run(
+        self, command: ExecuteActionCommand, *, reconcile: bool
+    ) -> ExecuteActionResult:
         try:
-            result = await self._executor.execute(
+            operation = self._executor.reconcile if reconcile else self._executor.execute
+            result = await operation(
                 tenant_id=UUID(command.tenant_id),
                 process_instance_id=UUID(command.process_instance_id),
                 action_request_id=UUID(command.action_request_id),

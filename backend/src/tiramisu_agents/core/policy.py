@@ -36,6 +36,7 @@ def validate_decision(
     workflow_now: datetime,
     expected_event_ids: frozenset[UUID] | None = None,
     expected_review_command_ids: frozenset[UUID] | None = None,
+    expected_action_attempt_ids: frozenset[UUID] | None = None,
     expected_timer_ids: frozenset[str] | None = None,
 ) -> AgentDecision:
     """Return the unchanged decision if it fits policy; otherwise fail closed."""
@@ -53,6 +54,11 @@ def validate_decision(
         and frozenset(decision.based_on_review_command_ids) != expected_review_command_ids
     ):
         raise DecisionRejected("decision must be based on exactly the review commands in this turn")
+    if (
+        expected_action_attempt_ids is not None
+        and frozenset(decision.based_on_action_attempt_ids) != expected_action_attempt_ids
+    ):
+        raise DecisionRejected("decision must be based on exactly the action results in this turn")
     if (
         expected_timer_ids is not None
         and frozenset(decision.based_on_timer_ids) != expected_timer_ids

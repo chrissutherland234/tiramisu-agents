@@ -24,6 +24,7 @@ class AgentTurnCommand:
     event_ids: tuple[str, ...]
     workflow_now: datetime
     review_command_ids: tuple[str, ...] = ()
+    action_attempt_ids: tuple[str, ...] = ()
     timer_ids: tuple[str, ...] = ()
 
 
@@ -61,6 +62,9 @@ class AgentTurnActivities:
                 review_command_ids=tuple(
                     UUID(command_id) for command_id in command.review_command_ids
                 ),
+                action_attempt_ids=tuple(
+                    UUID(attempt_id) for attempt_id in command.action_attempt_ids
+                ),
                 timer_ids=command.timer_ids,
                 definition=definition,
             )
@@ -73,6 +77,9 @@ class AgentTurnActivities:
                 expected_event_ids=frozenset(event.event_id for event in turn_input.events),
                 expected_review_command_ids=frozenset(
                     review.command_id for review in turn_input.reviews
+                ),
+                expected_action_attempt_ids=frozenset(
+                    action_result.attempt_id for action_result in turn_input.action_results
                 ),
                 expected_timer_ids=frozenset(turn_input.timer_ids),
             )

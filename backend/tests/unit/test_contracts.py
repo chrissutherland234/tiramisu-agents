@@ -98,6 +98,27 @@ def test_policy_rejects_a_decision_for_a_different_event_batch() -> None:
         )
 
 
+def test_policy_rejects_a_decision_for_a_different_action_result_batch() -> None:
+    expected_attempt_id = uuid4()
+    decision = AgentDecision(
+        based_on_event_ids=(),
+        based_on_action_attempt_ids=(uuid4(),),
+        status=DecisionStatus.ACTIVE,
+    )
+    policy = DecisionPolicy(
+        allowed_action_types=frozenset(),
+        allowed_wake_event_types=frozenset(),
+    )
+
+    with pytest.raises(DecisionRejected, match="exactly the action results"):
+        validate_decision(
+            decision,
+            policy,
+            workflow_now=datetime.now(UTC),
+            expected_action_attempt_ids=frozenset({expected_attempt_id}),
+        )
+
+
 def test_approval_is_bound_to_an_exact_payload_hash() -> None:
     command = ReviewCommand(
         tenant_id=uuid4(),

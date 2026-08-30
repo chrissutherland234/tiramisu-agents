@@ -16,6 +16,7 @@ from tiramisu_agents.db.models.events import OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.temporal.workflows.mailbox import (
+    MailboxActionResolution,
     MailboxEvent,
     MailboxInput,
     MailboxReview,
@@ -82,9 +83,11 @@ class TemporalOutboxDispatcher:
         try:
             if message.message_type == "temporal.process_event":
                 signal_name = "receive_event"
-                signal_argument: MailboxEvent | MailboxReview = MailboxEvent(
-                    event_id=str(message.payload["event_id"]),
-                    event_type=str(message.payload["event_type"]),
+                signal_argument: MailboxEvent | MailboxReview | MailboxActionResolution = (
+                    MailboxEvent(
+                        event_id=str(message.payload["event_id"]),
+                        event_type=str(message.payload["event_type"]),
+                    )
                 )
             elif message.message_type == "temporal.process_review":
                 signal_name = "receive_review"
@@ -94,6 +97,14 @@ class TemporalOutboxDispatcher:
                     review_thread_id=str(message.payload["review_thread_id"]),
                     action_request_id=str(message.payload["action_request_id"]),
                     proposal_revision=int(message.payload["proposal_revision"]),
+                )
+            elif message.message_type == "temporal.action_resolution":
+                signal_name = "receive_action_resolution"
+                signal_argument = MailboxActionResolution(
+                    command_id=str(message.payload["command_id"]),
+                    action_request_id=str(message.payload["action_request_id"]),
+                    action_attempt_id=str(message.payload["action_attempt_id"]),
+                    status=str(message.payload["status"]),
                 )
             else:
                 raise RuntimeError(f"unsupported Temporal message type: {message.message_type}")
@@ -155,7 +166,11 @@ class TemporalOutboxDispatcher:
             select(OutboxMessage)
             .where(
                 OutboxMessage.message_type.in_(
-                    ("temporal.process_event", "temporal.process_review")
+                    (
+                        "temporal.process_event",
+                        "temporal.process_review",
+                        "temporal.action_resolution",
+                    )
                 ),
                 OutboxMessage.available_at <= now,
                 or_(
