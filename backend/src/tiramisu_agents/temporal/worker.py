@@ -12,7 +12,7 @@ from temporalio.worker import Worker
 
 from tiramisu_agents.actions.execution import ActionExecutor
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
-from tiramisu_agents.adapters.stubs import StubActionAdapter
+from tiramisu_agents.adapters.stubs import StubBusinessState, stub_business_bindings
 from tiramisu_agents.agents.openai_runner import OpenAIAgentsTurnRunner
 from tiramisu_agents.api.settings import get_settings
 from tiramisu_agents.db.session import create_engine, create_session_factory
@@ -48,16 +48,14 @@ async def serve(tenant_ids: tuple[UUID, ...]) -> None:
             OpenAIAgentsTurnRunner(model=settings.openai_model),
         )
         gateway_activities = ActionGatewayActivities(session_factory, registry)
-        stub_adapter = StubActionAdapter()
+        definition = registry.get("enquiry_to_booking", "1")
+        bindings = stub_business_bindings(StubBusinessState())
+        if set(bindings) != set(definition.allowed_actions):
+            raise RuntimeError("fictional process actions do not match the stub provider bindings")
         execution_activities = ActionExecutionActivities(
             ActionExecutor(
                 session_factory,
-                ActionAdapterRegistry(
-                    dict.fromkeys(
-                        registry.get("enquiry_to_booking", "1").allowed_actions,
-                        stub_adapter,
-                    )
-                ),
+                ActionAdapterRegistry(bindings),
             )
         )
         activities = [

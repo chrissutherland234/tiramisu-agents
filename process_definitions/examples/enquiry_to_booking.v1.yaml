@@ -16,11 +16,13 @@ allowed_actions:
   - find_available_slots
   - propose_booking
   - request_payment
+  - create_calendar_event
 action_permissions:
   send_message: require_approval
   find_available_slots: allow
   propose_booking: require_approval
   request_payment: require_approval
+  create_calendar_event: allow
 allowed_wake_events:
   - customer.email_received
   - booking.confirmed

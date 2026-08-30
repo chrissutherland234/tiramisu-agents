@@ -44,6 +44,8 @@ The mailbox orchestrates event, timer, conversational-review, and action-result 
 
 The provider-neutral execution stage writes an action attempt before calling the provider, uses a stable payload-bound idempotency key, revalidates exact human approval immediately before dispatch, and distinguishes definitive failure from an ambiguous outcome. An unknown outcome triggers a lookup-only reconciliation Activity that cannot repeat the side effect. If the provider still cannot establish the truth, an operator may resolve it only with an immutable, attributed evidence record. That resolution is delivered transactionally through the outbox to the same Temporal mailbox and becomes authoritative context for another bounded agent turn.
 
+The fictional client path includes stateful messaging, availability/booking, payment, and calendar adapters. The integration-free scenario driver exercises enquiry, approved correspondence, customer reply, autonomous availability lookup, approved booking, booking confirmation, approved payment request, payment completion, calendar creation, and terminal completion without Docker, network access, provider credentials, or an OpenAI key. The fictional worker uses these same action bindings.
+
 ## Development event path
 
 The current vertical slice accepts canonical events, deduplicates them in PostgreSQL, correlates them to one process or leaves them quarantined, and transactionally schedules Temporal delivery. The dispatcher uses Signal-With-Start and workflow-level event deduplication, so retrying an uncertain delivery is safe.

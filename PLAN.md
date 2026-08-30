@@ -887,14 +887,14 @@ Recommended initial journey:
 
 > Website enquiry → email conversation → proposed booking → booking confirmed → payment requested → payment completed → calendar updated → post-service follow-up → completed
 
-- [ ] Add website enquiry ingestion.
-- [ ] Add provider-neutral inbound/outbound messaging primitives with the stub adapter.
-- [ ] Add provider-neutral booking primitives with the stub adapter.
-- [ ] Add provider-neutral payment request/completion primitives with the stub adapter.
-- [ ] Add provider-neutral calendar primitives with the stub adapter.
-- [ ] Add follow-up timers.
+- [x] Add fictional website enquiry ingestion through the development canonical-event route.
+- [x] Add provider-neutral inbound/outbound messaging primitives with a stateful stub adapter.
+- [x] Add provider-neutral availability and booking primitives with a stateful stub adapter.
+- [x] Add provider-neutral payment request/completion primitives with a stateful stub adapter.
+- [x] Add provider-neutral calendar primitives with a stateful stub adapter.
+- [x] Add validated follow-up timers to the process mailbox.
 - [ ] Add manual approval, conversational revision, rejection, expiry, and takeover paths using the test driver and a minimal API surface.
-- [ ] Run the complete journey with stub calendar, messaging, booking, and payment providers.
+- [x] Run the complete integration-free journey with stub messaging, booking, payment, and calendar providers. The durable PostgreSQL/Temporal scenario remains a separate recovery test target.
 - [ ] Run agent behavior evaluations against the same stubbed journey.
 - [ ] Demonstrate recovery after worker restarts during every wait and side effect.
 - [ ] Demonstrate quarantine resolution, ambiguous provider reconciliation, opt-out, message-loop prevention, and budget exhaustion.
