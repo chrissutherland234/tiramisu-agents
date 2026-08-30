@@ -464,3 +464,115 @@ async def test_mailbox_runs_result_turn_after_approved_action_executes() -> None
         result = await handle.result()
         assert result.closed is True
         assert len(result.turn_records) == 4
+
+
+@pytest.mark.asyncio
+async def test_autonomous_result_cannot_arm_a_timer_while_an_approval_is_pending() -> None:
+    task_queue = f"mixed-action-test-{uuid4()}"
+    autonomous_action_id = str(uuid4())
+    approval_action_id = str(uuid4())
+    attempt_id = str(uuid4())
+
+    @activity.defn(name="run_agent_turn")
+    async def run_agent_turn(command: dict[str, Any]) -> dict[str, str]:
+        workflow_now = datetime.fromisoformat(str(command["workflow_now"]))
+        is_event_turn = bool(command["event_ids"])
+        decision: dict[str, Any] = {
+            "decision_id": str(uuid4()),
+            "based_on_event_ids": command["event_ids"],
+            "based_on_review_command_ids": [],
+            "based_on_action_attempt_ids": command["action_attempt_ids"],
+            "based_on_timer_ids": [],
+            "status": "waiting",
+            "actions": (
+                [
+                    {"action_type": "find_available_slots"},
+                    {"action_type": "send_message"},
+                ]
+                if is_event_turn
+                else []
+            ),
+            "wake_conditions": [
+                {
+                    "type": "timer",
+                    "at": (workflow_now + timedelta(minutes=1)).isoformat(),
+                }
+            ],
+            "memory_update": {},
+        }
+        return {"decision_json": json.dumps(decision)}
+
+    @activity.defn(name="persist_agent_actions")
+    async def persist_agent_actions(command: dict[str, Any]) -> dict[str, str]:
+        actions = (
+            [
+                {
+                    "action_request_id": autonomous_action_id,
+                    "revision": 1,
+                    "outcome": "allow",
+                },
+                {
+                    "action_request_id": approval_action_id,
+                    "revision": 1,
+                    "outcome": "require_approval",
+                },
+            ]
+            if command["event_ids"]
+            else []
+        )
+        return {"actions_json": json.dumps(actions)}
+
+    @activity.defn(name="execute_action")
+    async def execute_action(command: dict[str, Any]) -> dict[str, str]:
+        return {
+            "result_json": json.dumps(
+                {
+                    "action_request_id": command["action_request_id"],
+                    "attempt_id": attempt_id,
+                    "status": "succeeded",
+                    "idempotency_key": "d" * 64,
+                    "provider_reference": "stub:availability",
+                    "result": {"slots": []},
+                    "error": None,
+                }
+            )
+        }
+
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as environment,
+        Worker(
+            environment.client,
+            task_queue=task_queue,
+            workflows=[ProcessMailboxWorkflow],
+            activities=[run_agent_turn, persist_agent_actions, execute_action],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            ProcessMailboxWorkflow.run,
+            MailboxInput(
+                tenant_id="tenant-1",
+                process_instance_id="process-1",
+                process_definition_id="example",
+                process_definition_version="1",
+            ),
+            id=f"mixed-action-mailbox-{uuid4()}",
+            task_queue=task_queue,
+        )
+        await handle.signal(
+            ProcessMailboxWorkflow.receive_event,
+            MailboxEvent(event_id=str(uuid4()), event_type="enquiry.created"),
+        )
+
+        state = await handle.query(ProcessMailboxWorkflow.state)
+        for _ in range(100):
+            state = await handle.query(ProcessMailboxWorkflow.state)
+            if len(state.turn_records) == 2 and not state.turn_in_progress:
+                break
+            await asyncio.sleep(0.01)
+
+        assert state.pending_action_request_ids == (approval_action_id,)
+        assert state.turn_records[1].action_attempt_ids == (attempt_id,)
+        assert state.wake_plan is None
+
+        await handle.signal(ProcessMailboxWorkflow.close)
+        assert (await handle.result()).closed is True

@@ -35,9 +35,7 @@ class ActionExecutionActivities:
     async def reconcile_action(self, command: ExecuteActionCommand) -> ExecuteActionResult:
         return await self._run(command, reconcile=True)
 
-    async def _run(
-        self, command: ExecuteActionCommand, *, reconcile: bool
-    ) -> ExecuteActionResult:
+    async def _run(self, command: ExecuteActionCommand, *, reconcile: bool) -> ExecuteActionResult:
         try:
             operation = self._executor.reconcile if reconcile else self._executor.execute
             result = await operation(

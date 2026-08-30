@@ -56,9 +56,7 @@ def upgrade() -> None:
         sa.Column(
             "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
-        sa.CheckConstraint(
-            "previous_status IN ('unknown', 'reconciling')", name="previous_valid"
-        ),
+        sa.CheckConstraint("previous_status IN ('unknown', 'reconciling')", name="previous_valid"),
         sa.CheckConstraint("resolution IN ('succeeded', 'failed')", name="resolution_valid"),
         sa.ForeignKeyConstraint(
             ["tenant_id", "process_instance_id", "action_request_id", "action_attempt_id"],

@@ -72,10 +72,8 @@ class ActionReconciliationService:
             concurrently_stored = await session.scalar(
                 select(ActionReconciliationDecision).where(
                     ActionReconciliationDecision.tenant_id == command.tenant_id,
-                    ActionReconciliationDecision.process_instance_id
-                    == command.process_instance_id,
-                    ActionReconciliationDecision.action_attempt_id
-                    == command.action_attempt_id,
+                    ActionReconciliationDecision.process_instance_id == command.process_instance_id,
+                    ActionReconciliationDecision.action_attempt_id == command.action_attempt_id,
                 )
             )
             if concurrently_stored is not None:

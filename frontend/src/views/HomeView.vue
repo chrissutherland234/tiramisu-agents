@@ -1,9 +1,9 @@
 <script setup lang="ts">
 const foundations = [
-  { name: "Durable workflow", detail: "Temporal-owned waits and wake conditions", state: "Planned" },
-  { name: "Agent kernel", detail: "Bounded proposals behind typed contracts", state: "Started" },
-  { name: "Human review", detail: "Approve, revise, discuss, or take over", state: "Designed" },
-  { name: "Client packs", detail: "Private extensions over a public core", state: "Designed" },
+  { name: "Durable workflow", detail: "Temporal-owned waits and wake conditions", state: "Foundation" },
+  { name: "Agent kernel", detail: "Bounded proposals behind typed contracts", state: "Foundation" },
+  { name: "Human review", detail: "Approve, revise, discuss, or reconcile", state: "Foundation" },
+  { name: "Client packs", detail: "Private extensions over a public core", state: "Contract" },
 ];
 </script>
 

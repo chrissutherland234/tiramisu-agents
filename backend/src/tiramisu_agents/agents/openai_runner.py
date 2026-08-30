@@ -147,8 +147,7 @@ class OpenAIAgentsTurnRunner:
             "events": [event.model_dump(mode="json") for event in turn_input.events],
             "reviews": [review.model_dump(mode="json") for review in turn_input.reviews],
             "action_results": [
-                action_result.model_dump(mode="json")
-                for action_result in turn_input.action_results
+                action_result.model_dump(mode="json") for action_result in turn_input.action_results
             ],
             "timer_ids": turn_input.timer_ids,
         }

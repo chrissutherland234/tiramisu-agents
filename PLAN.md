@@ -812,15 +812,15 @@ The exact packaging boundary remains intentionally simple until the first vertic
 
 ### Phase 0 — Product and architecture decisions
 
-- [ ] Select the first reference customer journey.
-- [ ] Define autonomous versus approval-required actions.
-- [ ] Define permission-gateway outcomes and approval integrity rules.
+- [x] Select enquiry-to-booking as the first fictional reference customer journey.
+- [x] Define the initial autonomous versus approval-required actions in versioned process policy.
+- [x] Define permission-gateway outcomes and exact-payload approval integrity rules.
 - [ ] Decide production Temporal deployment model.
-- [ ] Confirm the initial tenancy isolation model.
-- [ ] Confirm the stub-first integration sequence and select the first real provider to add afterward.
+- [x] Confirm shared-schema PostgreSQL RLS as the initial tenancy isolation model.
+- [x] Confirm the stub-first integration sequence, with email as the likely first real provider afterward.
 - [ ] Define the initial operator and client-admin experience.
 - [x] Define initial canonical event, action, wake-condition, review-command, and agent-decision contracts.
-- [ ] Define provider-neutral integration ports and adapter contracts.
+- [x] Define the initial provider-neutral action port and explicit adapter registry contracts.
 - [ ] Threat-model tenant isolation, webhooks, prompts, tools, and credentials.
 - [ ] Define minimum autonomy, communication, cost, and process-lifetime budgets.
 - [x] Confirm MIT licensing, public contribution policy, and the public/private client-pack boundary.
@@ -867,12 +867,12 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Implement canonical event ingestion and source-event deduplication.
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
 - [ ] Implement quarantine resolution, late correlation, and replay.
-- [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Automatic single-flight event, timer, and priority-review turns are complete; batching, cancellation/takeover priority, action resolution, and full tie rules remain.
+- [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Automatic single-flight event, timer, priority-review, and action-resolution turns are complete; batching, cancellation/takeover priority, and full tie rules remain.
 - [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, bounded PostgreSQL event/review/action-result context loader, deterministic scripted-runner path, and automatic workflow consumption through the action gateway.
 - [ ] Implement application-owned conversation history, context assembly, provenance-aware memory, and compaction.
 - [x] Implement initial typed decision validation for exact event lineage, allowed actions and wake events, per-turn action limits, and timer bounds.
-- [ ] Implement the action permission gateway. Its fail-closed classification and idempotent proposal-persistence stages are complete; approval commands, pre-execution revalidation, budgets, and execution remain.
-- [ ] Implement policy evaluation and durable approvals.
+- [x] Implement the initial action permission gateway with fail-closed classification, idempotent proposal persistence, exact approval commands, pre-execution revalidation, and execution routing. Budgets and live safety overrides are tracked separately.
+- [x] Implement deterministic policy evaluation and durable exact-payload approvals.
 - [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries. Durable threads, attributed messages, exact approve/reject transitions, row-lock serialization, idempotent commands, supersession requests, transactional outbox Signals, bounded review context, replacement-turn provenance, and automatic workflow turns are complete; operator Updates and richer Queries remain.
 - [ ] Implement action attempts, bounded retries, idempotent execution, ambiguous outcomes, and reconciliation. Durable attempts, stable payload-bound idempotency keys, exact approval revalidation, autonomous/approved stub execution, lookup-only automatic reconciliation, action-result turns, and evidence-backed operator resolution are complete; delayed/background schedules, multi-attempt policy, backoff, backlog operations, and compensation remain.
 - [ ] Implement the tenant integration registry and provider bindings. An explicit in-memory action-type registry and provider-neutral adapter contract are complete; tenant-configured bindings and credential resolution remain.
