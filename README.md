@@ -2,7 +2,7 @@
 
 Tiramisu is an open-source foundation for durable, long-running business agents. One logical agent follows a customer journey or case, performs bounded reasoning turns, and sleeps durably in Temporal until an approved event, timer, or human interaction wakes it.
 
-The project is in its foundation phase. See [PLAN.md](PLAN.md), the [runtime configuration guide](docs/configuration.md), the [Temporal recovery guide](docs/temporal-recovery.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
+The project is in its foundation phase. See [PLAN.md](PLAN.md), the [runtime configuration guide](docs/configuration.md), the [security operations guide](docs/security.md), the [Temporal recovery guide](docs/temporal-recovery.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
 
 ## Current shape
 
@@ -46,7 +46,7 @@ Mailbox executions Continue-As-New at a safe boundary after a bounded number of 
 
 The current process projection separates provider/event-sourced authoritative facts from customer claims and records source provenance for both. Model-authored summaries and open commitments are stored separately, summaries must cite inputs from the exact bounded turn, and every applied decision creates an immutable versioned state revision containing its wake plan. Activity retries reuse the existing revision, while terminal and paused process states fail closed. This is the durable memory foundation; application-owned message history and compaction remain future work.
 
-The Vue operator console lists tenant processes and pending reviews, then presents the selected process's durable wake plan, memory, facts and claims, commitments, and combined event/decision/action/review timeline. Operators can comment, approve the exact payload, reject it, or provide revision feedback for another bounded agent turn. The corresponding tenant-scoped APIs are intentionally available only through the unsafe local-development identity headers until production authentication and authorization are implemented.
+The Vue operator console lists tenant processes and pending reviews, then presents the selected process's durable wake plan, memory, facts and claims, commitments, and combined event/decision/action/review timeline. Operators can comment, approve the exact payload, reject it, or provide revision feedback for another bounded agent turn. The API has an initial tenant-bound bearer credential baseline with endpoint scopes, approval roles, expiry, revocation, and tenant suspension. The current Vue identity form remains development-only; a production browser session and external identity-provider integration are still required.
 
 The provider-neutral execution stage writes an action attempt before calling the provider, uses a stable payload-bound idempotency key, revalidates exact human approval immediately before dispatch, and distinguishes definitive failure from an ambiguous outcome. An unknown outcome triggers a lookup-only reconciliation Activity that cannot repeat the side effect. If the provider still cannot establish the truth, an operator may resolve it only with an immutable, attributed evidence record. That resolution is delivered transactionally through the outbox to the same Temporal mailbox and becomes authoritative context for another bounded agent turn.
 
@@ -56,7 +56,9 @@ The fictional client path includes stateful messaging, availability/booking, pay
 
 The current vertical slice accepts canonical events, deduplicates them in PostgreSQL, correlates them to one process or leaves them quarantined, and transactionally schedules Temporal delivery. The dispatcher uses Signal-With-Start and workflow-level event deduplication, so retrying an uncertain delivery is safe.
 
-There is deliberately no unauthenticated production ingestion route. For local fictional-process testing only, set:
+There is no unauthenticated production ingestion route. Production requests require a tenant-bound bearer credential with the relevant scope. Credential lifecycle and emergency suspension are described in [docs/security.md](docs/security.md).
+
+For local fictional-process testing only, set:
 
 ```dotenv
 TIRAMISU_ALLOW_UNSAFE_DEVELOPMENT_TENANT_HEADER=true
@@ -77,7 +79,7 @@ TIRAMISU_WORKER_TENANT_IDS=["00000000-0000-0000-0000-000000000001"]
 
 To enable model-backed orchestration for the fictional process, also set `TIRAMISU_OPENAI_MODEL` to an explicit model name and `OPENAI_API_KEY` to a nonblank key. Worker startup fails closed before connecting if either is absent. This can make live OpenAI requests; ordinary tests continue using scripted Activities and require no API key.
 
-The runtime role cannot enumerate tenants. Production authentication, tenant provisioning, webhook verification, and deployment-managed tenant assignments remain required before exposing ingestion externally.
+The runtime role cannot enumerate tenants. Signed provider-webhook verification, managed tenant provisioning, production browser identity, rate limits, and deployment-managed tenant assignments remain required before exposing ingestion externally.
 
 ## Public and private extensions
 

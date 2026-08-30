@@ -4,11 +4,14 @@ from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from tiramisu_agents.api.settings import Settings
+from tiramisu_agents.api.operator_auth import (
+    OperatorIdentity,
+    require_event_ingress_identity,
+)
 from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference, Sensitivity
 from tiramisu_agents.core.contracts.knowledge import FactObservation
@@ -18,6 +21,7 @@ from tiramisu_agents.events.ingestion import (
     TenantNotFound,
     TriggerReferenceRequired,
 )
+from tiramisu_agents.security.tenancy import TenantSuspended
 
 router = APIRouter(prefix="/v1/events", tags=["events"])
 
@@ -62,30 +66,11 @@ def fictional_trigger_rules() -> dict[str, ProcessBootstrap]:
 async def ingest_event(
     body: IngestEventRequest,
     request: Request,
-    tenant_header: Annotated[str | None, Header(alias="X-Tiramisu-Tenant-ID")] = None,
+    identity: Annotated[OperatorIdentity, Depends(require_event_ingress_identity)],
 ) -> IngestEventResponse:
-    settings: Settings = request.app.state.settings
-    if settings.environment != "development" or not settings.allow_unsafe_development_tenant_header:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="development tenant-header ingestion is disabled",
-        )
-    if tenant_header is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-Tiramisu-Tenant-ID is required",
-        )
-    try:
-        tenant_id = UUID(tenant_header)
-    except ValueError as error:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-Tiramisu-Tenant-ID must be a UUID",
-        ) from error
-
     event = CanonicalEvent(
         event_id=body.event_id,
-        tenant_id=tenant_id,
+        tenant_id=identity.tenant_id,
         process_instance_id=body.process_instance_id,
         event_type=body.event_type,
         source=body.source,
@@ -109,6 +94,11 @@ async def ingest_event(
     except TenantNotFound as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="tenant not found"
+        ) from error
+    except TenantSuspended as error:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="tenant is suspended",
         ) from error
     except TriggerReferenceRequired as error:
         raise HTTPException(

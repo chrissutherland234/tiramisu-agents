@@ -14,6 +14,7 @@ from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 
 from tiramisu_agents.db.models.events import OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance
+from tiramisu_agents.db.models.tenancy import Tenant
 from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.temporal.workflows.mailbox import (
     MailboxActionResolution,
@@ -161,6 +162,9 @@ class TemporalOutboxDispatcher:
         self, session: AsyncSession, tenant_id: UUID, *, now: datetime
     ) -> ClaimedMessage | None:
         await set_tenant_context(session, tenant_id)
+        tenant_status = await session.scalar(select(Tenant.status).where(Tenant.id == tenant_id))
+        if tenant_status != "active":
+            return None
         stale_before = now - self._stale_claim_after
         stored = await session.scalar(
             select(OutboxMessage)

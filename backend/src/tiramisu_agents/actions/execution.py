@@ -32,10 +32,19 @@ from tiramisu_agents.db.models.actions import (
 )
 from tiramisu_agents.db.models.reviews import ApprovalDecision
 from tiramisu_agents.db.session import set_tenant_context
+from tiramisu_agents.security.tenancy import (
+    TenantSuspended,
+    TenantUnavailable,
+    require_active_tenant,
+)
 
 
 class ActionExecutionRejected(ValueError):
     """Raised when current durable state does not authorize execution."""
+
+
+class ActionExecutionSuspended(ActionExecutionRejected):
+    """Raised when an otherwise recoverable execution is blocked by tenant suspension."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +88,7 @@ class ActionExecutor:
         revision: int,
     ) -> ActionExecutionResult:
         async with self._session_factory.begin() as session:
-            await set_tenant_context(session, tenant_id)
+            await self._require_execution_enabled(session, tenant_id)
             request, action_revision, _ = await self._load_authorized_action(
                 session,
                 tenant_id=tenant_id,
@@ -154,6 +163,8 @@ class ActionExecutor:
                     "provider cannot safely retry an unresolved execution",
                 )
 
+        async with self._session_factory.begin() as session:
+            await self._require_execution_enabled(session, tenant_id)
         try:
             provider_result = await adapter.execute(provider_request)
         except DefinitiveActionFailure as error:
@@ -168,6 +179,17 @@ class ActionExecutor:
                 f"{type(error).__name__}: {error}",
             )
         return await self._record_success(tenant_id, action_request_id, key, provider_result)
+
+    @staticmethod
+    async def _require_execution_enabled(session: AsyncSession, tenant_id: UUID) -> None:
+        try:
+            await require_active_tenant(session, tenant_id)
+        except TenantSuspended as error:
+            raise ActionExecutionSuspended(
+                "tenant safety control blocks action execution"
+            ) from error
+        except TenantUnavailable as error:
+            raise ActionExecutionRejected("action execution tenant is unavailable") from error
 
     async def reconcile(
         self,

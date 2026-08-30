@@ -9,7 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from tiramisu_agents.api.operator_auth import OperatorIdentity, require_operator_identity
+from tiramisu_agents.api.operator_auth import (
+    OperatorIdentity,
+    require_operator_identity,
+    require_process_reader,
+    require_review_reader,
+)
 from tiramisu_agents.core.contracts.decisions import WakeCondition
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
 from tiramisu_agents.db.models.actions import (
@@ -23,6 +28,7 @@ from tiramisu_agents.db.models.processes import ProcessInstance, ProcessStateRev
 from tiramisu_agents.db.models.reviews import ReviewMessage, ReviewThread
 from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.reviews.service import ReviewConflict, ReviewService
+from tiramisu_agents.security.credentials import CredentialScope
 
 router = APIRouter(prefix="/v1", tags=["operator"])
 _wake_condition_adapter: TypeAdapter[WakeCondition] = TypeAdapter(WakeCondition)
@@ -129,7 +135,7 @@ def _session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
 @router.get("/processes", response_model=list[ProcessSummary])
 async def list_processes(
     request: Request,
-    identity: Annotated[OperatorIdentity, Depends(require_operator_identity)],
+    identity: Annotated[OperatorIdentity, Depends(require_process_reader)],
     process_status: Annotated[str | None, Query(alias="status")] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> list[ProcessSummary]:
@@ -170,7 +176,7 @@ async def list_processes(
 async def get_process(
     process_instance_id: UUID,
     request: Request,
-    identity: Annotated[OperatorIdentity, Depends(require_operator_identity)],
+    identity: Annotated[OperatorIdentity, Depends(require_process_reader)],
     timeline_limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> ProcessDetail:
     async with _session_factory(request).begin() as session:
@@ -209,7 +215,7 @@ async def get_process(
 @router.get("/reviews", response_model=list[PendingReview])
 async def list_pending_reviews(
     request: Request,
-    identity: Annotated[OperatorIdentity, Depends(require_operator_identity)],
+    identity: Annotated[OperatorIdentity, Depends(require_review_reader)],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> list[PendingReview]:
     query = (
@@ -275,6 +281,21 @@ async def submit_review_command(
                 status_code=status.HTTP_404_NOT_FOUND, detail="review thread not found"
             )
         thread, approval = target
+        required_scope = (
+            CredentialScope.REVIEWS_COMMENT
+            if body.command_type is ReviewCommandType.COMMENT
+            else CredentialScope.REVIEWS_DECIDE
+        )
+        identity.require_scope(required_scope)
+        if (
+            body.command_type is ReviewCommandType.APPROVE
+            and approval.required_role is not None
+            and not identity.has_role(approval.required_role)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"approval requires role: {approval.required_role}",
+            )
         command = ReviewCommand(
             command_id=body.command_id,
             tenant_id=identity.tenant_id,

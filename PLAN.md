@@ -849,12 +849,12 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Add PostgreSQL Compose service, SQLAlchemy models, and a reversible, drift-checked initial Alembic migration.
 - [x] Add and runtime-validate the local Temporal development service.
 - [x] Add forced PostgreSQL row-level security, composite tenant foreign keys, transaction-scoped tenant context, and separate local admin/runtime roles.
-- [ ] Establish tenant-aware API authentication and production database role provisioning.
+- [x] Establish initial tenant-aware API authentication with hash-only, scoped, expirable and revocable deployment credentials. Managed external identity-provider/browser sessions and production database role provisioning remain.
 - [x] Add canonical event inbox, transactional outbox, external correlation registry, and quarantine persistence foundations.
 - [x] Add a tenant-allow-listed Temporal outbox delivery worker with recoverable claims and idempotent Signal-With-Start delivery.
 - [ ] Add operator-driven quarantine resolution and replay.
 - [x] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations, including exact action-result provenance and immutable evidence-backed operator resolution.
-- [ ] Add autonomy budgets, communication policy, rate limits, and platform/tenant kill switches.
+- [ ] Add autonomy budgets, communication policy, and rate limits. An audited tenant suspension control now gates ingress, dispatch, model calls, and provider side effects; platform-wide and capability-specific circuit breakers remain.
 - [ ] Add data classification, log/trace redaction, Temporal payload encryption hooks, and retention configuration.
 - [x] Add formatting, linting, strict static typing, unit tests, dependency lockfiles, and CI.
 - [ ] Add correlated structured logging, tracing, metrics, health checks, and initial stuck-work alerts.

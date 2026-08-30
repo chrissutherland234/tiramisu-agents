@@ -4,6 +4,8 @@ Tiramisu reads backend settings from environment variables prefixed with `TIRAMI
 
 Startup validation rejects malformed PostgreSQL URLs, log levels, Temporal task queues, duplicate tenant assignments, unsafe identity headers outside development, and the fictional client pack outside development or tests. Blank model and API-key values normalize to absent values rather than passing startup checks as empty strings.
 
+Production API identity is data-backed rather than configured through an environment secret. A trusted deployment operator issues tenant-bound bearer credentials with `tiramisu-admin`; see [security.md](security.md). The CLI uses `TIRAMISU_MIGRATION_DATABASE_URL` because credential and tenant-status changes are control-plane operations. The API validates credentials using the restricted runtime connection.
+
 ## Service boundaries
 
 | Setting | Used by | Meaning |

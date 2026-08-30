@@ -10,6 +10,17 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
 
+_SUSPENSION_RECHECK_DELAY = timedelta(minutes=1)
+
+
+def _is_activity_error_type(error: ActivityError, expected_type: str) -> bool:
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, ApplicationError) and current.type == expected_type:
+            return True
+        current = current.__cause__
+    return False
+
 
 @dataclass(frozen=True)
 class MailboxEvent:
@@ -575,26 +586,35 @@ class ProcessMailboxWorkflow:
         workflow_now = workflow.now()
         self._turn_in_progress = True
         try:
-            turn_result = cast(
-                dict[str, Any],
-                await workflow.execute_activity(
-                    "run_agent_turn",
-                    {
-                        "tenant_id": self._tenant_id,
-                        "process_instance_id": self._process_instance_id,
-                        "process_definition_id": self._process_definition_id,
-                        "process_definition_version": self._process_definition_version,
-                        "turn_id": turn_id,
-                        "event_ids": event_ids,
-                        "workflow_now": workflow_now,
-                        "review_command_ids": review_command_ids,
-                        "action_attempt_ids": action_attempt_ids,
-                        "timer_ids": timer_ids,
-                    },
-                    start_to_close_timeout=timedelta(minutes=2),
-                    retry_policy=RetryPolicy(maximum_attempts=3),
-                ),
-            )
+            while True:
+                try:
+                    turn_result = cast(
+                        dict[str, Any],
+                        await workflow.execute_activity(
+                            "run_agent_turn",
+                            {
+                                "tenant_id": self._tenant_id,
+                                "process_instance_id": self._process_instance_id,
+                                "process_definition_id": self._process_definition_id,
+                                "process_definition_version": self._process_definition_version,
+                                "turn_id": turn_id,
+                                "event_ids": event_ids,
+                                "workflow_now": workflow_now,
+                                "review_command_ids": review_command_ids,
+                                "action_attempt_ids": action_attempt_ids,
+                                "timer_ids": timer_ids,
+                            },
+                            start_to_close_timeout=timedelta(minutes=2),
+                            retry_policy=RetryPolicy(maximum_attempts=3),
+                        ),
+                    )
+                    break
+                except ActivityError as error:
+                    if not _is_activity_error_type(error, "TenantSuspended"):
+                        raise
+                    await workflow.sleep(_SUSPENSION_RECHECK_DELAY)
+                    if self._closed:
+                        return
             decision_json = str(turn_result["decision_json"])
             action_result = cast(
                 dict[str, Any],
@@ -730,20 +750,29 @@ class ProcessMailboxWorkflow:
     ) -> dict[str, Any] | None:
         self._add_pending_action(action_request_id)
         try:
-            activity_result = cast(
-                dict[str, Any],
-                await workflow.execute_activity(
-                    "execute_action",
-                    {
-                        "tenant_id": self._tenant_id,
-                        "process_instance_id": self._process_instance_id,
-                        "action_request_id": action_request_id,
-                        "revision": revision,
-                    },
-                    start_to_close_timeout=timedelta(minutes=2),
-                    retry_policy=RetryPolicy(maximum_attempts=1),
-                ),
-            )
+            while True:
+                try:
+                    activity_result = cast(
+                        dict[str, Any],
+                        await workflow.execute_activity(
+                            "execute_action",
+                            {
+                                "tenant_id": self._tenant_id,
+                                "process_instance_id": self._process_instance_id,
+                                "action_request_id": action_request_id,
+                                "revision": revision,
+                            },
+                            start_to_close_timeout=timedelta(minutes=2),
+                            retry_policy=RetryPolicy(maximum_attempts=1),
+                        ),
+                    )
+                    break
+                except ActivityError as error:
+                    if not _is_activity_error_type(error, "ActionExecutionSuspended"):
+                        raise
+                    await workflow.sleep(_SUSPENSION_RECHECK_DELAY)
+                    if self._closed:
+                        return None
             result_json = str(activity_result["result_json"])
             result = cast(dict[str, Any], json.loads(result_json))
             self._execution_records.append(

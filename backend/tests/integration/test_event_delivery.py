@@ -18,7 +18,7 @@ from tiramisu_agents.api.settings import Settings
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance
-from tiramisu_agents.db.models.tenancy import Tenant
+from tiramisu_agents.db.models.tenancy import Tenant, TenantSafetyEvent
 from tiramisu_agents.db.session import (
     create_engine,
     create_session_factory,
@@ -29,6 +29,7 @@ from tiramisu_agents.events.ingestion import (
     IngestionResult,
     ProcessBootstrap,
 )
+from tiramisu_agents.security.tenancy import TenantSafetyService
 from tiramisu_agents.temporal.dispatcher import DispatchStatus, TemporalOutboxDispatcher
 from tiramisu_agents.temporal.workflows.mailbox import ProcessMailboxWorkflow
 
@@ -77,6 +78,9 @@ async def _delete_tenant_data(
             delete(ExternalCorrelation).where(ExternalCorrelation.tenant_id == tenant_id)
         )
         await session.execute(delete(ProcessInstance).where(ProcessInstance.tenant_id == tenant_id))
+        await session.execute(
+            delete(TenantSafetyEvent).where(TenantSafetyEvent.tenant_id == tenant_id)
+        )
         await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
 
 
@@ -437,6 +441,37 @@ async def test_outbox_signal_with_start_is_safe_to_redeliver() -> None:
                 )
             )
         assert workflow_id is not None
+
+        async with admin_factory.begin() as session:
+            await TenantSafetyService().set_status(
+                session,
+                tenant_id=tenant_id,
+                actor_id=uuid4(),
+                new_status="suspended",
+                reason="Pause workflow delivery during incident response",
+            )
+        suspended_dispatcher = TemporalOutboxDispatcher(
+            runtime_factory,
+            cast(Client, _SuccessfulTemporalClient()),
+            task_queue="suspended-tenant-test",
+        )
+        assert (await suspended_dispatcher.dispatch_one(tenant_id)).status is DispatchStatus.EMPTY
+        async with runtime_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            pending_count = await session.scalar(
+                select(func.count())
+                .select_from(OutboxMessage)
+                .where(OutboxMessage.status == "pending")
+            )
+        assert pending_count == 1
+        async with admin_factory.begin() as session:
+            await TenantSafetyService().set_status(
+                session,
+                tenant_id=tenant_id,
+                actor_id=uuid4(),
+                new_status="active",
+                reason="Workflow delivery may resume",
+            )
 
         task_queue = f"delivery-test-{uuid4()}"
         async with (

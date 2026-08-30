@@ -18,10 +18,11 @@ from tiramisu_agents.core.contracts.decisions import (
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance
-from tiramisu_agents.db.models.tenancy import Tenant
+from tiramisu_agents.db.models.tenancy import Tenant, TenantSafetyEvent
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
+from tiramisu_agents.security.tenancy import TenantSafetyService
 from tiramisu_agents.temporal.activities.agent_turn import AgentTurnActivities, AgentTurnCommand
 from tiramisu_agents.testkit.scripted_agent import ScriptedAgent
 
@@ -41,6 +42,9 @@ async def _delete_tenant_data(
             delete(ExternalCorrelation).where(ExternalCorrelation.tenant_id == tenant_id)
         )
         await session.execute(delete(ProcessInstance).where(ProcessInstance.tenant_id == tenant_id))
+        await session.execute(
+            delete(TenantSafetyEvent).where(TenantSafetyEvent.tenant_id == tenant_id)
+        )
         await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
 
 
@@ -131,6 +135,21 @@ async def test_activity_loads_context_and_rejects_out_of_policy_decision() -> No
             await activities.run_agent_turn(command)
         assert raised.value.non_retryable is True
         assert raised.value.type == "DecisionRejected"
+
+        async with admin_factory.begin() as session:
+            await TenantSafetyService().set_status(
+                session,
+                tenant_id=tenant_id,
+                actor_id=uuid4(),
+                new_status="suspended",
+                reason="Stop model calls during incident response",
+            )
+        prior_turn_count = len(scripted_agent.turn_inputs)
+        with pytest.raises(ApplicationError) as suspended:
+            await activities.run_agent_turn(command)
+        assert suspended.value.non_retryable is True
+        assert suspended.value.type == "TenantSuspended"
+        assert len(scripted_agent.turn_inputs) == prior_turn_count
     finally:
         await _delete_tenant_data(admin_factory, tenant_id)
         await runtime_engine.dispose()

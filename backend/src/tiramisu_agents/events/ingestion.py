@@ -12,6 +12,7 @@ from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, Ou
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.tenancy import Tenant
 from tiramisu_agents.db.session import set_tenant_context
+from tiramisu_agents.security.tenancy import TenantSuspended
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,8 +53,13 @@ class EventIngestionService:
         bootstrap: ProcessBootstrap | None = None,
     ) -> IngestionResult:
         await set_tenant_context(session, event.tenant_id)
-        if await session.scalar(select(Tenant.id).where(Tenant.id == event.tenant_id)) is None:
+        tenant_status = await session.scalar(
+            select(Tenant.status).where(Tenant.id == event.tenant_id)
+        )
+        if tenant_status is None:
             raise TenantNotFound(str(event.tenant_id))
+        if tenant_status != "active":
+            raise TenantSuspended(str(event.tenant_id))
 
         await self._lock_source_event_key(session, event)
         existing = await self._existing_result(session, event)

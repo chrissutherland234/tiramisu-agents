@@ -25,6 +25,7 @@ dependencies = [
 
 [project.scripts]
 tiramisu-api = "tiramisu_agents.api.main:run"
+tiramisu-admin = "tiramisu_agents.security.admin_cli:run"
 tiramisu-worker = "tiramisu_agents.temporal.worker:run"
 
 [dependency-groups]

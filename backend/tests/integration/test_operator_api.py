@@ -31,11 +31,13 @@ from tiramisu_agents.db.models.actions import (
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance, ProcessStateRevision
 from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, ReviewThread
-from tiramisu_agents.db.models.tenancy import Tenant
-from tiramisu_agents.db.session import create_engine, create_session_factory
+from tiramisu_agents.db.models.tenancy import Tenant, TenantCredential
+from tiramisu_agents.db.session import create_engine, create_session_factory, set_tenant_context
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateService
+from tiramisu_agents.security.credential_service import TenantCredentialService
+from tiramisu_agents.security.credentials import CredentialScope
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TIRAMISU_RUN_DB_TESTS") != "1",
@@ -64,6 +66,9 @@ async def _delete_tenant_data(
             ProcessInstance,
         ):
             await session.execute(delete(model).where(model.tenant_id == tenant_id))
+        await session.execute(
+            delete(TenantCredential).where(TenantCredential.tenant_id == tenant_id)
+        )
         await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
 
 
@@ -120,13 +125,51 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
         ),
     )
     app = create_app(
-        settings=Settings(allow_unsafe_development_tenant_header=True),
+        settings=Settings(environment="production"),
         session_factory=runtime_factory,
     )
 
     try:
         async with admin_factory.begin() as session:
-            session.add(Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="API Tenant"))
+            session.add_all(
+                [
+                    Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="API Tenant"),
+                    Tenant(
+                        id=other_tenant_id,
+                        slug=f"tenant-{other_tenant_id}",
+                        name="Other API Tenant",
+                    ),
+                ]
+            )
+        credential_service = TenantCredentialService()
+        async with admin_factory.begin() as session:
+            operator_credential = await credential_service.issue(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                name="operator",
+                scopes=(
+                    CredentialScope.PROCESSES_READ,
+                    CredentialScope.REVIEWS_READ,
+                    CredentialScope.REVIEWS_COMMENT,
+                    CredentialScope.REVIEWS_DECIDE,
+                ),
+                roles=("message_approver",),
+            )
+            no_role_credential = await credential_service.issue(
+                session,
+                tenant_id=tenant_id,
+                actor_id=uuid4(),
+                name="operator without approval role",
+                scopes=(CredentialScope.REVIEWS_DECIDE,),
+            )
+            other_credential = await credential_service.issue(
+                session,
+                tenant_id=other_tenant_id,
+                actor_id=actor_id,
+                name="other tenant reader",
+                scopes=(CredentialScope.PROCESSES_READ,),
+            )
         async with runtime_factory.begin() as session:
             ingested = await EventIngestionService().ingest(
                 session,
@@ -152,6 +195,10 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             )
         assert actions[0].review_thread_id is not None
         async with runtime_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            approval_request = await session.get(ApprovalRequest, actions[0].approval_request_id)
+            assert approval_request is not None
+            approval_request.required_role = "message_approver"
             await ProcessStateService().apply_decision(
                 session,
                 tenant_id=tenant_id,
@@ -160,10 +207,7 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
                 decision=decision,
             )
 
-        headers = {
-            "X-Tiramisu-Tenant-ID": str(tenant_id),
-            "X-Tiramisu-Actor-ID": str(actor_id),
-        }
+        headers = {"Authorization": f"Bearer {operator_credential.token}"}
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             processes = await client.get("/v1/processes", headers=headers)
@@ -193,16 +237,24 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             assert review["thread_id"] == str(actions[0].review_thread_id)
             assert review["parameters"] == decision.actions[0].parameters
 
-            isolated_headers = {
-                "X-Tiramisu-Tenant-ID": str(other_tenant_id),
-                "X-Tiramisu-Actor-ID": str(actor_id),
-            }
+            isolated_headers = {"Authorization": f"Bearer {other_credential.token}"}
             isolated = await client.get("/v1/processes", headers=isolated_headers)
             assert isolated.json() == []
             hidden = await client.get(f"/v1/processes/{process_id}", headers=isolated_headers)
             assert hidden.status_code == 404
 
             command_id = uuid4()
+            missing_role = await client.post(
+                f"/v1/reviews/{review['thread_id']}/commands",
+                headers={"Authorization": f"Bearer {no_role_credential.token}"},
+                json={
+                    "command_type": "approve",
+                    "expected_payload_hash": review["payload_hash"],
+                },
+            )
+            assert missing_role.status_code == 403
+            assert missing_role.json()["detail"] == "approval requires role: message_approver"
+
             approval = await client.post(
                 f"/v1/reviews/{review['thread_id']}/commands",
                 headers=headers,
@@ -235,5 +287,6 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             assert (await client.get("/v1/reviews", headers=headers)).json() == []
     finally:
         await _delete_tenant_data(admin_factory, tenant_id)
+        await _delete_tenant_data(admin_factory, other_tenant_id)
         await runtime_engine.dispose()
         await admin_engine.dispose()

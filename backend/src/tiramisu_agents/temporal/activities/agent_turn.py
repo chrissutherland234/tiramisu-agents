@@ -12,6 +12,11 @@ from tiramisu_agents.agents.context import PostgresAgentContextLoader
 from tiramisu_agents.agents.runner import AgentTurnRunner
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
+from tiramisu_agents.security.tenancy import (
+    TenantSuspended,
+    TenantUnavailable,
+    require_active_tenant,
+)
 
 
 @dataclass(frozen=True)
@@ -49,25 +54,37 @@ class AgentTurnActivities:
 
     @activity.defn(name="run_agent_turn")
     async def run_agent_turn(self, command: AgentTurnCommand) -> AgentTurnActivityResult:
+        tenant_id = UUID(command.tenant_id)
         definition = self._registry.get(
             command.process_definition_id, command.process_definition_version
         )
-        async with self._session_factory.begin() as session:
-            turn_input = await self._context_loader.load(
-                session,
-                tenant_id=UUID(command.tenant_id),
-                process_instance_id=UUID(command.process_instance_id),
-                turn_id=UUID(command.turn_id),
-                event_ids=tuple(UUID(event_id) for event_id in command.event_ids),
-                review_command_ids=tuple(
-                    UUID(command_id) for command_id in command.review_command_ids
-                ),
-                action_attempt_ids=tuple(
-                    UUID(attempt_id) for attempt_id in command.action_attempt_ids
-                ),
-                timer_ids=command.timer_ids,
-                definition=definition,
-            )
+        try:
+            async with self._session_factory.begin() as session:
+                await require_active_tenant(session, tenant_id)
+                turn_input = await self._context_loader.load(
+                    session,
+                    tenant_id=tenant_id,
+                    process_instance_id=UUID(command.process_instance_id),
+                    turn_id=UUID(command.turn_id),
+                    event_ids=tuple(UUID(event_id) for event_id in command.event_ids),
+                    review_command_ids=tuple(
+                        UUID(command_id) for command_id in command.review_command_ids
+                    ),
+                    action_attempt_ids=tuple(
+                        UUID(attempt_id) for attempt_id in command.action_attempt_ids
+                    ),
+                    timer_ids=command.timer_ids,
+                    definition=definition,
+                )
+            # Recheck as close as possible to the nondeterministic model call.
+            async with self._session_factory.begin() as session:
+                await require_active_tenant(session, tenant_id)
+        except (TenantUnavailable, TenantSuspended) as error:
+            raise ApplicationError(
+                "tenant safety control blocks agent execution",
+                type=type(error).__name__,
+                non_retryable=True,
+            ) from error
         decision = await self._runner.run_turn(turn_input)
         try:
             validated = validate_decision(

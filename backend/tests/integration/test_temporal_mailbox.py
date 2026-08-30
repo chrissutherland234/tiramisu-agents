@@ -219,6 +219,112 @@ async def test_persistence_retries_do_not_rerun_the_model_activity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tenant_suspension_durably_retries_model_and_action_without_losing_turn() -> None:
+    task_queue = f"suspension-retry-test-{uuid4()}"
+    action_request_id = str(uuid4())
+    action_attempt_id = str(uuid4())
+    model_calls = 0
+    action_calls = 0
+
+    @activity.defn(name="run_agent_turn")
+    async def run_agent_turn(command: dict[str, Any]) -> dict[str, str]:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            raise ApplicationError(
+                "tenant is suspended", type="TenantSuspended", non_retryable=True
+            )
+        completed = bool(command["action_attempt_ids"])
+        return {
+            "decision_json": json.dumps(
+                {
+                    "decision_id": str(uuid4()),
+                    "based_on_event_ids": command["event_ids"],
+                    "based_on_review_command_ids": [],
+                    "based_on_action_attempt_ids": command["action_attempt_ids"],
+                    "based_on_timer_ids": [],
+                    "status": "completed" if completed else "active",
+                    "actions": [],
+                    "wake_conditions": [],
+                    "memory_update": {},
+                }
+            )
+        }
+
+    @activity.defn(name="persist_agent_actions")
+    async def persist_agent_actions(command: dict[str, Any]) -> dict[str, str]:
+        actions = (
+            [
+                {
+                    "action_request_id": action_request_id,
+                    "revision": 1,
+                    "outcome": "allow",
+                    "status": "allowed",
+                }
+            ]
+            if command["event_ids"]
+            else []
+        )
+        return {"actions_json": json.dumps(actions)}
+
+    @activity.defn(name="execute_action")
+    async def execute_action(command: dict[str, Any]) -> dict[str, str]:
+        nonlocal action_calls
+        action_calls += 1
+        if action_calls == 1:
+            raise ApplicationError(
+                "tenant is suspended",
+                type="ActionExecutionSuspended",
+                non_retryable=True,
+            )
+        return {
+            "result_json": json.dumps(
+                {
+                    "action_request_id": command["action_request_id"],
+                    "attempt_id": action_attempt_id,
+                    "status": "succeeded",
+                }
+            )
+        }
+
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as environment,
+        Worker(
+            environment.client,
+            task_queue=task_queue,
+            workflows=[ProcessMailboxWorkflow],
+            activities=[
+                run_agent_turn,
+                persist_agent_actions,
+                persist_process_state,
+                execute_action,
+            ],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            ProcessMailboxWorkflow.run,
+            MailboxInput(
+                tenant_id="tenant-1",
+                process_instance_id="process-1",
+                process_definition_id="example",
+                process_definition_version="1",
+            ),
+            id=f"suspension-retry-mailbox-{uuid4()}",
+            task_queue=task_queue,
+        )
+        event = MailboxEvent(event_id=str(uuid4()), event_type="enquiry.created")
+        await handle.signal(ProcessMailboxWorkflow.receive_event, event)
+
+        result = await handle.result()
+        assert result.closed is True
+        assert model_calls == 3
+        assert action_calls == 2
+        assert [record.error for record in result.turn_records] == [None, None]
+        assert result.turn_records[0].event_ids == (event.event_id,)
+        assert result.execution_records[0].result_json is not None
+
+
+@pytest.mark.asyncio
 async def test_unknown_continuation_schema_fails_closed() -> None:
     task_queue = f"continuation-schema-test-{uuid4()}"
     async with (

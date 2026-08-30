@@ -40,12 +40,13 @@ from tiramisu_agents.db.models.actions import (
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance, ProcessStateRevision
 from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, ReviewThread
-from tiramisu_agents.db.models.tenancy import Tenant
+from tiramisu_agents.db.models.tenancy import Tenant, TenantSafetyEvent
 from tiramisu_agents.db.session import create_engine, create_session_factory, set_tenant_context
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateService
 from tiramisu_agents.reviews.service import ReviewConflict, ReviewService
+from tiramisu_agents.security.tenancy import TenantSafetyService
 from tiramisu_agents.temporal.activities.action_gateway import (
     ActionGatewayActivities,
     PersistActionsCommand,
@@ -93,6 +94,9 @@ async def _delete_tenant_data(
             delete(ExternalCorrelation).where(ExternalCorrelation.tenant_id == tenant_id)
         )
         await session.execute(delete(ProcessInstance).where(ProcessInstance.tenant_id == tenant_id))
+        await session.execute(
+            delete(TenantSafetyEvent).where(TenantSafetyEvent.tenant_id == tenant_id)
+        )
         await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
 
 
@@ -323,6 +327,31 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                 }
             ),
         )
+        async with admin_factory.begin() as session:
+            await TenantSafetyService().set_status(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                new_status="suspended",
+                reason="Block side effects while a provider incident is investigated",
+            )
+        with pytest.raises(ActionExecutionRejected, match="safety control"):
+            await executor.execute(
+                tenant_id=tenant_id,
+                process_instance_id=ingested.process_instance_id,
+                action_request_id=first[1].action_request_id,
+                revision=1,
+            )
+        assert availability_adapter.requests == []
+        async with admin_factory.begin() as session:
+            await TenantSafetyService().set_status(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                new_status="active",
+                reason="Provider incident resolved",
+            )
+
         sent = await executor.execute(
             tenant_id=tenant_id,
             process_instance_id=ingested.process_instance_id,
