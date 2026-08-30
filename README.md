@@ -2,7 +2,7 @@
 
 Tiramisu is an open-source foundation for durable, long-running business agents. One logical agent follows a customer journey or case, performs bounded reasoning turns, and sleeps durably in Temporal until an approved event, timer, or human interaction wakes it.
 
-The project is in its foundation phase. See [PLAN.md](PLAN.md), the [runtime configuration guide](docs/configuration.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
+The project is in its foundation phase. See [PLAN.md](PLAN.md), the [runtime configuration guide](docs/configuration.md), the [Temporal recovery guide](docs/temporal-recovery.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
 
 ## Current shape
 
@@ -41,6 +41,8 @@ Approval-required actions now receive a durable review thread. The review servic
 Review commands are transactionally placed in the same PostgreSQL outbox as business events and delivered idempotently to the same Temporal process mailbox. A review wake carries bounded provenance into the agent context: the attributed feedback, referenced proposal parameters, rationale, revision, and payload hash. Replacement decisions must cite the review command IDs they used, and replacement proposals receive a new exact-payload approval thread.
 
 The mailbox orchestrates event, timer, conversational-review, and action-result turns automatically. Each wake runs one bounded agent Activity followed by idempotent action and process-state persistence. Provider outcomes are loaded from PostgreSQL into a separate follow-up turn, and only that new decision may install the next wake plan. Turns remain single-flight while Signals continue buffering; automatic action-result chains are capped.
+
+Mailbox executions Continue-As-New at a safe boundary after a bounded number of completed turns or when Temporal recommends rollover. A versioned snapshot preserves buffered and deduplicated events, review and reconciliation commands, pending approvals, the active event/timer wake plan, and process/version identity under the same workflow ID. CI replays committed histories—including an Activity-backed rollover—and injects persistence retries to verify they do not rerun the model Activity.
 
 The current process projection separates provider/event-sourced authoritative facts from customer claims and records source provenance for both. Model-authored summaries and open commitments are stored separately, summaries must cite inputs from the exact bounded turn, and every applied decision creates an immutable versioned state revision containing its wake plan. Activity retries reuse the existing revision, while terminal and paused process states fail closed. This is the durable memory foundation; application-owned message history and compaction remain future work.
 

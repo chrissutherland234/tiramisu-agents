@@ -2,21 +2,13 @@
 
 import json
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, cast
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
-
-
-@dataclass(frozen=True)
-class MailboxInput:
-    tenant_id: str
-    process_instance_id: str
-    process_definition_id: str | None = None
-    process_definition_version: str | None = None
+from temporalio.exceptions import ActivityError, ApplicationError
 
 
 @dataclass(frozen=True)
@@ -84,6 +76,37 @@ class ExecutionRecord:
 
 
 @dataclass(frozen=True)
+class MailboxContinuation:
+    """Versioned active state carried across a Continue-As-New boundary."""
+
+    schema_version: int = 1
+    started: bool = False
+    buffered_events: tuple[dict[str, Any], ...] = ()
+    seen_event_ids: tuple[str, ...] = ()
+    buffered_reviews: tuple[dict[str, Any], ...] = ()
+    seen_review_command_ids: tuple[str, ...] = ()
+    buffered_action_resolutions: tuple[dict[str, Any], ...] = ()
+    seen_action_resolution_ids: tuple[str, ...] = ()
+    recent_wake_records: tuple[dict[str, Any], ...] = ()
+    recent_turn_records: tuple[dict[str, Any], ...] = ()
+    recent_execution_records: tuple[dict[str, Any], ...] = ()
+    pending_action_request_ids: tuple[str, ...] = ()
+    wake_plan: dict[str, Any] | None = None
+    completed_turn_count: int = 0
+    continued_run_count: int = 0
+
+
+@dataclass(frozen=True)
+class MailboxInput:
+    tenant_id: str
+    process_instance_id: str
+    process_definition_id: str | None = None
+    process_definition_version: str | None = None
+    continue_as_new_after_turns: int = 100
+    continuation: MailboxContinuation = field(default_factory=MailboxContinuation)
+
+
+@dataclass(frozen=True)
 class MailboxState:
     tenant_id: str
     process_instance_id: str
@@ -97,11 +120,16 @@ class MailboxState:
     turn_in_progress: bool
     wake_plan: WakePlan | None
     closed: bool
+    completed_turn_count: int
+    continued_run_count: int
 
 
 @workflow.defn
 class ProcessMailboxWorkflow:
     """Durably buffers external events and sleeps until a declared condition matches."""
+
+    _CONTINUATION_SCHEMA_VERSION = 1
+    _RECENT_RECORD_LIMIT = 50
 
     def __init__(self) -> None:
         self._tenant_id = ""
@@ -123,6 +151,11 @@ class ProcessMailboxWorkflow:
         self._timer_due_at: datetime | None = None
         self._plan_revision = 0
         self._closed = False
+        self._started = False
+        self._continue_as_new_after_turns = 100
+        self._turns_since_continue = 0
+        self._completed_turn_count = 0
+        self._continued_run_count = 0
 
     @workflow.run
     async def run(self, workflow_input: MailboxInput) -> MailboxState:
@@ -130,10 +163,16 @@ class ProcessMailboxWorkflow:
         self._process_instance_id = workflow_input.process_instance_id
         self._process_definition_id = workflow_input.process_definition_id
         self._process_definition_version = workflow_input.process_definition_version
+        self._continue_as_new_after_turns = max(1, workflow_input.continue_as_new_after_turns)
+        self._restore_continuation(workflow_input.continuation)
 
         while not self._closed:
-            if not self._wake_records and self._wake_plan is None and self._buffered_events:
+            if self._should_continue_as_new():
+                workflow.continue_as_new(self._continuation_input())
+
+            if not self._started and self._wake_plan is None and self._buffered_events:
                 event = self._buffered_events.pop(0)
+                self._started = True
                 self._wake_records.append(
                     WakeRecord(
                         reason="process_started",
@@ -148,6 +187,7 @@ class ProcessMailboxWorkflow:
 
             if self._buffered_reviews:
                 review = self._buffered_reviews.pop(0)
+                self._started = True
                 self._wake_records.append(
                     WakeRecord(
                         reason="review",
@@ -175,6 +215,7 @@ class ProcessMailboxWorkflow:
 
             if self._buffered_action_resolutions:
                 resolution = self._buffered_action_resolutions.pop(0)
+                self._started = True
                 self._remove_pending_action(resolution.action_request_id)
                 self._clear_wake_plan()
                 await self._run_turn(action_attempt_ids=(resolution.action_attempt_id,))
@@ -183,6 +224,7 @@ class ProcessMailboxWorkflow:
             matching_index = self._matching_event_index()
             if matching_index is not None:
                 event = self._buffered_events.pop(matching_index)
+                self._started = True
                 self._wake_records.append(
                     WakeRecord(
                         reason="event",
@@ -198,6 +240,7 @@ class ProcessMailboxWorkflow:
 
             if self._timer_due_at is not None and self._timer_due_at <= workflow.now():
                 timer_id = self._wake_plan.timer_id if self._wake_plan else None
+                self._started = True
                 self._wake_records.append(
                     WakeRecord(
                         reason="timer",
@@ -222,7 +265,7 @@ class ProcessMailboxWorkflow:
                         or bool(self._buffered_reviews)
                         or bool(self._buffered_action_resolutions)
                         or (
-                            not self._wake_records
+                            not self._started
                             and self._wake_plan is None
                             and bool(self._buffered_events)
                         )
@@ -284,7 +327,215 @@ class ProcessMailboxWorkflow:
             turn_in_progress=self._turn_in_progress,
             wake_plan=self._wake_plan,
             closed=self._closed,
+            completed_turn_count=self._completed_turn_count,
+            continued_run_count=self._continued_run_count,
         )
+
+    def _should_continue_as_new(self) -> bool:
+        if self._turn_in_progress:
+            return False
+        return (
+            self._turns_since_continue >= self._continue_as_new_after_turns
+            or workflow.info().is_continue_as_new_suggested()
+        )
+
+    def _continuation_input(self) -> MailboxInput:
+        continuation = MailboxContinuation(
+            schema_version=self._CONTINUATION_SCHEMA_VERSION,
+            started=self._started,
+            buffered_events=tuple(
+                {"event_id": event.event_id, "event_type": event.event_type}
+                for event in self._buffered_events
+            ),
+            seen_event_ids=tuple(sorted(self._seen_event_ids)),
+            buffered_reviews=tuple(
+                {
+                    "command_id": review.command_id,
+                    "command_type": review.command_type,
+                    "review_thread_id": review.review_thread_id,
+                    "action_request_id": review.action_request_id,
+                    "proposal_revision": review.proposal_revision,
+                }
+                for review in self._buffered_reviews
+            ),
+            seen_review_command_ids=tuple(sorted(self._seen_review_command_ids)),
+            buffered_action_resolutions=tuple(
+                {
+                    "command_id": resolution.command_id,
+                    "action_request_id": resolution.action_request_id,
+                    "action_attempt_id": resolution.action_attempt_id,
+                    "status": resolution.status,
+                }
+                for resolution in self._buffered_action_resolutions
+            ),
+            seen_action_resolution_ids=tuple(sorted(self._seen_action_resolution_ids)),
+            recent_wake_records=tuple(
+                {
+                    "reason": record.reason,
+                    "event_id": record.event_id,
+                    "event_type": record.event_type,
+                    "timer_id": record.timer_id,
+                    "woke_at": record.woke_at.isoformat(),
+                    "review_command_id": record.review_command_id,
+                    "review_command_type": record.review_command_type,
+                }
+                for record in self._wake_records[-self._RECENT_RECORD_LIMIT :]
+            ),
+            recent_turn_records=tuple(
+                {
+                    "turn_id": record.turn_id,
+                    "event_ids": record.event_ids,
+                    "review_command_ids": record.review_command_ids,
+                    "action_attempt_ids": record.action_attempt_ids,
+                    "timer_ids": record.timer_ids,
+                    "decision_json": record.decision_json,
+                    "actions_json": record.actions_json,
+                    "execution_results_json": record.execution_results_json,
+                    "error": record.error,
+                }
+                for record in self._turn_records[-self._RECENT_RECORD_LIMIT :]
+            ),
+            recent_execution_records=tuple(
+                {
+                    "action_request_id": record.action_request_id,
+                    "revision": record.revision,
+                    "result_json": record.result_json,
+                    "error": record.error,
+                }
+                for record in self._execution_records[-self._RECENT_RECORD_LIMIT :]
+            ),
+            pending_action_request_ids=tuple(self._pending_action_request_ids),
+            wake_plan=(
+                {
+                    "event_types": self._wake_plan.event_types,
+                    "timer_id": self._wake_plan.timer_id,
+                    "timer_at": (
+                        self._wake_plan.timer_at.isoformat()
+                        if self._wake_plan.timer_at is not None
+                        else None
+                    ),
+                }
+                if self._wake_plan is not None
+                else None
+            ),
+            completed_turn_count=self._completed_turn_count,
+            continued_run_count=self._continued_run_count + 1,
+        )
+        return MailboxInput(
+            tenant_id=self._tenant_id,
+            process_instance_id=self._process_instance_id,
+            process_definition_id=self._process_definition_id,
+            process_definition_version=self._process_definition_version,
+            continue_as_new_after_turns=self._continue_as_new_after_turns,
+            continuation=continuation,
+        )
+
+    def _restore_continuation(self, continuation: MailboxContinuation) -> None:
+        if continuation.schema_version != self._CONTINUATION_SCHEMA_VERSION:
+            raise ApplicationError(
+                f"unsupported mailbox continuation schema {continuation.schema_version}",
+                type="UnsupportedMailboxContinuation",
+                non_retryable=True,
+            )
+        prestart_events = tuple(self._buffered_events)
+        prestart_reviews = tuple(self._buffered_reviews)
+        prestart_action_resolutions = tuple(self._buffered_action_resolutions)
+        prestart_wake_plan = self._wake_plan
+        self._started = continuation.started
+        self._buffered_events = [
+            MailboxEvent(
+                event_id=str(document["event_id"]),
+                event_type=str(document["event_type"]),
+            )
+            for document in continuation.buffered_events
+        ]
+        self._seen_event_ids = set(continuation.seen_event_ids)
+        self._buffered_reviews = [
+            MailboxReview(
+                command_id=str(document["command_id"]),
+                command_type=str(document["command_type"]),
+                review_thread_id=str(document["review_thread_id"]),
+                action_request_id=str(document["action_request_id"]),
+                proposal_revision=int(document["proposal_revision"]),
+            )
+            for document in continuation.buffered_reviews
+        ]
+        self._seen_review_command_ids = set(continuation.seen_review_command_ids)
+        self._buffered_action_resolutions = [
+            MailboxActionResolution(
+                command_id=str(document["command_id"]),
+                action_request_id=str(document["action_request_id"]),
+                action_attempt_id=str(document["action_attempt_id"]),
+                status=str(document["status"]),
+            )
+            for document in continuation.buffered_action_resolutions
+        ]
+        self._seen_action_resolution_ids = set(continuation.seen_action_resolution_ids)
+        self._wake_records = [
+            WakeRecord(
+                reason=str(document["reason"]),
+                event_id=cast(str | None, document["event_id"]),
+                event_type=cast(str | None, document["event_type"]),
+                timer_id=cast(str | None, document["timer_id"]),
+                woke_at=datetime.fromisoformat(str(document["woke_at"])),
+                review_command_id=cast(str | None, document["review_command_id"]),
+                review_command_type=cast(str | None, document["review_command_type"]),
+            )
+            for document in continuation.recent_wake_records
+        ]
+        self._turn_records = [
+            TurnRecord(
+                turn_id=str(document["turn_id"]),
+                event_ids=tuple(str(value) for value in document["event_ids"]),
+                review_command_ids=tuple(str(value) for value in document["review_command_ids"]),
+                action_attempt_ids=tuple(str(value) for value in document["action_attempt_ids"]),
+                timer_ids=tuple(str(value) for value in document["timer_ids"]),
+                decision_json=cast(str | None, document["decision_json"]),
+                actions_json=cast(str | None, document["actions_json"]),
+                execution_results_json=cast(str | None, document["execution_results_json"]),
+                error=cast(str | None, document["error"]),
+            )
+            for document in continuation.recent_turn_records
+        ]
+        self._execution_records = [
+            ExecutionRecord(
+                action_request_id=str(document["action_request_id"]),
+                revision=int(document["revision"]),
+                result_json=cast(str | None, document["result_json"]),
+                error=cast(str | None, document["error"]),
+            )
+            for document in continuation.recent_execution_records
+        ]
+        self._pending_action_request_ids = list(continuation.pending_action_request_ids)
+        wake_plan = continuation.wake_plan
+        self._wake_plan = (
+            WakePlan(
+                event_types=tuple(str(value) for value in wake_plan["event_types"]),
+                timer_id=cast(str | None, wake_plan["timer_id"]),
+                timer_at=(
+                    datetime.fromisoformat(str(wake_plan["timer_at"]))
+                    if wake_plan["timer_at"] is not None
+                    else None
+                ),
+            )
+            if wake_plan is not None
+            else None
+        )
+        self._timer_due_at = self._wake_plan.timer_at if self._wake_plan else None
+        self._completed_turn_count = continuation.completed_turn_count
+        self._continued_run_count = continuation.continued_run_count
+
+        # Signal-With-Start handlers may run before the workflow method. Merge those
+        # deliveries after the carried snapshot rather than erasing them on startup.
+        for event in prestart_events:
+            self.receive_event(event)
+        for review in prestart_reviews:
+            self.receive_review(review)
+        for resolution in prestart_action_resolutions:
+            self.receive_action_resolution(resolution)
+        if prestart_wake_plan is not None:
+            self._wake_plan = prestart_wake_plan
+            self._timer_due_at = prestart_wake_plan.timer_at
 
     def _clear_wake_plan(self) -> None:
         self._wake_plan = None
@@ -448,6 +699,8 @@ class ProcessMailboxWorkflow:
             )
         finally:
             self._turn_in_progress = False
+            self._turns_since_continue += 1
+            self._completed_turn_count += 1
 
     def _apply_decision_wake_plan(self, decision_json: str) -> None:
         decision = cast(dict[str, Any], json.loads(decision_json))
