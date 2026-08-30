@@ -42,10 +42,11 @@ class PostgresAgentContextLoader:
         turn_id: UUID,
         event_ids: tuple[UUID, ...],
         review_command_ids: tuple[UUID, ...] = (),
+        timer_ids: tuple[str, ...] = (),
         definition: ProcessDefinition,
     ) -> AgentTurnInput:
-        if not event_ids and not review_command_ids:
-            raise AgentContextError("an agent turn requires at least one event or review command")
+        if not event_ids and not review_command_ids and not timer_ids:
+            raise AgentContextError("an agent turn requires at least one wake source")
         if len(event_ids) > self._max_events_per_turn:
             raise AgentContextError("agent turn exceeds the event context limit")
         if len(event_ids) != len(set(event_ids)):
@@ -54,6 +55,8 @@ class PostgresAgentContextLoader:
             raise AgentContextError("agent turn exceeds the review context limit")
         if len(review_command_ids) != len(set(review_command_ids)):
             raise AgentContextError("agent turn review command IDs must be unique")
+        if any(not value.strip() for value in timer_ids) or len(timer_ids) != len(set(timer_ids)):
+            raise AgentContextError("agent turn timer IDs must be nonblank and unique")
 
         await set_tenant_context(session, tenant_id)
         process = await session.scalar(
@@ -143,5 +146,6 @@ class PostgresAgentContextLoader:
             ),
             events=events,
             reviews=reviews,
+            timer_ids=timer_ids,
             instructions=definition.compile_instructions(),
         )

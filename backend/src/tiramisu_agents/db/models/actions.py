@@ -102,6 +102,9 @@ class ActionRevision(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     based_on_review_command_ids: Mapped[list[str]] = mapped_column(
         JSONB, server_default=text("'[]'::jsonb"), nullable=False
     )
+    based_on_timer_ids: Mapped[list[str]] = mapped_column(
+        JSONB, server_default=text("'[]'::jsonb"), nullable=False
+    )
 
 
 class ActionPolicyRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):

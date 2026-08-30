@@ -55,4 +55,5 @@ class AgentTurnInput(BaseModel):
     process: ProcessSnapshot
     events: tuple[CanonicalEvent, ...]
     reviews: tuple[ReviewTurnContext, ...] = ()
+    timer_ids: tuple[str, ...] = ()
     instructions: str = Field(min_length=1)

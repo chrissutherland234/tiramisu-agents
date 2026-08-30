@@ -1,16 +1,22 @@
 """A deterministic mailbox that owns one durable business process identity."""
 
+import json
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any, cast
 
 from temporalio import workflow
+from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError
 
 
 @dataclass(frozen=True)
 class MailboxInput:
     tenant_id: str
     process_instance_id: str
+    process_definition_id: str | None = None
+    process_definition_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,12 +55,26 @@ class WakeRecord:
 
 
 @dataclass(frozen=True)
+class TurnRecord:
+    turn_id: str
+    event_ids: tuple[str, ...]
+    review_command_ids: tuple[str, ...]
+    timer_ids: tuple[str, ...]
+    decision_json: str | None
+    actions_json: str | None
+    error: str | None
+
+
+@dataclass(frozen=True)
 class MailboxState:
     tenant_id: str
     process_instance_id: str
     buffered_events: tuple[MailboxEvent, ...]
     buffered_reviews: tuple[MailboxReview, ...]
     wake_records: tuple[WakeRecord, ...]
+    turn_records: tuple[TurnRecord, ...]
+    pending_action_request_ids: tuple[str, ...]
+    turn_in_progress: bool
     wake_plan: WakePlan | None
     closed: bool
 
@@ -71,6 +91,11 @@ class ProcessMailboxWorkflow:
         self._buffered_reviews: list[MailboxReview] = []
         self._seen_review_command_ids: set[str] = set()
         self._wake_records: list[WakeRecord] = []
+        self._turn_records: list[TurnRecord] = []
+        self._pending_action_request_ids: list[str] = []
+        self._turn_in_progress = False
+        self._process_definition_id: str | None = None
+        self._process_definition_version: str | None = None
         self._wake_plan: WakePlan | None = None
         self._timer_due_at: datetime | None = None
         self._plan_revision = 0
@@ -80,6 +105,8 @@ class ProcessMailboxWorkflow:
     async def run(self, workflow_input: MailboxInput) -> MailboxState:
         self._tenant_id = workflow_input.tenant_id
         self._process_instance_id = workflow_input.process_instance_id
+        self._process_definition_id = workflow_input.process_definition_id
+        self._process_definition_version = workflow_input.process_definition_version
 
         while not self._closed:
             if not self._wake_records and self._wake_plan is None and self._buffered_events:
@@ -93,6 +120,7 @@ class ProcessMailboxWorkflow:
                         woke_at=workflow.now(),
                     )
                 )
+                await self._run_turn(event_ids=(event.event_id,))
                 continue
 
             if self._buffered_reviews:
@@ -109,6 +137,8 @@ class ProcessMailboxWorkflow:
                     )
                 )
                 self._clear_wake_plan()
+                if review.command_type in {"comment", "request_revision"}:
+                    await self._run_turn(review_command_ids=(review.command_id,))
                 continue
 
             matching_index = self._matching_event_index()
@@ -124,6 +154,7 @@ class ProcessMailboxWorkflow:
                     )
                 )
                 self._clear_wake_plan()
+                await self._run_turn(event_ids=(event.event_id,))
                 continue
 
             if self._timer_due_at is not None and self._timer_due_at <= workflow.now():
@@ -138,6 +169,8 @@ class ProcessMailboxWorkflow:
                     )
                 )
                 self._clear_wake_plan()
+                if timer_id is not None:
+                    await self._run_turn(timer_ids=(timer_id,))
                 continue
 
             revision = self._plan_revision
@@ -148,6 +181,11 @@ class ProcessMailboxWorkflow:
                         self._closed
                         or self._plan_revision != awaited_revision
                         or bool(self._buffered_reviews)
+                        or (
+                            not self._wake_records
+                            and self._wake_plan is None
+                            and bool(self._buffered_events)
+                        )
                         or self._matching_event_index() is not None
                     ),
                     timeout=timeout,
@@ -191,6 +229,9 @@ class ProcessMailboxWorkflow:
             buffered_events=tuple(self._buffered_events),
             buffered_reviews=tuple(self._buffered_reviews),
             wake_records=tuple(self._wake_records),
+            turn_records=tuple(self._turn_records),
+            pending_action_request_ids=tuple(self._pending_action_request_ids),
+            turn_in_progress=self._turn_in_progress,
             wake_plan=self._wake_plan,
             closed=self._closed,
         )
@@ -217,3 +258,114 @@ class ProcessMailboxWorkflow:
         if self._timer_due_at is None:
             return None
         return max(self._timer_due_at - workflow.now(), timedelta(0))
+
+    async def _run_turn(
+        self,
+        *,
+        event_ids: tuple[str, ...] = (),
+        review_command_ids: tuple[str, ...] = (),
+        timer_ids: tuple[str, ...] = (),
+    ) -> None:
+        if self._process_definition_id is None or self._process_definition_version is None:
+            return
+        turn_id = str(workflow.uuid4())
+        workflow_now = workflow.now()
+        self._turn_in_progress = True
+        try:
+            turn_result = cast(
+                dict[str, Any],
+                await workflow.execute_activity(
+                    "run_agent_turn",
+                    {
+                        "tenant_id": self._tenant_id,
+                        "process_instance_id": self._process_instance_id,
+                        "process_definition_id": self._process_definition_id,
+                        "process_definition_version": self._process_definition_version,
+                        "turn_id": turn_id,
+                        "event_ids": event_ids,
+                        "workflow_now": workflow_now,
+                        "review_command_ids": review_command_ids,
+                        "timer_ids": timer_ids,
+                    },
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                ),
+            )
+            decision_json = str(turn_result["decision_json"])
+            action_result = cast(
+                dict[str, Any],
+                await workflow.execute_activity(
+                    "persist_agent_actions",
+                    {
+                        "tenant_id": self._tenant_id,
+                        "process_instance_id": self._process_instance_id,
+                        "process_definition_id": self._process_definition_id,
+                        "process_definition_version": self._process_definition_version,
+                        "agent_turn_id": turn_id,
+                        "event_ids": event_ids,
+                        "workflow_now": workflow_now,
+                        "decision_json": decision_json,
+                        "review_command_ids": review_command_ids,
+                        "timer_ids": timer_ids,
+                    },
+                    start_to_close_timeout=timedelta(minutes=1),
+                    retry_policy=RetryPolicy(maximum_attempts=5),
+                ),
+            )
+            actions_json = str(action_result["actions_json"])
+            actions = cast(list[dict[str, Any]], json.loads(actions_json))
+            self._pending_action_request_ids.extend(
+                str(item["action_request_id"])
+                for item in actions
+                if str(item["action_request_id"]) not in self._pending_action_request_ids
+            )
+            self._turn_records.append(
+                TurnRecord(
+                    turn_id=turn_id,
+                    event_ids=event_ids,
+                    review_command_ids=review_command_ids,
+                    timer_ids=timer_ids,
+                    decision_json=decision_json,
+                    actions_json=actions_json,
+                    error=None,
+                )
+            )
+            if not actions:
+                self._apply_decision_wake_plan(decision_json)
+        except ActivityError as error:
+            self._turn_records.append(
+                TurnRecord(
+                    turn_id=turn_id,
+                    event_ids=event_ids,
+                    review_command_ids=review_command_ids,
+                    timer_ids=timer_ids,
+                    decision_json=None,
+                    actions_json=None,
+                    error=str(error),
+                )
+            )
+        finally:
+            self._turn_in_progress = False
+
+    def _apply_decision_wake_plan(self, decision_json: str) -> None:
+        decision = cast(dict[str, Any], json.loads(decision_json))
+        wakes = cast(list[dict[str, Any]], decision.get("wake_conditions", []))
+        event_types = tuple(str(item["event_type"]) for item in wakes if item["type"] == "event")
+        timers = [
+            (index, datetime.fromisoformat(str(item["at"])))
+            for index, item in enumerate(wakes)
+            if item["type"] == "timer"
+        ]
+        selected_timer = min(timers, key=lambda item: item[1]) if timers else None
+        if decision.get("status") == "completed" and not wakes:
+            self._closed = True
+            return
+        self._wake_plan = WakePlan(
+            event_types=event_types,
+            timer_id=(
+                f"{decision['decision_id']}:timer:{selected_timer[0]}" if selected_timer else None
+            ),
+            timer_at=selected_timer[1] if selected_timer else None,
+        )
+        self._timer_due_at = self._wake_plan.timer_at
+        self._plan_revision += 1

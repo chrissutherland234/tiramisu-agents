@@ -13,6 +13,7 @@ from temporalio.client import Client
 from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 
 from tiramisu_agents.db.models.events import OutboxMessage
+from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.temporal.workflows.mailbox import (
     MailboxEvent,
@@ -40,6 +41,8 @@ class ClaimedMessage:
     payload: dict[str, Any]
     attempt_count: int
     claim_token: UUID
+    process_definition_id: str | None
+    process_definition_version: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +62,7 @@ class TemporalOutboxDispatcher:
         max_attempts: int = 5,
         stale_claim_after: timedelta = timedelta(minutes=5),
         retry_base_delay: timedelta = timedelta(seconds=5),
+        orchestrate_agent_turns: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._temporal_client = temporal_client
@@ -66,6 +70,7 @@ class TemporalOutboxDispatcher:
         self._max_attempts = max_attempts
         self._stale_claim_after = stale_claim_after
         self._retry_base_delay = retry_base_delay
+        self._orchestrate_agent_turns = orchestrate_agent_turns
 
     async def dispatch_one(self, tenant_id: UUID) -> DispatchResult:
         now = datetime.now(UTC)
@@ -97,6 +102,8 @@ class TemporalOutboxDispatcher:
                 MailboxInput(
                     tenant_id=str(message.tenant_id),
                     process_instance_id=str(message.process_instance_id),
+                    process_definition_id=message.process_definition_id,
+                    process_definition_version=message.process_definition_version,
                 ),
                 id=message.destination,
                 task_queue=self._task_queue,
@@ -167,6 +174,16 @@ class TemporalOutboxDispatcher:
             return None
         if stored.process_instance_id is None:
             raise RuntimeError("Temporal outbox message has no process instance")
+        definition_id: str | None = None
+        definition_version: str | None = None
+        if self._orchestrate_agent_turns:
+            process = await session.scalar(
+                select(ProcessInstance).where(ProcessInstance.id == stored.process_instance_id)
+            )
+            if process is None:
+                raise RuntimeError("Temporal outbox process instance is unavailable")
+            definition_id = process.process_type
+            definition_version = process.definition_version
         stored.status = "publishing"
         stored.claimed_at = now
         stored.claim_token = uuid4()
@@ -183,6 +200,8 @@ class TemporalOutboxDispatcher:
             payload=stored.payload,
             attempt_count=stored.attempt_count,
             claim_token=claim_token,
+            process_definition_id=definition_id,
+            process_definition_version=definition_version,
         )
 
     async def _record_failure(self, message: ClaimedMessage, error: Exception) -> DispatchResult:

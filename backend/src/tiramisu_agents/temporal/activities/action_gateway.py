@@ -26,6 +26,7 @@ class PersistActionsCommand:
     workflow_now: datetime
     decision_json: str
     review_command_ids: tuple[str, ...] = ()
+    timer_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ class ActionGatewayActivities:
                 expected_review_command_ids=frozenset(
                     UUID(value) for value in command.review_command_ids
                 ),
+                expected_timer_ids=frozenset(command.timer_ids),
             )
             async with self._session_factory.begin() as session:
                 persisted = await self._gateway.persist_decision(

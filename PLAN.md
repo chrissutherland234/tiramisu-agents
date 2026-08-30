@@ -862,12 +862,12 @@ The following architecture decision records are gates for the durable kernel:
 
 ### Phase 2 — Durable agent kernel
 
-- [ ] Implement `AgentWorkflow`.
+- [ ] Implement `AgentWorkflow`. The process mailbox now automatically sequences bounded event, timer, and review agent turns with action persistence and exposes turn/pending-action state; execution resolution, lifecycle transitions, Continue-As-New, and production failure controls remain.
 - [x] Implement the initial deterministic process mailbox with event deduplication, replaceable event/timer wake plans, state queries, and time-skipping tests.
 - [x] Implement canonical event ingestion and source-event deduplication.
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
 - [ ] Implement quarantine resolution, late correlation, and replay.
-- [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Idempotent review-command delivery and priority review wakes are complete; automatic single-flight turn execution and full ordering rules remain.
+- [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Automatic single-flight event, timer, and priority-review turns are complete; batching, cancellation/takeover priority, action resolution, and full tie rules remain.
 - [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, bounded PostgreSQL event context loader, and deterministic scripted-runner path. Workflow consumption remains gated on the action gateway.
 - [ ] Implement application-owned conversation history, context assembly, provenance-aware memory, and compaction.
 - [x] Implement initial typed decision validation for exact event lineage, allowed actions and wake events, per-turn action limits, and timer bounds.

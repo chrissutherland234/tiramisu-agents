@@ -24,6 +24,7 @@ class AgentTurnCommand:
     event_ids: tuple[str, ...]
     workflow_now: datetime
     review_command_ids: tuple[str, ...] = ()
+    timer_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ class AgentTurnActivities:
                 review_command_ids=tuple(
                     UUID(command_id) for command_id in command.review_command_ids
                 ),
+                timer_ids=command.timer_ids,
                 definition=definition,
             )
         decision = await self._runner.run_turn(turn_input)
@@ -72,6 +74,7 @@ class AgentTurnActivities:
                 expected_review_command_ids=frozenset(
                     review.command_id for review in turn_input.reviews
                 ),
+                expected_timer_ids=frozenset(turn_input.timer_ids),
             )
         except DecisionRejected as error:
             raise ApplicationError(

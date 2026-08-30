@@ -57,6 +57,7 @@ class AgentDecisionOutput(BaseModel):
 
     based_on_event_ids: tuple[str, ...]
     based_on_review_command_ids: tuple[str, ...] = ()
+    based_on_timer_ids: tuple[str, ...] = ()
     status: DecisionStatus
     actions: tuple[ActionProposalOutput, ...] = ()
     wake_conditions: tuple[WakeCondition, ...] = ()
@@ -68,6 +69,7 @@ class AgentDecisionOutput(BaseModel):
             based_on_review_command_ids=tuple(
                 UUID(value) for value in self.based_on_review_command_ids
             ),
+            based_on_timer_ids=self.based_on_timer_ids,
             status=self.status,
             actions=tuple(action.to_action_proposal() for action in self.actions),
             wake_conditions=self.wake_conditions,
@@ -140,6 +142,7 @@ class OpenAIAgentsTurnRunner:
             "process": turn_input.process.model_dump(mode="json"),
             "events": [event.model_dump(mode="json") for event in turn_input.events],
             "reviews": [review.model_dump(mode="json") for review in turn_input.reviews],
+            "timer_ids": turn_input.timer_ids,
         }
         return (
             "Review this bounded process snapshot and its newly received events. "

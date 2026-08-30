@@ -40,7 +40,9 @@ The first action-gateway stage is now present. Process definitions explicitly cl
 
 Approval-required actions now receive a durable review thread. The review service records attributed comments, exact approve/reject decisions, and revision requests idempotently. Approval rows are locked during state changes so competing commands cannot both win; a revision request supersedes the reviewed approval and action without executing it.
 
-Review commands are transactionally placed in the same PostgreSQL outbox as business events and delivered idempotently to the same Temporal process mailbox. A review wake carries bounded provenance into the agent context: the attributed feedback, referenced proposal parameters, rationale, revision, and payload hash. Replacement decisions must cite the review command IDs they used, and replacement proposals receive a new exact-payload approval thread. Automatic mailbox-to-Activity orchestration is still pending; the current integration path is exercised explicitly in tests.
+Review commands are transactionally placed in the same PostgreSQL outbox as business events and delivered idempotently to the same Temporal process mailbox. A review wake carries bounded provenance into the agent context: the attributed feedback, referenced proposal parameters, rationale, revision, and payload hash. Replacement decisions must cite the review command IDs they used, and replacement proposals receive a new exact-payload approval thread.
+
+The mailbox can now orchestrate event, timer, and conversational-review turns automatically. Each wake runs one agent Activity followed by the idempotent action-persistence Activity, records the result, and installs the validated wake plan when no actions remain unresolved. Turns are single-flight while Signals continue buffering. If actions were proposed, their request IDs remain visibly pending and the workflow does not pretend they executed or advance to a new wait. Provider execution and action-resolution commands are the next required stage.
 
 ## Development event path
 
@@ -58,6 +60,8 @@ Then send canonical events to `POST /v1/events` with an `X-Tiramisu-Tenant-ID` h
 ```bash
 uv run tiramisu-worker --tenant-id 00000000-0000-0000-0000-000000000001
 ```
+
+To enable model-backed orchestration for the fictional process, also set `TIRAMISU_OPENAI_MODEL` to an explicit model name. Worker startup fails closed if fictional orchestration is enabled without a model. This can make live OpenAI requests; ordinary tests continue using scripted Activities and require no API key.
 
 The runtime role cannot enumerate tenants. Production authentication, tenant provisioning, webhook verification, and deployment-managed tenant assignments remain required before exposing ingestion externally.
 

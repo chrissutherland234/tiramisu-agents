@@ -50,6 +50,15 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
+    op.add_column(
+        "action_revisions",
+        sa.Column(
+            "based_on_timer_ids",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'[]'::jsonb"),
+            nullable=False,
+        ),
+    )
     op.create_unique_constraint(
         "uq_approval_request_ref",
         "approval_requests",
@@ -182,3 +191,4 @@ def downgrade() -> None:
     op.execute(
         sa.text("ALTER TABLE action_revisions DROP COLUMN IF EXISTS based_on_review_command_ids")
     )
+    op.execute(sa.text("ALTER TABLE action_revisions DROP COLUMN IF EXISTS based_on_timer_ids"))

@@ -77,6 +77,7 @@ class ActionGateway:
                     based_on_review_command_ids=tuple(
                         str(value) for value in decision.based_on_review_command_ids
                     ),
+                    based_on_timer_ids=decision.based_on_timer_ids,
                     action=action,
                     policy=policy,
                 )
@@ -94,6 +95,7 @@ class ActionGateway:
         process_definition_version: str,
         based_on_event_ids: tuple[str, ...],
         based_on_review_command_ids: tuple[str, ...],
+        based_on_timer_ids: tuple[str, ...],
         action: ActionProposal,
         policy: ConfiguredActionPolicy,
     ) -> PersistedAction:
@@ -145,6 +147,7 @@ class ActionGateway:
                 rationale=action.rationale,
                 based_on_event_ids=list(based_on_event_ids),
                 based_on_review_command_ids=list(based_on_review_command_ids),
+                based_on_timer_ids=list(based_on_timer_ids),
             )
             .on_conflict_do_nothing(constraint="uq_action_revision_number")
         )
