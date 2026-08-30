@@ -67,12 +67,14 @@ export interface PendingReview {
 
 export type ReviewCommandType = "approve" | "reject" | "request_revision" | "comment";
 
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/$/, "");
+
 async function request<T>(
   path: string,
   credentials: OperatorCredentials,
   init: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(`/api${path}`, {
+  const response = await fetch(`${apiBaseUrl}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",

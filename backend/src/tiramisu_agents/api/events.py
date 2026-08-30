@@ -1,7 +1,6 @@
 """Development event-ingestion API backed by the durable inbox."""
 
 from datetime import datetime
-from hashlib import sha256
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -10,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tiramisu_agents.api.settings import Settings
+from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference, Sensitivity
 from tiramisu_agents.core.contracts.knowledge import FactObservation
 from tiramisu_agents.events.ingestion import (
@@ -55,14 +55,7 @@ class IngestEventResponse(BaseModel):
 
 
 def fictional_trigger_rules() -> dict[str, ProcessBootstrap]:
-    manifest_fingerprint = sha256(b"fictional_booking:0.1.0:enquiry_to_booking:1").hexdigest()
-    return {
-        "enquiry.created": ProcessBootstrap(
-            process_type="enquiry_to_booking",
-            definition_version="1",
-            extension_manifest_hash=manifest_fingerprint,
-        )
-    }
+    return load_fictional_deployment().trigger_rules()
 
 
 @router.post("", response_model=IngestEventResponse, status_code=status.HTTP_202_ACCEPTED)

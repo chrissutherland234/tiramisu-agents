@@ -113,6 +113,11 @@ describe("operator console", () => {
     expect(wrapper.get('[data-testid="timeline"]').text()).toContain("Agent decision");
     expect(wrapper.text()).toContain("Tuesday please");
     expect(wrapper.text()).toContain("event · 66666666…6666");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/processes");
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      "X-Tiramisu-Tenant-ID": "tenant-id",
+      "X-Tiramisu-Actor-ID": "actor-id",
+    });
 
     const approve = wrapper
       .findAll("button")

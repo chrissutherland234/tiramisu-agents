@@ -905,7 +905,7 @@ Recommended initial journey:
 
 - [x] Add immutable YAML process-definition contracts, validation, fingerprinting, trigger resolution, and deterministic policy/instruction compilation for the fictional process. Persistence and the authoring/publication lifecycle remain outstanding.
 - [ ] Add the process-definition draft, validation, evaluation, approval, publication, and retirement lifecycle.
-- [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition.
+- [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition. The initial bundled fictional pack now has one CWD-independent, compatibility-checked composition shared by API triggers and worker definitions/adapters; third-party installation, persistence, audit, and lifecycle controls remain.
 - [ ] Add tenant prompt and policy configuration.
 - [ ] Add the tool and integration registry.
 - [ ] Add safe client-editable settings.

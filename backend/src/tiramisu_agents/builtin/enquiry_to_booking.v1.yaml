@@ -1,0 +1,48 @@
+id: enquiry_to_booking
+version: "1"
+status: draft
+trigger_events:
+  - enquiry.created
+goals:
+  - Establish what the customer needs
+  - Offer a valid booking within configured business rules
+  - Obtain exact approval where policy requires it
+  - Confirm payment and calendar state through authoritative providers
+terminal_states:
+  - completed
+  - cancelled
+allowed_actions:
+  - send_message
+  - find_available_slots
+  - propose_booking
+  - request_payment
+  - create_calendar_event
+action_permissions:
+  send_message: require_approval
+  find_available_slots: allow
+  propose_booking: require_approval
+  request_payment: require_approval
+  create_calendar_event: allow
+allowed_wake_events:
+  - customer.email_received
+  - booking.confirmed
+  - payment.completed
+  - payment.failed
+limits:
+  max_actions_per_turn: 3
+  max_follow_ups_without_reply: 3
+  minimum_follow_up_interval_hours: 24
+  maximum_timer_horizon_days: 30
+review:
+  commands:
+    - approve
+    - reject
+    - request_revision
+    - comment
+    - correct_fact
+    - cancel
+integrations:
+  messaging: stub.messaging.v1
+  booking: stub.booking.v1
+  payments: stub.payment.v1
+  calendar: stub.calendar.v1

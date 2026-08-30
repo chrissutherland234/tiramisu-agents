@@ -46,6 +46,7 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run pyright
       - run: uv run pytest
+      - run: uv build
 
   frontend:
     runs-on: ubuntu-latest
@@ -69,10 +70,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker compose config --quiet
-      - run: POSTGRES_DB=tiramisu_override docker compose up -d --wait postgres
+      - run: POSTGRES_DB=tiramisu_override docker compose up -d --wait postgres temporal
       - run: >-
           docker compose exec -T -e PGPASSWORD=tiramisu_app postgres
           psql -h localhost -U tiramisu_app -d tiramisu_override
           -tAc "SELECT current_database(), current_user"
+      - run: docker compose exec -T temporal temporal operator cluster health
       - if: always()
         run: POSTGRES_DB=tiramisu_override docker compose down -v

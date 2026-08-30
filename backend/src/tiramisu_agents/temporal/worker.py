@@ -2,8 +2,8 @@
 
 import argparse
 import asyncio
+import logging
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -12,11 +12,10 @@ from temporalio.worker import Worker
 
 from tiramisu_agents.actions.execution import ActionExecutor
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
-from tiramisu_agents.adapters.stubs import StubBusinessState, stub_business_bindings
 from tiramisu_agents.agents.openai_runner import OpenAIAgentsTurnRunner
-from tiramisu_agents.api.settings import get_settings
+from tiramisu_agents.api.settings import Settings, get_settings
+from tiramisu_agents.builtin import FictionalDeployment, load_fictional_deployment
 from tiramisu_agents.db.session import create_engine, create_session_factory
-from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.temporal.activities.action_execution import ActionExecutionActivities
 from tiramisu_agents.temporal.activities.action_gateway import ActionGatewayActivities
 from tiramisu_agents.temporal.activities.agent_turn import AgentTurnActivities
@@ -25,8 +24,36 @@ from tiramisu_agents.temporal.dispatcher import TemporalOutboxDispatcher
 from tiramisu_agents.temporal.workflows.mailbox import ProcessMailboxWorkflow
 
 
-async def serve(tenant_ids: tuple[UUID, ...]) -> None:
-    settings = get_settings()
+def resolve_worker_tenants(
+    settings: Settings, cli_tenant_ids: tuple[UUID, ...] = ()
+) -> tuple[UUID, ...]:
+    """CLI assignments replace environment assignments to avoid accidental scope expansion."""
+    tenant_ids = cli_tenant_ids or settings.worker_tenant_ids
+    if not tenant_ids:
+        raise ValueError("at least one deployment-authorized worker tenant ID is required")
+    if len(tenant_ids) != len(set(tenant_ids)):
+        raise ValueError("worker tenant assignments must be unique")
+    return tenant_ids
+
+
+def compose_fictional_worker(settings: Settings) -> FictionalDeployment:
+    if settings.openai_model is None:
+        raise ValueError(
+            "TIRAMISU_OPENAI_MODEL is required when fictional process orchestration is enabled"
+        )
+    if settings.openai_api_key is None:
+        raise ValueError(
+            "OPENAI_API_KEY is required when fictional process orchestration is enabled"
+        )
+    return load_fictional_deployment()
+
+
+async def serve(tenant_ids: tuple[UUID, ...], *, settings: Settings | None = None) -> None:
+    settings = settings or get_settings()
+    tenant_ids = resolve_worker_tenants(settings, tenant_ids)
+    deployment = (
+        compose_fictional_worker(settings) if settings.load_fictional_example_processes else None
+    )
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
     client = await Client.connect(
@@ -35,29 +62,24 @@ async def serve(tenant_ids: tuple[UUID, ...]) -> None:
     )
     activities: list[Callable[..., Any]] = []
     orchestrate_agent_turns = False
-    if settings.load_fictional_example_processes:
-        if settings.openai_model is None:
-            raise RuntimeError(
-                "TIRAMISU_OPENAI_MODEL is required when fictional process orchestration is enabled"
-            )
-        registry = ProcessDefinitionRegistry.from_yaml_files(
-            [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-        )
+    if deployment is not None:
+        assert settings.openai_model is not None
+        assert settings.openai_api_key is not None
+        registry = deployment.registry
         agent_activities = AgentTurnActivities(
             session_factory,
             registry,
-            OpenAIAgentsTurnRunner(model=settings.openai_model),
+            OpenAIAgentsTurnRunner(
+                model=settings.openai_model,
+                api_key=settings.openai_api_key.get_secret_value(),
+            ),
         )
         gateway_activities = ActionGatewayActivities(session_factory, registry)
         state_activities = ProcessStateActivities(session_factory, registry)
-        definition = registry.get("enquiry_to_booking", "1")
-        bindings = stub_business_bindings(StubBusinessState())
-        if set(bindings) != set(definition.allowed_actions):
-            raise RuntimeError("fictional process actions do not match the stub provider bindings")
         execution_activities = ActionExecutionActivities(
             ActionExecutor(
                 session_factory,
-                ActionAdapterRegistry(bindings),
+                ActionAdapterRegistry(deployment.bindings),
             )
         )
         activities = [
@@ -98,9 +120,20 @@ def run() -> None:
     parser.add_argument(
         "--tenant-id",
         action="append",
-        required=True,
         type=UUID,
-        help="deployment-authorized tenant UUID; repeat for multiple tenants",
+        default=[],
+        help=(
+            "deployment-authorized tenant UUID; repeat for multiple tenants; "
+            "when supplied, replaces TIRAMISU_WORKER_TENANT_IDS"
+        ),
     )
     arguments = parser.parse_args()
-    asyncio.run(serve(tuple(arguments.tenant_id)))
+    settings = get_settings()
+    logging.basicConfig(level=settings.log_level)
+    try:
+        tenant_ids = resolve_worker_tenants(settings, tuple(arguments.tenant_id))
+        if settings.load_fictional_example_processes:
+            compose_fictional_worker(settings)
+    except ValueError as error:
+        parser.error(str(error))
+    asyncio.run(serve(tenant_ids, settings=settings))

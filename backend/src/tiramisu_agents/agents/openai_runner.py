@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, cast
 from uuid import UUID
 
-from agents import Agent, RunConfig, Runner
+from agents import Agent, OpenAIProvider, RunConfig, Runner
 from pydantic import BaseModel, ConfigDict, Field
 
 from tiramisu_agents.core.contracts.decisions import (
@@ -99,6 +99,7 @@ class OpenAIAgentsTurnRunner:
         self,
         *,
         model: str,
+        api_key: str | None = None,
         max_turns: int = 1,
         tracing_disabled: bool = True,
         executor: AgentsSDKExecutor = _run_agents_sdk,
@@ -108,6 +109,7 @@ class OpenAIAgentsTurnRunner:
         if max_turns != 1:
             raise ValueError("the proposal-only runner currently permits exactly one model turn")
         self._model = model
+        self._model_provider = OpenAIProvider(api_key=api_key)
         self._max_turns = max_turns
         self._tracing_disabled = tracing_disabled
         self._executor = executor
@@ -126,6 +128,7 @@ class OpenAIAgentsTurnRunner:
             handoffs=[],
         )
         run_config = RunConfig(
+            model_provider=self._model_provider,
             tracing_disabled=self._tracing_disabled,
             trace_include_sensitive_data=False,
             workflow_name="Tiramisu proposal turn",
