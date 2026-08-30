@@ -16,6 +16,19 @@ class ActionRequestStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     SUPERSEDED = "superseded"
+    EXECUTING = "executing"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+    RECONCILING = "reconciling"
+
+
+class ActionAttemptStatus(StrEnum):
+    EXECUTING = "executing"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+    RECONCILING = "reconciling"
 
 
 class ApprovalStatus(StrEnum):

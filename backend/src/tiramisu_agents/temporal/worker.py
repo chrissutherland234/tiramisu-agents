@@ -10,10 +10,14 @@ from uuid import UUID
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from tiramisu_agents.actions.execution import ActionExecutor
+from tiramisu_agents.adapters.registry import ActionAdapterRegistry
+from tiramisu_agents.adapters.stubs import StubActionAdapter
 from tiramisu_agents.agents.openai_runner import OpenAIAgentsTurnRunner
 from tiramisu_agents.api.settings import get_settings
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
+from tiramisu_agents.temporal.activities.action_execution import ActionExecutionActivities
 from tiramisu_agents.temporal.activities.action_gateway import ActionGatewayActivities
 from tiramisu_agents.temporal.activities.agent_turn import AgentTurnActivities
 from tiramisu_agents.temporal.dispatcher import TemporalOutboxDispatcher
@@ -44,9 +48,22 @@ async def serve(tenant_ids: tuple[UUID, ...]) -> None:
             OpenAIAgentsTurnRunner(model=settings.openai_model),
         )
         gateway_activities = ActionGatewayActivities(session_factory, registry)
+        stub_adapter = StubActionAdapter()
+        execution_activities = ActionExecutionActivities(
+            ActionExecutor(
+                session_factory,
+                ActionAdapterRegistry(
+                    dict.fromkeys(
+                        registry.get("enquiry_to_booking", "1").allowed_actions,
+                        stub_adapter,
+                    )
+                ),
+            )
+        )
         activities = [
             agent_activities.run_agent_turn,
             gateway_activities.persist_agent_actions,
+            execution_activities.execute_action,
         ]
         orchestrate_agent_turns = True
     dispatcher = TemporalOutboxDispatcher(

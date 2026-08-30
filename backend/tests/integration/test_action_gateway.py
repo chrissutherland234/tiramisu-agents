@@ -11,12 +11,17 @@ import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.client import Client
+from tiramisu_agents.actions.execution import ActionExecutionRejected, ActionExecutor
 from tiramisu_agents.actions.gateway import ActionGateway, ActionPersistenceConflict
+from tiramisu_agents.adapters.registry import ActionAdapterRegistry
+from tiramisu_agents.adapters.stubs import StubActionAdapter, StubAmbiguousSuccess
 from tiramisu_agents.core.contracts.actions import PermissionOutcome
 from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision, DecisionStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
+from tiramisu_agents.core.ports.actions import ProviderActionResult
 from tiramisu_agents.db.models.actions import (
+    ActionAttempt,
     ActionPolicyRecord,
     ActionRequest,
     ActionRevision,
@@ -57,6 +62,7 @@ async def _delete_tenant_data(
 ) -> None:
     async with admin_factory.begin() as session:
         for model in (
+            ActionAttempt,
             ApprovalDecision,
             ReviewMessage,
             ReviewThread,
@@ -255,6 +261,63 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
             assert await review_service.apply(session, approve) == approved
         assert approved.approval_status == "approved"
         assert approved.action_status == "approved"
+
+        messaging_adapter = StubActionAdapter()
+        availability_result = ProviderActionResult(
+            provider_reference="stub:availability-1",
+            result={"slots": ["2026-09-02T14:00:00+00:00"]},
+        )
+        availability_adapter = StubActionAdapter([StubAmbiguousSuccess(availability_result)])
+        executor = ActionExecutor(
+            runtime_factory,
+            ActionAdapterRegistry(
+                {
+                    "send_message": messaging_adapter,
+                    "find_available_slots": availability_adapter,
+                    "propose_booking": StubActionAdapter(),
+                }
+            ),
+        )
+        sent = await executor.execute(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            action_request_id=first[0].action_request_id,
+            revision=1,
+        )
+        sent_retry = await executor.execute(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            action_request_id=first[0].action_request_id,
+            revision=1,
+        )
+        assert sent_retry == sent
+        assert sent.status == "succeeded"
+        assert len(messaging_adapter.requests) == 1
+
+        ambiguous = await executor.execute(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            action_request_id=first[1].action_request_id,
+            revision=1,
+        )
+        reconciled = await executor.execute(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            action_request_id=first[1].action_request_id,
+            revision=1,
+        )
+        assert ambiguous.status == "unknown"
+        assert reconciled.status == "succeeded"
+        assert reconciled.provider_reference == availability_result.provider_reference
+        assert len(availability_adapter.requests) == 1
+
+        with pytest.raises(ActionExecutionRejected, match="not been approved"):
+            await executor.execute(
+                tenant_id=tenant_id,
+                process_instance_id=ingested.process_instance_id,
+                action_request_id=first[2].action_request_id,
+                revision=1,
+            )
 
         late_revision = ReviewCommand(
             tenant_id=tenant_id,

@@ -4,6 +4,7 @@ Importing this module registers every model on ``Base.metadata`` for Alembic.
 """
 
 from tiramisu_agents.db.models.actions import (
+    ActionAttempt,
     ActionPolicyRecord,
     ActionRequest,
     ActionRevision,
@@ -15,6 +16,7 @@ from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, R
 from tiramisu_agents.db.models.tenancy import Tenant
 
 __all__ = [
+    "ActionAttempt",
     "ActionPolicyRecord",
     "ActionRequest",
     "ActionRevision",

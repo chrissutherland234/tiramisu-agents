@@ -62,6 +62,15 @@ class TurnRecord:
     timer_ids: tuple[str, ...]
     decision_json: str | None
     actions_json: str | None
+    execution_results_json: str | None
+    error: str | None
+
+
+@dataclass(frozen=True)
+class ExecutionRecord:
+    action_request_id: str
+    revision: int
+    result_json: str | None
     error: str | None
 
 
@@ -73,6 +82,7 @@ class MailboxState:
     buffered_reviews: tuple[MailboxReview, ...]
     wake_records: tuple[WakeRecord, ...]
     turn_records: tuple[TurnRecord, ...]
+    execution_records: tuple[ExecutionRecord, ...]
     pending_action_request_ids: tuple[str, ...]
     turn_in_progress: bool
     wake_plan: WakePlan | None
@@ -92,10 +102,12 @@ class ProcessMailboxWorkflow:
         self._seen_review_command_ids: set[str] = set()
         self._wake_records: list[WakeRecord] = []
         self._turn_records: list[TurnRecord] = []
+        self._execution_records: list[ExecutionRecord] = []
         self._pending_action_request_ids: list[str] = []
         self._turn_in_progress = False
         self._process_definition_id: str | None = None
         self._process_definition_version: str | None = None
+        self._deferred_decision_json: str | None = None
         self._wake_plan: WakePlan | None = None
         self._timer_due_at: datetime | None = None
         self._plan_revision = 0
@@ -137,7 +149,14 @@ class ProcessMailboxWorkflow:
                     )
                 )
                 self._clear_wake_plan()
-                if review.command_type in {"comment", "request_revision"}:
+                if review.command_type == "approve":
+                    await self._execute_pending_action(
+                        review.action_request_id, review.proposal_revision
+                    )
+                elif review.command_type in {"reject", "request_revision"}:
+                    self._remove_pending_action(review.action_request_id)
+                    await self._run_turn(review_command_ids=(review.command_id,))
+                elif review.command_type == "comment":
                     await self._run_turn(review_command_ids=(review.command_id,))
                 continue
 
@@ -230,6 +249,7 @@ class ProcessMailboxWorkflow:
             buffered_reviews=tuple(self._buffered_reviews),
             wake_records=tuple(self._wake_records),
             turn_records=tuple(self._turn_records),
+            execution_records=tuple(self._execution_records),
             pending_action_request_ids=tuple(self._pending_action_request_ids),
             turn_in_progress=self._turn_in_progress,
             wake_plan=self._wake_plan,
@@ -314,11 +334,17 @@ class ProcessMailboxWorkflow:
             )
             actions_json = str(action_result["actions_json"])
             actions = cast(list[dict[str, Any]], json.loads(actions_json))
-            self._pending_action_request_ids.extend(
-                str(item["action_request_id"])
-                for item in actions
-                if str(item["action_request_id"]) not in self._pending_action_request_ids
-            )
+            execution_results: list[dict[str, Any]] = []
+            for item in actions:
+                action_request_id = str(item["action_request_id"])
+                if item["outcome"] == "allow":
+                    execution = await self._execute_pending_action(
+                        action_request_id, int(item["revision"])
+                    )
+                    if execution is not None:
+                        execution_results.append(execution)
+                elif item["outcome"] == "require_approval":
+                    self._add_pending_action(action_request_id)
             self._turn_records.append(
                 TurnRecord(
                     turn_id=turn_id,
@@ -327,10 +353,16 @@ class ProcessMailboxWorkflow:
                     timer_ids=timer_ids,
                     decision_json=decision_json,
                     actions_json=actions_json,
+                    execution_results_json=json.dumps(
+                        execution_results, sort_keys=True, separators=(",", ":")
+                    ),
                     error=None,
                 )
             )
-            if not actions:
+            if self._pending_action_request_ids:
+                self._deferred_decision_json = decision_json
+            else:
+                self._deferred_decision_json = None
                 self._apply_decision_wake_plan(decision_json)
         except ActivityError as error:
             self._turn_records.append(
@@ -341,6 +373,7 @@ class ProcessMailboxWorkflow:
                     timer_ids=timer_ids,
                     decision_json=None,
                     actions_json=None,
+                    execution_results_json=None,
                     error=str(error),
                 )
             )
@@ -369,3 +402,58 @@ class ProcessMailboxWorkflow:
         )
         self._timer_due_at = self._wake_plan.timer_at
         self._plan_revision += 1
+
+    async def _execute_pending_action(
+        self, action_request_id: str, revision: int
+    ) -> dict[str, Any] | None:
+        self._add_pending_action(action_request_id)
+        try:
+            activity_result = cast(
+                dict[str, Any],
+                await workflow.execute_activity(
+                    "execute_action",
+                    {
+                        "tenant_id": self._tenant_id,
+                        "process_instance_id": self._process_instance_id,
+                        "action_request_id": action_request_id,
+                        "revision": revision,
+                    },
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=1),
+                ),
+            )
+            result_json = str(activity_result["result_json"])
+            result = cast(dict[str, Any], json.loads(result_json))
+            self._execution_records.append(
+                ExecutionRecord(
+                    action_request_id=action_request_id,
+                    revision=revision,
+                    result_json=result_json,
+                    error=None,
+                )
+            )
+            if result["status"] == "succeeded":
+                self._remove_pending_action(action_request_id)
+                if not self._pending_action_request_ids and self._deferred_decision_json:
+                    deferred = self._deferred_decision_json
+                    self._deferred_decision_json = None
+                    self._apply_decision_wake_plan(deferred)
+            return result
+        except ActivityError as error:
+            self._execution_records.append(
+                ExecutionRecord(
+                    action_request_id=action_request_id,
+                    revision=revision,
+                    result_json=None,
+                    error=str(error),
+                )
+            )
+            return None
+
+    def _add_pending_action(self, action_request_id: str) -> None:
+        if action_request_id not in self._pending_action_request_ids:
+            self._pending_action_request_ids.append(action_request_id)
+
+    def _remove_pending_action(self, action_request_id: str) -> None:
+        with suppress(ValueError):
+            self._pending_action_request_ids.remove(action_request_id)

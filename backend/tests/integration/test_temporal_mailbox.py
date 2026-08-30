@@ -90,6 +90,7 @@ async def test_mailbox_deduplicates_events_and_wakes_for_events_and_timers() -> 
 @pytest.mark.asyncio
 async def test_mailbox_runs_event_timer_and_review_turns_single_flight() -> None:
     task_queue = f"orchestration-test-{uuid4()}"
+    autonomous_action_id = str(uuid4())
     first_turn_started = asyncio.Event()
     release_first_turn = asyncio.Event()
 
@@ -105,7 +106,14 @@ async def test_mailbox_runs_event_timer_and_review_turns_single_flight() -> None
                 "based_on_review_command_ids": [],
                 "based_on_timer_ids": [],
                 "status": "waiting",
-                "actions": [],
+                "actions": [
+                    {
+                        "logical_action_key": "lookup_1",
+                        "action_type": "find_available_slots",
+                        "parameters": {"days": 7},
+                        "rationale": "Find availability.",
+                    }
+                ],
                 "wake_conditions": [
                     {
                         "type": "timer",
@@ -139,8 +147,39 @@ async def test_mailbox_runs_event_timer_and_review_turns_single_flight() -> None
         return {"decision_json": json.dumps(decision)}
 
     @activity.defn(name="persist_agent_actions")
-    async def persist_agent_actions(_: dict[str, Any]) -> dict[str, str]:
-        return {"actions_json": "[]"}
+    async def persist_agent_actions(command: dict[str, Any]) -> dict[str, str]:
+        actions = (
+            [
+                {
+                    "action_request_id": autonomous_action_id,
+                    "revision": 1,
+                    "payload_hash": "a" * 64,
+                    "outcome": "allow",
+                    "status": "allowed",
+                    "approval_request_id": None,
+                    "review_thread_id": None,
+                }
+            ]
+            if command["event_ids"]
+            else []
+        )
+        return {"actions_json": json.dumps(actions)}
+
+    @activity.defn(name="execute_action")
+    async def execute_action(command: dict[str, Any]) -> dict[str, str]:
+        return {
+            "result_json": json.dumps(
+                {
+                    "action_request_id": command["action_request_id"],
+                    "attempt_id": str(uuid4()),
+                    "status": "succeeded",
+                    "idempotency_key": "b" * 64,
+                    "provider_reference": "stub:availability",
+                    "result": {"slots": []},
+                    "error": None,
+                }
+            )
+        }
 
     async with (
         await WorkflowEnvironment.start_time_skipping() as environment,
@@ -148,7 +187,7 @@ async def test_mailbox_runs_event_timer_and_review_turns_single_flight() -> None
             environment.client,
             task_queue=task_queue,
             workflows=[ProcessMailboxWorkflow],
-            activities=[run_agent_turn, persist_agent_actions],
+            activities=[run_agent_turn, persist_agent_actions, execute_action],
         ),
     ):
         handle = await environment.client.start_workflow(
@@ -181,6 +220,8 @@ async def test_mailbox_runs_event_timer_and_review_turns_single_flight() -> None
             await asyncio.sleep(0.01)
         assert len(state.turn_records) == 1
         assert state.turn_records[0].event_ids
+        assert len(state.execution_records) == 1
+        assert state.pending_action_request_ids == ()
 
         await environment.sleep(timedelta(minutes=2))
         state = await handle.query(ProcessMailboxWorkflow.state)
@@ -209,3 +250,131 @@ async def test_mailbox_runs_event_timer_and_review_turns_single_flight() -> None
         assert len(result.turn_records) == 3
         assert result.turn_records[2].review_command_ids == (review_command_id,)
         assert result.turn_in_progress is False
+
+
+@pytest.mark.asyncio
+async def test_mailbox_defers_wake_plan_until_approved_action_executes() -> None:
+    task_queue = f"approval-orchestration-test-{uuid4()}"
+    action_request_id = str(uuid4())
+
+    @activity.defn(name="run_agent_turn")
+    async def run_agent_turn(command: dict[str, Any]) -> dict[str, str]:
+        workflow_now = datetime.fromisoformat(str(command["workflow_now"]))
+        if command["event_ids"]:
+            decision: dict[str, Any] = {
+                "decision_id": str(uuid4()),
+                "based_on_event_ids": command["event_ids"],
+                "based_on_review_command_ids": [],
+                "based_on_timer_ids": [],
+                "status": "waiting",
+                "actions": [{"action_type": "send_message"}],
+                "wake_conditions": [
+                    {
+                        "type": "timer",
+                        "at": (workflow_now + timedelta(minutes=1)).isoformat(),
+                    }
+                ],
+                "memory_update": {},
+            }
+        else:
+            decision = {
+                "decision_id": str(uuid4()),
+                "based_on_event_ids": [],
+                "based_on_review_command_ids": [],
+                "based_on_timer_ids": command["timer_ids"],
+                "status": "completed",
+                "actions": [],
+                "wake_conditions": [],
+                "memory_update": {},
+            }
+        return {"decision_json": json.dumps(decision)}
+
+    @activity.defn(name="persist_agent_actions")
+    async def persist_agent_actions(command: dict[str, Any]) -> dict[str, str]:
+        actions = (
+            [
+                {
+                    "action_request_id": action_request_id,
+                    "revision": 1,
+                    "outcome": "require_approval",
+                }
+            ]
+            if command["event_ids"]
+            else []
+        )
+        return {"actions_json": json.dumps(actions)}
+
+    @activity.defn(name="execute_action")
+    async def execute_action(command: dict[str, Any]) -> dict[str, str]:
+        return {
+            "result_json": json.dumps(
+                {
+                    "action_request_id": command["action_request_id"],
+                    "attempt_id": str(uuid4()),
+                    "status": "succeeded",
+                    "idempotency_key": "c" * 64,
+                    "provider_reference": "stub:message",
+                    "result": {"sent": True},
+                    "error": None,
+                }
+            )
+        }
+
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as environment,
+        Worker(
+            environment.client,
+            task_queue=task_queue,
+            workflows=[ProcessMailboxWorkflow],
+            activities=[run_agent_turn, persist_agent_actions, execute_action],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            ProcessMailboxWorkflow.run,
+            MailboxInput(
+                tenant_id="tenant-1",
+                process_instance_id="process-1",
+                process_definition_id="example",
+                process_definition_version="1",
+            ),
+            id=f"approval-mailbox-{uuid4()}",
+            task_queue=task_queue,
+        )
+        await handle.signal(
+            ProcessMailboxWorkflow.receive_event,
+            MailboxEvent(event_id=str(uuid4()), event_type="enquiry.created"),
+        )
+        state = await handle.query(ProcessMailboxWorkflow.state)
+        for _ in range(100):
+            state = await handle.query(ProcessMailboxWorkflow.state)
+            if state.pending_action_request_ids:
+                break
+            await asyncio.sleep(0.01)
+        assert state.pending_action_request_ids == (action_request_id,)
+        assert state.wake_plan is None
+        assert state.execution_records == ()
+
+        await handle.signal(
+            ProcessMailboxWorkflow.receive_review,
+            MailboxReview(
+                command_id=str(uuid4()),
+                command_type="approve",
+                review_thread_id=str(uuid4()),
+                action_request_id=action_request_id,
+                proposal_revision=1,
+            ),
+        )
+        state = await handle.query(ProcessMailboxWorkflow.state)
+        for _ in range(100):
+            state = await handle.query(ProcessMailboxWorkflow.state)
+            if state.execution_records:
+                break
+            await asyncio.sleep(0.01)
+        assert state.pending_action_request_ids == ()
+        assert len(state.execution_records) == 1
+        assert state.wake_plan is not None
+
+        await environment.sleep(timedelta(minutes=2))
+        result = await handle.result()
+        assert result.closed is True
+        assert len(result.turn_records) == 2

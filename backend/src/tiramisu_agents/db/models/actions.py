@@ -27,7 +27,8 @@ class ActionRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('allowed', 'denied', 'pending_approval', 'approved', "
-            "'rejected', 'superseded')",
+            "'rejected', 'superseded', 'executing', 'succeeded', 'failed', "
+            "'unknown', 'reconciling')",
             name="status_valid",
         ),
         CheckConstraint("current_revision >= 1", name="current_revision_positive"),
@@ -184,3 +185,49 @@ class ApprovalRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), server_default="pending", nullable=False)
     required_role: Mapped[str | None] = mapped_column(String(100))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ActionAttempt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "action_attempts"
+    __table_args__ = (
+        CheckConstraint("attempt_number >= 1", name="attempt_number_positive"),
+        CheckConstraint(
+            "status IN ('executing', 'succeeded', 'failed', 'unknown', 'reconciling')",
+            name="status_valid",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "process_instance_id", "action_request_id", "revision"],
+            [
+                "action_revisions.tenant_id",
+                "action_revisions.process_instance_id",
+                "action_revisions.action_request_id",
+                "action_revisions.revision",
+            ],
+            name="fk_action_attempts_revision",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_action_attempt_idempotency"),
+        UniqueConstraint(
+            "tenant_id",
+            "process_instance_id",
+            "action_request_id",
+            "revision",
+            "attempt_number",
+            name="uq_action_attempt_number",
+        ),
+        Index("ix_action_attempts_reconciliation", "tenant_id", "status", "updated_at"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    process_instance_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    action_request_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    adapter_id: Mapped[str] = mapped_column(String(150), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_reference: Mapped[str | None] = mapped_column(String(500))
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    error: Mapped[str | None] = mapped_column(String(2000))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

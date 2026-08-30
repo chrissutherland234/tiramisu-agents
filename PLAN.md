@@ -874,8 +874,8 @@ The following architecture decision records are gates for the durable kernel:
 - [ ] Implement the action permission gateway. Its fail-closed classification and idempotent proposal-persistence stages are complete; approval commands, pre-execution revalidation, budgets, and execution remain.
 - [ ] Implement policy evaluation and durable approvals.
 - [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries. Durable threads, attributed messages, exact approve/reject transitions, row-lock serialization, idempotent commands, supersession requests, transactional outbox Signals, bounded review context, and replacement-turn provenance are complete; automatic workflow turn execution, operator Updates, and richer Queries remain.
-- [ ] Implement action attempts, bounded retries, idempotent execution, ambiguous outcomes, and reconciliation.
-- [ ] Implement the tenant integration registry and provider bindings.
+- [ ] Implement action attempts, bounded retries, idempotent execution, ambiguous outcomes, and reconciliation. Durable attempts, stable payload-bound idempotency keys, exact approval revalidation, autonomous/approved stub execution, unknown outcomes, and lookup-based recovery are complete; multi-attempt policy, background reconciliation, and operator resolution remain.
+- [ ] Implement the tenant integration registry and provider bindings. An explicit in-memory action-type registry and provider-neutral adapter contract are complete; tenant-configured bindings and credential resolution remain.
 - [ ] Implement budget, communication-policy, and safety-boundary enforcement.
 - [ ] Implement Continue-As-New with complete mailbox, wait, version, approval, and budget carry-forward.
 - [ ] Add Temporal replay and failure-recovery tests.
