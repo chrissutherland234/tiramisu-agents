@@ -9,6 +9,7 @@ from temporalio.worker import Worker
 from tiramisu_agents.temporal.workflows.mailbox import (
     MailboxEvent,
     MailboxInput,
+    MailboxReview,
     ProcessMailboxWorkflow,
     WakePlan,
 )
@@ -62,6 +63,20 @@ async def test_mailbox_deduplicates_events_and_wakes_for_events_and_timers() -> 
         state = await handle.query(ProcessMailboxWorkflow.state)
         assert [wake.reason for wake in state.wake_records] == ["event", "timer"]
         assert state.wake_records[-1].timer_id == "second-follow-up"
+
+        review = MailboxReview(
+            command_id="review-command-1",
+            command_type="request_revision",
+            review_thread_id="review-thread-1",
+            action_request_id="action-1",
+            proposal_revision=1,
+        )
+        await handle.signal(ProcessMailboxWorkflow.receive_review, review)
+        await handle.signal(ProcessMailboxWorkflow.receive_review, review)
+        state = await handle.query(ProcessMailboxWorkflow.state)
+        assert [wake.reason for wake in state.wake_records] == ["event", "timer", "review"]
+        assert state.wake_records[-1].review_command_id == "review-command-1"
+        assert state.buffered_reviews == ()
 
         await handle.signal(ProcessMailboxWorkflow.close)
         result = await handle.result()

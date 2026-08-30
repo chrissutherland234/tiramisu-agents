@@ -41,6 +41,15 @@ def _timestamps() -> tuple[sa.Column[object], sa.Column[object]]:
 
 
 def upgrade() -> None:
+    op.add_column(
+        "action_revisions",
+        sa.Column(
+            "based_on_review_command_ids",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'[]'::jsonb"),
+            nullable=False,
+        ),
+    )
     op.create_unique_constraint(
         "uq_approval_request_ref",
         "approval_requests",
@@ -170,3 +179,6 @@ def downgrade() -> None:
     op.drop_table("review_messages")
     op.drop_table("review_threads")
     op.drop_constraint("uq_approval_request_ref", "approval_requests", type_="unique")
+    op.execute(
+        sa.text("ALTER TABLE action_revisions DROP COLUMN IF EXISTS based_on_review_command_ids")
+    )

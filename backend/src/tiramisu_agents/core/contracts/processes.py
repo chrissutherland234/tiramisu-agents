@@ -9,6 +9,22 @@ from pydantic import BaseModel, ConfigDict, Field
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 
 
+class ReviewTurnContext(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    command_id: UUID
+    command_type: str
+    review_thread_id: UUID
+    action_request_id: UUID
+    proposal_revision: int = Field(ge=1)
+    actor_id: UUID
+    message: str | None = None
+    action_type: str
+    proposal_parameters: dict[str, Any]
+    proposal_payload_hash: str
+    proposal_rationale: str
+
+
 class ProcessStatus(StrEnum):
     ACTIVE = "active"
     WAITING = "waiting"
@@ -38,4 +54,5 @@ class AgentTurnInput(BaseModel):
     turn_id: UUID
     process: ProcessSnapshot
     events: tuple[CanonicalEvent, ...]
+    reviews: tuple[ReviewTurnContext, ...] = ()
     instructions: str = Field(min_length=1)

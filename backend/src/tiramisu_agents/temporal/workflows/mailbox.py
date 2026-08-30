@@ -20,6 +20,15 @@ class MailboxEvent:
 
 
 @dataclass(frozen=True)
+class MailboxReview:
+    command_id: str
+    command_type: str
+    review_thread_id: str
+    action_request_id: str
+    proposal_revision: int
+
+
+@dataclass(frozen=True)
 class WakePlan:
     """Wake conditions from the most recently accepted agent decision."""
 
@@ -35,6 +44,8 @@ class WakeRecord:
     event_type: str | None
     timer_id: str | None
     woke_at: datetime
+    review_command_id: str | None = None
+    review_command_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +53,7 @@ class MailboxState:
     tenant_id: str
     process_instance_id: str
     buffered_events: tuple[MailboxEvent, ...]
+    buffered_reviews: tuple[MailboxReview, ...]
     wake_records: tuple[WakeRecord, ...]
     wake_plan: WakePlan | None
     closed: bool
@@ -56,6 +68,8 @@ class ProcessMailboxWorkflow:
         self._process_instance_id = ""
         self._buffered_events: list[MailboxEvent] = []
         self._seen_event_ids: set[str] = set()
+        self._buffered_reviews: list[MailboxReview] = []
+        self._seen_review_command_ids: set[str] = set()
         self._wake_records: list[WakeRecord] = []
         self._wake_plan: WakePlan | None = None
         self._timer_due_at: datetime | None = None
@@ -79,6 +93,22 @@ class ProcessMailboxWorkflow:
                         woke_at=workflow.now(),
                     )
                 )
+                continue
+
+            if self._buffered_reviews:
+                review = self._buffered_reviews.pop(0)
+                self._wake_records.append(
+                    WakeRecord(
+                        reason="review",
+                        event_id=None,
+                        event_type=None,
+                        timer_id=None,
+                        woke_at=workflow.now(),
+                        review_command_id=review.command_id,
+                        review_command_type=review.command_type,
+                    )
+                )
+                self._clear_wake_plan()
                 continue
 
             matching_index = self._matching_event_index()
@@ -117,6 +147,7 @@ class ProcessMailboxWorkflow:
                     lambda awaited_revision=revision: (
                         self._closed
                         or self._plan_revision != awaited_revision
+                        or bool(self._buffered_reviews)
                         or self._matching_event_index() is not None
                     ),
                     timeout=timeout,
@@ -132,6 +163,14 @@ class ProcessMailboxWorkflow:
             return
         self._seen_event_ids.add(event.event_id)
         self._buffered_events.append(event)
+
+    @workflow.signal
+    def receive_review(self, review: MailboxReview) -> None:
+        """Idempotently append one persisted human-review command."""
+        if review.command_id in self._seen_review_command_ids:
+            return
+        self._seen_review_command_ids.add(review.command_id)
+        self._buffered_reviews.append(review)
 
     @workflow.signal
     def replace_wake_plan(self, plan: WakePlan) -> None:
@@ -150,6 +189,7 @@ class ProcessMailboxWorkflow:
             tenant_id=self._tenant_id,
             process_instance_id=self._process_instance_id,
             buffered_events=tuple(self._buffered_events),
+            buffered_reviews=tuple(self._buffered_reviews),
             wake_records=tuple(self._wake_records),
             wake_plan=self._wake_plan,
             closed=self._closed,

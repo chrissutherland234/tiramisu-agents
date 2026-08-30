@@ -4,11 +4,13 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from temporalio.client import Client
 from tiramisu_agents.actions.gateway import ActionGateway, ActionPersistenceConflict
 from tiramisu_agents.core.contracts.actions import PermissionOutcome
 from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision, DecisionStatus
@@ -32,11 +34,22 @@ from tiramisu_agents.temporal.activities.action_gateway import (
     ActionGatewayActivities,
     PersistActionsCommand,
 )
+from tiramisu_agents.temporal.activities.agent_turn import AgentTurnActivities, AgentTurnCommand
+from tiramisu_agents.temporal.dispatcher import DispatchStatus, TemporalOutboxDispatcher
+from tiramisu_agents.testkit.scripted_agent import ScriptedAgent
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TIRAMISU_RUN_DB_TESTS") != "1",
     reason="requires the migrated PostgreSQL integration database",
 )
+
+
+class _CapturingTemporalClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def start_workflow(self, *_: Any, **kwargs: Any) -> None:
+        self.calls.append(kwargs)
 
 
 async def _delete_tenant_data(
@@ -273,6 +286,85 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         assert revision_result.thread_status == "revision_requested"
         assert revision_result.approval_status == "superseded"
         assert revision_result.action_status == "superseded"
+
+        replacement_turn_id = uuid4()
+        replacement_decision = AgentDecision(
+            based_on_event_ids=(),
+            based_on_review_command_ids=(request_revision.command_id,),
+            status=DecisionStatus.ACTIVE,
+            actions=(
+                ActionProposal(
+                    logical_action_key="booking_1_revision_2",
+                    action_type="propose_booking",
+                    parameters={"slot": "2026-09-02T14:00:00+00:00"},
+                    rationale="Apply the operator's requested afternoon slot.",
+                ),
+            ),
+        )
+        scripted_agent = ScriptedAgent([replacement_decision])
+        turn_result = await AgentTurnActivities(
+            runtime_factory,
+            ProcessDefinitionRegistry([definition]),
+            scripted_agent,
+        ).run_agent_turn(
+            AgentTurnCommand(
+                tenant_id=str(tenant_id),
+                process_instance_id=str(ingested.process_instance_id),
+                process_definition_id=definition.id,
+                process_definition_version=definition.version,
+                turn_id=str(replacement_turn_id),
+                event_ids=(),
+                workflow_now=datetime.now(UTC),
+                review_command_ids=(str(request_revision.command_id),),
+            )
+        )
+        assert scripted_agent.turn_inputs[0].reviews[0].message == request_revision.message
+        assert (
+            scripted_agent.turn_inputs[0].reviews[0].proposal_parameters
+            == decision.actions[2].parameters
+        )
+
+        replacement_result = await ActionGatewayActivities(
+            runtime_factory,
+            ProcessDefinitionRegistry([definition]),
+        ).persist_agent_actions(
+            PersistActionsCommand(
+                tenant_id=str(tenant_id),
+                process_instance_id=str(ingested.process_instance_id),
+                process_definition_id=definition.id,
+                process_definition_version=definition.version,
+                agent_turn_id=str(replacement_turn_id),
+                event_ids=(),
+                review_command_ids=(str(request_revision.command_id),),
+                workflow_now=datetime.now(UTC),
+                decision_json=turn_result.decision_json,
+            )
+        )
+        replacement_actions = json.loads(replacement_result.actions_json)
+        assert len(replacement_actions) == 1
+        assert replacement_actions[0]["outcome"] == "require_approval"
+        assert replacement_actions[0]["review_thread_id"] is not None
+
+        async with runtime_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            assert await session.scalar(select(func.count()).select_from(ReviewMessage)) == 3
+            assert await session.scalar(select(func.count()).select_from(ApprovalDecision)) == 1
+            assert await session.scalar(select(func.count()).select_from(OutboxMessage)) == 4
+
+        temporal_client = _CapturingTemporalClient()
+        dispatcher = TemporalOutboxDispatcher(
+            runtime_factory,
+            cast(Client, temporal_client),
+            task_queue="review-delivery-test",
+        )
+        dispatches = [await dispatcher.dispatch_one(tenant_id) for _ in range(4)]
+        assert all(item.status is DispatchStatus.PUBLISHED for item in dispatches)
+        assert [call["start_signal"] for call in temporal_client.calls] == [
+            "receive_event",
+            "receive_review",
+            "receive_review",
+            "receive_review",
+        ]
 
         changed = decision.model_copy(
             update={

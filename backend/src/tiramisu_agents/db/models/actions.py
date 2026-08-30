@@ -99,6 +99,9 @@ class ActionRevision(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     rationale: Mapped[str] = mapped_column(String(1000), nullable=False)
     based_on_event_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    based_on_review_command_ids: Mapped[list[str]] = mapped_column(
+        JSONB, server_default=text("'[]'::jsonb"), nullable=False
+    )
 
 
 class ActionPolicyRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):

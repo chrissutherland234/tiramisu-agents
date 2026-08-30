@@ -72,6 +72,7 @@ class AgentDecision(BaseModel):
 
     decision_id: UUID = Field(default_factory=uuid4)
     based_on_event_ids: tuple[UUID, ...]
+    based_on_review_command_ids: tuple[UUID, ...] = ()
     status: DecisionStatus
     actions: tuple[ActionProposal, ...] = ()
     wake_conditions: tuple[WakeCondition, ...] = ()

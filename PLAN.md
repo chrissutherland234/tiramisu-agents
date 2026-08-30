@@ -867,13 +867,13 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Implement canonical event ingestion and source-event deduplication.
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
 - [ ] Implement quarantine resolution, late correlation, and replay.
-- [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling.
+- [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Idempotent review-command delivery and priority review wakes are complete; automatic single-flight turn execution and full ordering rules remain.
 - [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, bounded PostgreSQL event context loader, and deterministic scripted-runner path. Workflow consumption remains gated on the action gateway.
 - [ ] Implement application-owned conversation history, context assembly, provenance-aware memory, and compaction.
 - [x] Implement initial typed decision validation for exact event lineage, allowed actions and wake events, per-turn action limits, and timer bounds.
 - [ ] Implement the action permission gateway. Its fail-closed classification and idempotent proposal-persistence stages are complete; approval commands, pre-execution revalidation, budgets, and execution remain.
 - [ ] Implement policy evaluation and durable approvals.
-- [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries. Durable threads, attributed messages, exact approve/reject transitions, row-lock serialization, idempotent commands, and supersession requests are complete; workflow messaging and replacement agent turns remain.
+- [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries. Durable threads, attributed messages, exact approve/reject transitions, row-lock serialization, idempotent commands, supersession requests, transactional outbox Signals, bounded review context, and replacement-turn provenance are complete; automatic workflow turn execution, operator Updates, and richer Queries remain.
 - [ ] Implement action attempts, bounded retries, idempotent execution, ambiguous outcomes, and reconciliation.
 - [ ] Implement the tenant integration registry and provider bindings.
 - [ ] Implement budget, communication-policy, and safety-boundary enforcement.

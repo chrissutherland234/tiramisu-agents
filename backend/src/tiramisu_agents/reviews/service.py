@@ -1,13 +1,17 @@
 """Race-safe, idempotent human review commands."""
 
 from dataclasses import dataclass
+from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tiramisu_agents.core.contracts.actions import ActionRequestStatus, ApprovalStatus
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
 from tiramisu_agents.db.models.actions import ActionRequest, ApprovalRequest
+from tiramisu_agents.db.models.events import OutboxMessage
+from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, ReviewThread
 from tiramisu_agents.db.session import set_tenant_context
 
@@ -136,6 +140,33 @@ class ReviewService:
                 content=command.message,
                 proposal_revision=command.proposal_revision,
             )
+        )
+        workflow_id = await session.scalar(
+            select(ProcessInstance.workflow_id).where(
+                ProcessInstance.tenant_id == command.tenant_id,
+                ProcessInstance.id == command.process_instance_id,
+            )
+        )
+        if workflow_id is None:
+            raise ReviewConflict("review process has no workflow identity")
+        await session.execute(
+            insert(OutboxMessage)
+            .values(
+                id=uuid4(),
+                tenant_id=command.tenant_id,
+                process_instance_id=command.process_instance_id,
+                message_type="temporal.process_review",
+                destination=workflow_id,
+                deduplication_key=f"process-review:{command.command_id}",
+                payload={
+                    "command_id": str(command.command_id),
+                    "command_type": command.command_type.value,
+                    "review_thread_id": str(command.review_thread_id),
+                    "action_request_id": str(command.action_request_id),
+                    "proposal_revision": command.proposal_revision,
+                },
+            )
+            .on_conflict_do_nothing(constraint="uq_outbox_messages_dedup")
         )
         await session.flush()
         return self._result(command, thread, approval, request)

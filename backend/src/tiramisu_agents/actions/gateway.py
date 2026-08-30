@@ -74,6 +74,9 @@ class ActionGateway:
                     agent_turn_id=agent_turn_id,
                     process_definition_version=process_definition_version,
                     based_on_event_ids=tuple(str(value) for value in decision.based_on_event_ids),
+                    based_on_review_command_ids=tuple(
+                        str(value) for value in decision.based_on_review_command_ids
+                    ),
                     action=action,
                     policy=policy,
                 )
@@ -90,6 +93,7 @@ class ActionGateway:
         agent_turn_id: UUID,
         process_definition_version: str,
         based_on_event_ids: tuple[str, ...],
+        based_on_review_command_ids: tuple[str, ...],
         action: ActionProposal,
         policy: ConfiguredActionPolicy,
     ) -> PersistedAction:
@@ -140,6 +144,7 @@ class ActionGateway:
                 payload_hash=payload_hash,
                 rationale=action.rationale,
                 based_on_event_ids=list(based_on_event_ids),
+                based_on_review_command_ids=list(based_on_review_command_ids),
             )
             .on_conflict_do_nothing(constraint="uq_action_revision_number")
         )

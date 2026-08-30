@@ -17,6 +17,7 @@ from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.temporal.workflows.mailbox import (
     MailboxEvent,
     MailboxInput,
+    MailboxReview,
     ProcessMailboxWorkflow,
 )
 
@@ -34,6 +35,7 @@ class ClaimedMessage:
     id: UUID
     tenant_id: UUID
     process_instance_id: UUID
+    message_type: str
     destination: str
     payload: dict[str, Any]
     attempt_count: int
@@ -73,6 +75,23 @@ class TemporalOutboxDispatcher:
             return DispatchResult(status=DispatchStatus.EMPTY)
 
         try:
+            if message.message_type == "temporal.process_event":
+                signal_name = "receive_event"
+                signal_argument: MailboxEvent | MailboxReview = MailboxEvent(
+                    event_id=str(message.payload["event_id"]),
+                    event_type=str(message.payload["event_type"]),
+                )
+            elif message.message_type == "temporal.process_review":
+                signal_name = "receive_review"
+                signal_argument = MailboxReview(
+                    command_id=str(message.payload["command_id"]),
+                    command_type=str(message.payload["command_type"]),
+                    review_thread_id=str(message.payload["review_thread_id"]),
+                    action_request_id=str(message.payload["action_request_id"]),
+                    proposal_revision=int(message.payload["proposal_revision"]),
+                )
+            else:
+                raise RuntimeError(f"unsupported Temporal message type: {message.message_type}")
             await self._temporal_client.start_workflow(
                 ProcessMailboxWorkflow.run,
                 MailboxInput(
@@ -83,13 +102,8 @@ class TemporalOutboxDispatcher:
                 task_queue=self._task_queue,
                 id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
                 id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-                start_signal="receive_event",
-                start_signal_args=[
-                    MailboxEvent(
-                        event_id=str(message.payload["event_id"]),
-                        event_type=str(message.payload["event_type"]),
-                    )
-                ],
+                start_signal=signal_name,
+                start_signal_args=[signal_argument],
             )
         except Exception as error:
             return await self._record_failure(message, error)
@@ -133,7 +147,9 @@ class TemporalOutboxDispatcher:
         stored = await session.scalar(
             select(OutboxMessage)
             .where(
-                OutboxMessage.message_type == "temporal.process_event",
+                OutboxMessage.message_type.in_(
+                    ("temporal.process_event", "temporal.process_review")
+                ),
                 OutboxMessage.available_at <= now,
                 or_(
                     OutboxMessage.status == "pending",
@@ -162,6 +178,7 @@ class TemporalOutboxDispatcher:
             id=stored.id,
             tenant_id=stored.tenant_id,
             process_instance_id=stored.process_instance_id,
+            message_type=stored.message_type,
             destination=stored.destination,
             payload=stored.payload,
             attempt_count=stored.attempt_count,

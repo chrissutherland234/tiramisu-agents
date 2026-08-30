@@ -35,6 +35,7 @@ def validate_decision(
     *,
     workflow_now: datetime,
     expected_event_ids: frozenset[UUID] | None = None,
+    expected_review_command_ids: frozenset[UUID] | None = None,
 ) -> AgentDecision:
     """Return the unchanged decision if it fits policy; otherwise fail closed."""
 
@@ -46,6 +47,11 @@ def validate_decision(
         and frozenset(decision.based_on_event_ids) != expected_event_ids
     ):
         raise DecisionRejected("decision must be based on exactly the events in this turn")
+    if (
+        expected_review_command_ids is not None
+        and frozenset(decision.based_on_review_command_ids) != expected_review_command_ids
+    ):
+        raise DecisionRejected("decision must be based on exactly the review commands in this turn")
 
     if len(decision.actions) > policy.max_actions_per_turn:
         raise DecisionRejected("decision exceeds the maximum actions per turn")

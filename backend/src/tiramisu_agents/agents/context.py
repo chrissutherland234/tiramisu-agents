@@ -10,9 +10,12 @@ from tiramisu_agents.core.contracts.processes import (
     AgentTurnInput,
     ProcessSnapshot,
     ProcessStatus,
+    ReviewTurnContext,
 )
+from tiramisu_agents.db.models.actions import ActionRequest, ActionRevision, ApprovalRequest
 from tiramisu_agents.db.models.events import EventInbox
 from tiramisu_agents.db.models.processes import ProcessInstance
+from tiramisu_agents.db.models.reviews import ReviewMessage, ReviewThread
 from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.processes.definitions import ProcessDefinition
 
@@ -22,10 +25,13 @@ class AgentContextError(ValueError):
 
 
 class PostgresAgentContextLoader:
-    def __init__(self, *, max_events_per_turn: int = 50) -> None:
+    def __init__(self, *, max_events_per_turn: int = 50, max_reviews_per_turn: int = 20) -> None:
         if max_events_per_turn < 1:
             raise ValueError("max_events_per_turn must be positive")
         self._max_events_per_turn = max_events_per_turn
+        if max_reviews_per_turn < 1:
+            raise ValueError("max_reviews_per_turn must be positive")
+        self._max_reviews_per_turn = max_reviews_per_turn
 
     async def load(
         self,
@@ -35,14 +41,19 @@ class PostgresAgentContextLoader:
         process_instance_id: UUID,
         turn_id: UUID,
         event_ids: tuple[UUID, ...],
+        review_command_ids: tuple[UUID, ...] = (),
         definition: ProcessDefinition,
     ) -> AgentTurnInput:
-        if not event_ids:
-            raise AgentContextError("an agent turn requires at least one event")
+        if not event_ids and not review_command_ids:
+            raise AgentContextError("an agent turn requires at least one event or review command")
         if len(event_ids) > self._max_events_per_turn:
             raise AgentContextError("agent turn exceeds the event context limit")
         if len(event_ids) != len(set(event_ids)):
             raise AgentContextError("agent turn event IDs must be unique")
+        if len(review_command_ids) > self._max_reviews_per_turn:
+            raise AgentContextError("agent turn exceeds the review context limit")
+        if len(review_command_ids) != len(set(review_command_ids)):
+            raise AgentContextError("agent turn review command IDs must be unique")
 
         await set_tenant_context(session, tenant_id)
         process = await session.scalar(
@@ -75,6 +86,52 @@ class PostgresAgentContextLoader:
             )
             for event_id in event_ids
         )
+        review_rows = (
+            await session.execute(
+                select(ReviewMessage, ReviewThread, ApprovalRequest, ActionRequest, ActionRevision)
+                .join(
+                    ReviewThread,
+                    ReviewThread.id == ReviewMessage.review_thread_id,
+                )
+                .join(
+                    ApprovalRequest,
+                    ApprovalRequest.id == ReviewThread.approval_request_id,
+                )
+                .join(
+                    ActionRequest,
+                    ActionRequest.id == ApprovalRequest.action_request_id,
+                )
+                .join(
+                    ActionRevision,
+                    (ActionRevision.action_request_id == ApprovalRequest.action_request_id)
+                    & (ActionRevision.revision == ApprovalRequest.revision),
+                )
+                .where(
+                    ReviewMessage.id.in_(review_command_ids),
+                    ReviewMessage.process_instance_id == process_instance_id,
+                )
+            )
+        ).all()
+        reviews_by_id = {row.ReviewMessage.id: row for row in review_rows}
+        if set(reviews_by_id) != set(review_command_ids):
+            raise AgentContextError("one or more review commands are unavailable")
+        reviews = tuple(
+            ReviewTurnContext(
+                command_id=command_id,
+                command_type=row.ReviewMessage.message_type,
+                review_thread_id=row.ReviewThread.id,
+                action_request_id=row.ActionRequest.id,
+                proposal_revision=row.ActionRevision.revision,
+                actor_id=row.ReviewMessage.actor_id,
+                message=row.ReviewMessage.content,
+                action_type=row.ActionRequest.action_type,
+                proposal_parameters=row.ActionRevision.parameters,
+                proposal_payload_hash=row.ActionRevision.payload_hash,
+                proposal_rationale=row.ActionRevision.rationale,
+            )
+            for command_id in review_command_ids
+            for row in (reviews_by_id[command_id],)
+        )
         return AgentTurnInput(
             turn_id=turn_id,
             process=ProcessSnapshot(
@@ -85,5 +142,6 @@ class PostgresAgentContextLoader:
                 status=ProcessStatus(process.status),
             ),
             events=events,
+            reviews=reviews,
             instructions=definition.compile_instructions(),
         )
