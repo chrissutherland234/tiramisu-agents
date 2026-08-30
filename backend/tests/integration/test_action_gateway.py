@@ -13,6 +13,7 @@ from tiramisu_agents.actions.gateway import ActionGateway, ActionPersistenceConf
 from tiramisu_agents.core.contracts.actions import PermissionOutcome
 from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision, DecisionStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
+from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
 from tiramisu_agents.db.models.actions import (
     ActionPolicyRecord,
     ActionRequest,
@@ -21,10 +22,12 @@ from tiramisu_agents.db.models.actions import (
 )
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance
+from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, ReviewThread
 from tiramisu_agents.db.models.tenancy import Tenant
 from tiramisu_agents.db.session import create_engine, create_session_factory, set_tenant_context
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
+from tiramisu_agents.reviews.service import ReviewConflict, ReviewService
 from tiramisu_agents.temporal.activities.action_gateway import (
     ActionGatewayActivities,
     PersistActionsCommand,
@@ -40,7 +43,15 @@ async def _delete_tenant_data(
     admin_factory: async_sessionmaker[AsyncSession], tenant_id: UUID
 ) -> None:
     async with admin_factory.begin() as session:
-        for model in (ApprovalRequest, ActionPolicyRecord, ActionRevision, ActionRequest):
+        for model in (
+            ApprovalDecision,
+            ReviewMessage,
+            ReviewThread,
+            ApprovalRequest,
+            ActionPolicyRecord,
+            ActionRevision,
+            ActionRequest,
+        ):
             await session.execute(delete(model).where(model.tenant_id == tenant_id))
         await session.execute(delete(OutboxMessage).where(OutboxMessage.tenant_id == tenant_id))
         await session.execute(delete(EventInbox).where(EventInbox.tenant_id == tenant_id))
@@ -101,6 +112,12 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                 parameters={"days": 7},
                 rationale="Find suitable times.",
             ),
+            ActionProposal(
+                logical_action_key="booking_1",
+                action_type="propose_booking",
+                parameters={"slot": "2026-09-02T10:00:00+00:00"},
+                rationale="Offer an available time.",
+            ),
         ),
     )
     gateway = ActionGateway()
@@ -153,6 +170,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         assert retried == first
         assert first[0].outcome is PermissionOutcome.REQUIRE_APPROVAL
         assert first[0].approval_request_id is not None
+        assert first[0].review_thread_id is not None
         assert first[1].outcome is PermissionOutcome.ALLOW
         assert first[1].approval_request_id is None
 
@@ -171,17 +189,90 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                 decision_json=decision.model_dump_json(),
             )
         )
-        assert len(json.loads(activity_result.actions_json)) == 2
+        assert len(json.loads(activity_result.actions_json)) == 3
 
         async with runtime_factory.begin() as session:
             await set_tenant_context(session, tenant_id)
-            assert await session.scalar(select(func.count()).select_from(ActionRequest)) == 2
-            assert await session.scalar(select(func.count()).select_from(ActionRevision)) == 2
-            assert await session.scalar(select(func.count()).select_from(ActionPolicyRecord)) == 2
-            assert await session.scalar(select(func.count()).select_from(ApprovalRequest)) == 1
+            assert await session.scalar(select(func.count()).select_from(ActionRequest)) == 3
+            assert await session.scalar(select(func.count()).select_from(ActionRevision)) == 3
+            assert await session.scalar(select(func.count()).select_from(ActionPolicyRecord)) == 3
+            assert await session.scalar(select(func.count()).select_from(ApprovalRequest)) == 2
         async with runtime_factory.begin() as session:
             await set_tenant_context(session, other_tenant_id)
             assert await session.scalar(select(func.count()).select_from(ActionRequest)) == 0
+
+        actor_id = uuid4()
+        comment = ReviewCommand(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            review_thread_id=first[0].review_thread_id,
+            action_request_id=first[0].action_request_id,
+            proposal_revision=1,
+            command_type=ReviewCommandType.COMMENT,
+            actor_id=actor_id,
+            message="Could this be a little warmer?",
+        )
+        review_service = ReviewService()
+        async with runtime_factory.begin() as session:
+            comment_result = await review_service.apply(session, comment)
+        async with runtime_factory.begin() as session:
+            assert await review_service.apply(session, comment) == comment_result
+        assert comment_result.thread_status == "open"
+
+        wrong_hash = ReviewCommand(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            review_thread_id=first[0].review_thread_id,
+            action_request_id=first[0].action_request_id,
+            proposal_revision=1,
+            command_type=ReviewCommandType.APPROVE,
+            actor_id=actor_id,
+            expected_payload_hash="0" * 64,
+        )
+        with pytest.raises(ReviewConflict, match="payload hash"):
+            async with runtime_factory.begin() as session:
+                await review_service.apply(session, wrong_hash)
+
+        approve = wrong_hash.model_copy(
+            update={"command_id": uuid4(), "expected_payload_hash": first[0].payload_hash}
+        )
+        async with runtime_factory.begin() as session:
+            approved = await review_service.apply(session, approve)
+        async with runtime_factory.begin() as session:
+            assert await review_service.apply(session, approve) == approved
+        assert approved.approval_status == "approved"
+        assert approved.action_status == "approved"
+
+        late_revision = ReviewCommand(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            review_thread_id=first[0].review_thread_id,
+            action_request_id=first[0].action_request_id,
+            proposal_revision=1,
+            command_type=ReviewCommandType.REQUEST_REVISION,
+            actor_id=actor_id,
+            message="Actually, offer Tuesday instead.",
+        )
+        with pytest.raises(ReviewConflict, match="no longer pending"):
+            async with runtime_factory.begin() as session:
+                await review_service.apply(session, late_revision)
+
+        assert first[2].review_thread_id is not None
+        request_revision = ReviewCommand(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            review_thread_id=first[2].review_thread_id,
+            action_request_id=first[2].action_request_id,
+            proposal_revision=1,
+            command_type=ReviewCommandType.REQUEST_REVISION,
+            actor_id=actor_id,
+            message="Offer Tuesday afternoon instead.",
+        )
+        async with runtime_factory.begin() as session:
+            revision_result = await review_service.apply(session, request_revision)
+        assert revision_result.thread_status == "revision_requested"
+        assert revision_result.approval_status == "superseded"
+        assert revision_result.action_status == "superseded"
 
         changed = decision.model_copy(
             update={

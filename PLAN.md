@@ -853,7 +853,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Add canonical event inbox, transactional outbox, external correlation registry, and quarantine persistence foundations.
 - [x] Add a tenant-allow-listed Temporal outbox delivery worker with recoverable claims and idempotent Signal-With-Start delivery.
 - [ ] Add operator-driven quarantine resolution and replay.
-- [ ] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations. Initial action requests, immutable first revisions, policy records, and exact-payload approval requests are complete; revision threads, attempts, and reconciliation remain.
+- [ ] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations. Initial action requests, immutable first revisions, policy records, exact-payload approval requests, review threads/messages, and immutable human decisions are complete; replacement revisions, attempts, and reconciliation remain.
 - [ ] Add autonomy budgets, communication policy, rate limits, and platform/tenant kill switches.
 - [ ] Add data classification, log/trace redaction, Temporal payload encryption hooks, and retention configuration.
 - [x] Add formatting, linting, strict static typing, unit tests, dependency lockfiles, and CI.
@@ -873,7 +873,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Implement initial typed decision validation for exact event lineage, allowed actions and wake events, per-turn action limits, and timer bounds.
 - [ ] Implement the action permission gateway. Its fail-closed classification and idempotent proposal-persistence stages are complete; approval commands, pre-execution revalidation, budgets, and execution remain.
 - [ ] Implement policy evaluation and durable approvals.
-- [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries.
+- [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries. Durable threads, attributed messages, exact approve/reject transitions, row-lock serialization, idempotent commands, and supersession requests are complete; workflow messaging and replacement agent turns remain.
 - [ ] Implement action attempts, bounded retries, idempotent execution, ambiguous outcomes, and reconciliation.
 - [ ] Implement the tenant integration registry and provider bindings.
 - [ ] Implement budget, communication-policy, and safety-boundary enforcement.

@@ -79,6 +79,7 @@ class ActionGatewayActivities:
                 "approval_request_id": (
                     str(item.approval_request_id) if item.approval_request_id else None
                 ),
+                "review_thread_id": str(item.review_thread_id) if item.review_thread_id else None,
                 "outcome": item.outcome.value,
                 "status": item.status.value,
             }

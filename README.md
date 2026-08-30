@@ -38,6 +38,8 @@ This Activity is intentionally not yet invoked by the mailbox workflow. The next
 
 The first action-gateway stage is now present. Process definitions explicitly classify every proposed action as `allow`, `deny`, or `require_approval`; omitted actions fail closed. Separate retry-safe persistence records the stable action identity, immutable payload revision and hash, deterministic policy result, and—when required—an approval request bound by a database foreign key to that exact payload. A separate Temporal Activity performs this persistence after the model Activity, so retrying database work never reruns the model call. Action execution and approval commands are not connected yet.
 
+Approval-required actions now receive a durable review thread. The review service records attributed comments, exact approve/reject decisions, and revision requests idempotently. Approval rows are locked during state changes so competing commands cannot both win; a revision request supersedes the reviewed approval and action without executing it. Delivery of review messages into the Temporal workflow and generation of the replacement proposal are the next steps.
+
 ## Development event path
 
 The current vertical slice accepts canonical events, deduplicates them in PostgreSQL, correlates them to one process or leaves them quarantined, and transactionally schedules Temporal delivery. The dispatcher uses Signal-With-Start and workflow-level event deduplication, so retrying an uncertain delivery is safe.

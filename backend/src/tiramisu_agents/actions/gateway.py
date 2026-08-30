@@ -22,6 +22,7 @@ from tiramisu_agents.db.models.actions import (
     ActionRevision,
     ApprovalRequest,
 )
+from tiramisu_agents.db.models.reviews import ReviewThread
 from tiramisu_agents.db.session import set_tenant_context
 
 
@@ -37,6 +38,7 @@ class PersistedAction:
     outcome: PermissionOutcome
     status: ActionRequestStatus
     approval_request_id: UUID | None
+    review_thread_id: UUID | None
 
 
 def action_payload_hash(action: ActionProposal) -> str:
@@ -180,6 +182,7 @@ class ActionGateway:
         stored_outcome = PermissionOutcome(stored_policy.outcome)
 
         approval_id: UUID | None = None
+        review_thread_id: UUID | None = None
         if stored_outcome is PermissionOutcome.REQUIRE_APPROVAL:
             await session.execute(
                 insert(ApprovalRequest)
@@ -204,6 +207,26 @@ class ActionGateway:
             if approval is None or approval.payload_hash != payload_hash:
                 raise ActionPersistenceConflict("approval is not bound to the current payload")
             approval_id = approval.id
+            await session.execute(
+                insert(ReviewThread)
+                .values(
+                    tenant_id=tenant_id,
+                    process_instance_id=process_instance_id,
+                    approval_request_id=approval.id,
+                    status="open",
+                )
+                .on_conflict_do_nothing(constraint="uq_review_thread_approval")
+            )
+            review_thread = await session.scalar(
+                select(ReviewThread).where(
+                    ReviewThread.tenant_id == tenant_id,
+                    ReviewThread.process_instance_id == process_instance_id,
+                    ReviewThread.approval_request_id == approval.id,
+                )
+            )
+            if review_thread is None:
+                raise ActionPersistenceConflict("approval review thread was not persisted")
+            review_thread_id = review_thread.id
 
         persisted_status = ActionRequestStatus(request.status)
         if inserted_id is not None and persisted_status is not status:
@@ -215,4 +238,5 @@ class ActionGateway:
             outcome=stored_outcome,
             status=persisted_status,
             approval_request_id=approval_id,
+            review_thread_id=review_thread_id,
         )

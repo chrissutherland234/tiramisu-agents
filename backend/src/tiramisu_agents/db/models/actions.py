@@ -166,6 +166,7 @@ class ApprovalRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "revision",
             name="uq_approval_request_revision",
         ),
+        UniqueConstraint("tenant_id", "process_instance_id", "id", name="uq_approval_request_ref"),
         Index("ix_approval_requests_pending", "tenant_id", "status", "expires_at"),
     )
 
