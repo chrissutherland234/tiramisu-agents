@@ -2,7 +2,7 @@
 
 Tiramisu is an open-source foundation for durable, long-running business agents. One logical agent follows a customer journey or case, performs bounded reasoning turns, and sleeps durably in Temporal until an approved event, timer, or human interaction wakes it.
 
-The project is in its foundation phase. See [PLAN.md](PLAN.md), the [runtime configuration guide](docs/configuration.md), the [security operations guide](docs/security.md), the [Temporal recovery guide](docs/temporal-recovery.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
+The project is in its foundation phase. See [PLAN.md](PLAN.md), the [local fictional demo guide](docs/local-demo.md), the [runtime configuration guide](docs/configuration.md), the [security operations guide](docs/security.md), the [Temporal recovery guide](docs/temporal-recovery.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
 
 ## Current shape
 
@@ -23,6 +23,11 @@ The project is in its foundation phase. See [PLAN.md](PLAN.md), the [runtime con
 5. Run `uv run pytest`.
 6. Run `uv run tiramisu-api` for the API.
 7. From `frontend`, run `npm install` and `npm run dev`.
+
+If PostgreSQL or Temporal already run locally, point `.env` at those dedicated
+services and skip Docker Compose. The [local fictional demo guide](docs/local-demo.md)
+includes role setup, tenant bootstrap, the operator-console connection, and a
+sample enquiry event.
 
 The API uses a least-privilege `tiramisu_app` database role; Alembic uses the separate local admin role. Every application transaction must call `set_tenant_context` before accessing tenant-owned tables. The PostgreSQL integration test is opt-in locally with `TIRAMISU_RUN_DB_TESTS=1`. Temporal's mailbox test uses the official time-skipping test server. No test needs an OpenAI key. The bundled fictional definition and extension manifest are package resources, so API and worker composition does not depend on the launch directory.
 

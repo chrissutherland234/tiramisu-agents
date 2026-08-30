@@ -51,6 +51,8 @@ class ProcessDefinition(BaseModel):
     terminal_states: tuple[ProcessStatus, ...] = Field(min_length=1)
     allowed_actions: tuple[str, ...] = ()
     action_permissions: dict[str, PermissionOutcome]
+    action_guidance: dict[str, str] = Field(default_factory=dict)
+    decision_guidance: tuple[str, ...] = ()
     allowed_wake_events: tuple[str, ...] = ()
     limits: ProcessLimits
     review: ReviewConfiguration = Field(default_factory=ReviewConfiguration)
@@ -81,6 +83,24 @@ class ProcessDefinition(BaseModel):
             raise ValueError("action types must be unique")
         return values
 
+    @field_validator("action_guidance")
+    @classmethod
+    def validate_action_guidance(cls, values: dict[str, str]) -> dict[str, str]:
+        if any(not IDENTIFIER_PATTERN.fullmatch(action_type) for action_type in values):
+            raise ValueError("action guidance keys must be snake_case action types")
+        if any(not guidance.strip() for guidance in values.values()):
+            raise ValueError("action guidance cannot be blank")
+        return values
+
+    @field_validator("decision_guidance")
+    @classmethod
+    def validate_decision_guidance(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not guidance.strip() for guidance in values):
+            raise ValueError("decision guidance cannot be blank")
+        if len(values) != len(set(values)):
+            raise ValueError("decision guidance must be unique")
+        return values
+
     @field_validator("action_permissions")
     @classmethod
     def validate_permission_action_types(
@@ -101,6 +121,8 @@ class ProcessDefinition(BaseModel):
     def require_explicit_action_permissions(self) -> "ProcessDefinition":
         if set(self.action_permissions) != set(self.allowed_actions):
             raise ValueError("every allowed action must have exactly one permission classification")
+        if not set(self.action_guidance).issubset(self.allowed_actions):
+            raise ValueError("action guidance can only describe allowed actions")
         return self
 
     def fingerprint(self) -> str:
@@ -124,12 +146,25 @@ class ProcessDefinition(BaseModel):
     def compile_instructions(self) -> str:
         goals = "\n".join(f"- {goal}" for goal in self.goals)
         actions = ", ".join(self.allowed_actions) or "none"
+        action_guidance = (
+            "\n".join(
+                f"- {action}: {self.action_guidance[action]}"
+                for action in self.allowed_actions
+                if action in self.action_guidance
+            )
+            or "- No additional parameter guidance was declared."
+        )
+        decision_guidance = "\n".join(f"- {guidance}" for guidance in self.decision_guidance)
+        if not decision_guidance:
+            decision_guidance = "- No additional decision guidance was declared."
         wakes = ", ".join(self.allowed_wake_events) or "none"
         terminal_states = ", ".join(state.value for state in self.terminal_states)
         return (
             f"Process: {self.id} version {self.version}\n"
             f"Goals:\n{goals}\n"
             f"Allowed action types: {actions}\n"
+            f"Action parameter guidance:\n{action_guidance}\n"
+            f"Decision guidance:\n{decision_guidance}\n"
             f"Allowed event wake types: {wakes}\n"
             f"Terminal states: {terminal_states}\n"
             "Propose only actions and wake conditions allowed above. "

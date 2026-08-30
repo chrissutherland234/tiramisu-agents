@@ -8,9 +8,11 @@ from typing import Any
 import yaml
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import Version
+from pydantic import BaseModel
 
 from tiramisu_agents import __version__
 from tiramisu_agents.adapters.stubs import StubBusinessState, stub_business_bindings
+from tiramisu_agents.builtin.fictional_agent_output import FictionalAgentDecisionOutput
 from tiramisu_agents.core.ports.actions import ActionAdapter
 from tiramisu_agents.events.ingestion import ProcessBootstrap
 from tiramisu_agents.extensions import ExtensionManifest
@@ -28,6 +30,7 @@ class FictionalDeployment:
     registry: ProcessDefinitionRegistry
     definition: ProcessDefinition
     bindings: dict[str, ActionAdapter]
+    agent_decision_output_type: type[BaseModel]
 
     def trigger_rules(self) -> dict[str, ProcessBootstrap]:
         bootstrap = ProcessBootstrap(
@@ -76,4 +79,5 @@ def load_fictional_deployment(*, state: StubBusinessState | None = None) -> Fict
         registry=registry,
         definition=definition,
         bindings=bindings,
+        agent_decision_output_type=FictionalAgentDecisionOutput,
     )

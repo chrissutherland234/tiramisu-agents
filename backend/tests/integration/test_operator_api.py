@@ -3,6 +3,7 @@
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -43,6 +44,10 @@ pytestmark = pytest.mark.skipif(
     os.getenv("TIRAMISU_RUN_DB_TESTS") != "1",
     reason="requires the migrated PostgreSQL integration database",
 )
+
+
+def _settings(**values: object) -> Settings:
+    return Settings(**cast(Any, {"_env_file": None, **values}))
 
 
 async def _delete_tenant_data(
@@ -125,7 +130,7 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
         ),
     )
     app = create_app(
-        settings=Settings(environment="production"),
+        settings=_settings(environment="production"),
         session_factory=runtime_factory,
     )
 

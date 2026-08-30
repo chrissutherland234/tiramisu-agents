@@ -23,6 +23,36 @@ action_permissions:
   propose_booking: require_approval
   request_payment: require_approval
   create_calendar_event: allow
+action_guidance:
+  send_message: >
+    The parameters JSON must use the exact keys recipient and body. recipient must be a nonblank
+    email address and body must be a nonblank, customer-ready plain-text message. Never use an
+    empty string, whitespace, or a placeholder for either field.
+  find_available_slots: >
+    Use a positive integer days parameter describing the search horizon.
+  propose_booking: >
+    Use nonblank customer_id and slot parameters. The slot must come from an authoritative
+    availability result in the current process state.
+  request_payment: >
+    Use a nonblank booking_reference for a confirmed booking, a positive integer amount_minor,
+    and a nonblank ISO currency code.
+  create_calendar_event: >
+    Use a nonblank booking_reference, the confirmed booking's starts_at value, and a nonblank
+    customer-facing title. Only propose this after completed payment is authoritative.
+decision_guidance:
+  - >
+    When a customer claim states a date and time that exactly matches an authoritative
+    booking.available_slots value, treat it as the customer's slot selection. Do not ask the
+    customer to select a slot again.
+  - >
+    In this fictional process, customer.email is the customer_id for propose_booking. A stated
+    60-minute appointment is sufficient service detail for the fictional booking adapter.
+  - >
+    Once an exact selected slot is available, propose_booking for that exact authoritative slot;
+    its configured human approval remains required before execution.
+  - >
+    An operator request_revision instruction is binding for the next proposal. When it identifies
+    a permitted next action, do not return a no-op waiting decision instead.
 allowed_wake_events:
   - customer.email_received
   - booking.confirmed

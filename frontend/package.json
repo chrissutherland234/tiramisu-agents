@@ -8,6 +8,7 @@
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run --environment jsdom",
+    "test:operator-smoke": "playwright test --config playwright.config.ts",
     "typecheck": "vue-tsc -b"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^24.5.2",
     "@vitejs/plugin-vue": "^6.0.1",
     "@vue/test-utils": "^2.5.0",

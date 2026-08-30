@@ -11,13 +11,31 @@ from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.security.credential_service import TenantCredentialService
 from tiramisu_agents.security.credentials import CredentialScope
 from tiramisu_agents.security.tenancy import TenantSafetyService
+from tiramisu_agents.security.tenant_provisioning import (
+    LOCAL_DEVELOPMENT_ACTOR_ID,
+    TenantProvisioningService,
+)
 
 
-def _parser() -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run trusted Tiramisu tenant control-plane operations"
     )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    create_tenant = commands.add_parser("create-tenant", help="create one tenant")
+    create_tenant.add_argument("--slug", required=True)
+    create_tenant.add_argument("--name", required=True)
+    create_tenant.add_argument(
+        "--tenant-id",
+        type=UUID,
+        help="optional tenant UUID; otherwise Tiramisu assigns one",
+    )
+
+    commands.add_parser(
+        "bootstrap-local",
+        help="create the idempotent fictional tenant used by the local demo",
+    )
 
     issue = commands.add_parser("issue-credential", help="issue and print one bearer token")
     issue.add_argument("--tenant-id", type=UUID, required=True)
@@ -58,6 +76,29 @@ async def _execute(arguments: argparse.Namespace) -> dict[str, object]:
     session_factory = create_session_factory(engine)
     try:
         async with session_factory.begin() as session:
+            if arguments.command == "create-tenant":
+                tenant = await TenantProvisioningService().create(
+                    session,
+                    tenant_id=arguments.tenant_id,
+                    slug=arguments.slug,
+                    name=arguments.name,
+                )
+                return {
+                    "tenant_id": str(tenant.tenant_id),
+                    "slug": tenant.slug,
+                    "name": tenant.name,
+                    "created": tenant.created,
+                }
+            if arguments.command == "bootstrap-local":
+                tenant = await TenantProvisioningService().ensure_local_development_tenant(session)
+                return {
+                    "tenant_id": str(tenant.tenant_id),
+                    "actor_id": str(LOCAL_DEVELOPMENT_ACTOR_ID),
+                    "slug": tenant.slug,
+                    "name": tenant.name,
+                    "created": tenant.created,
+                    "authentication_method": "unsafe_development_headers",
+                }
             if arguments.command == "issue-credential":
                 issued = await TenantCredentialService().issue(
                     session,
@@ -103,7 +144,7 @@ async def _execute(arguments: argparse.Namespace) -> dict[str, object]:
 
 
 def run() -> None:
-    parser = _parser()
+    parser = build_parser()
     arguments = parser.parse_args()
     try:
         result = asyncio.run(_execute(arguments))

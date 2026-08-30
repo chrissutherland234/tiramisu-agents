@@ -65,6 +65,49 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
 
+  operator-console-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: tiramisu_test
+          POSTGRES_USER: tiramisu
+          POSTGRES_PASSWORD: tiramisu
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tiramisu -d tiramisu_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TIRAMISU_DATABASE_URL: postgresql+asyncpg://tiramisu_app:tiramisu_app@localhost:5432/tiramisu_test
+      TIRAMISU_MIGRATION_DATABASE_URL: postgresql+asyncpg://tiramisu:tiramisu@localhost:5432/tiramisu_test
+      PGPASSWORD: tiramisu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: uv sync --locked --all-groups
+      - run: >-
+          psql -h localhost -U tiramisu -d tiramisu_test
+          -c "CREATE ROLE tiramisu_app LOGIN PASSWORD 'tiramisu_app' NOSUPERUSER NOCREATEDB NOCREATEROLE"
+      - run: uv run alembic upgrade head
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run test:operator-smoke
+        working-directory: frontend
+
   compose:
     runs-on: ubuntu-latest
     steps:

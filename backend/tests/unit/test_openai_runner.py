@@ -20,6 +20,7 @@ from tiramisu_agents.core.contracts.processes import (
     AgentTurnInput,
     ProcessSnapshot,
     ProcessStatus,
+    ReviewTurnContext,
 )
 
 
@@ -28,8 +29,6 @@ async def test_openai_runner_is_structured_proposal_only_and_bounded() -> None:
     event_id = uuid4()
     attempt_id = uuid4()
     output = AgentDecisionOutput(
-        based_on_event_ids=(str(event_id),),
-        based_on_action_attempt_ids=(str(attempt_id),),
         status=DecisionStatus.COMPLETED,
         actions=(
             ActionProposalOutput(
@@ -110,6 +109,8 @@ async def test_openai_runner_is_structured_proposal_only_and_bounded() -> None:
     assert "source-1" in cast(str, captured["prompt"])
     assert "message-123" in cast(str, captured["prompt"])
     assert "Provider support confirmed delivery." in cast(str, captured["prompt"])
+    assert '"decision_provenance"' in cast(str, captured["prompt"])
+    assert str(attempt_id) in cast(str, captured["prompt"])
 
 
 def test_openai_transport_is_a_strict_sdk_output_schema() -> None:
@@ -117,3 +118,43 @@ def test_openai_transport_is_a_strict_sdk_output_schema() -> None:
 
     assert schema.is_plain_text() is False
     assert schema.json_schema()["additionalProperties"] is False
+    assert "based_on_action_attempt_ids" not in schema.json_schema()["properties"]
+
+
+def test_agent_output_uses_only_the_trusted_review_turn_provenance() -> None:
+    tenant_id = uuid4()
+    review_command_id = uuid4()
+    turn_input = AgentTurnInput(
+        turn_id=uuid4(),
+        process=ProcessSnapshot(
+            tenant_id=tenant_id,
+            process_instance_id=uuid4(),
+            process_type="enquiry_to_booking",
+            process_definition_version="1",
+            status=ProcessStatus.REVIEW,
+        ),
+        events=(),
+        reviews=(
+            ReviewTurnContext(
+                command_id=review_command_id,
+                command_type="reject",
+                review_thread_id=uuid4(),
+                action_request_id=uuid4(),
+                proposal_revision=1,
+                actor_id=uuid4(),
+                message="Do not send this message.",
+                action_type="send_message",
+                proposal_parameters={"recipient": "customer@example.test", "body": "Hello"},
+                proposal_payload_hash="a" * 64,
+                proposal_rationale="Follow up on the enquiry.",
+            ),
+        ),
+        instructions="Handle the review decision.",
+    )
+
+    decision = AgentDecisionOutput(status=DecisionStatus.COMPLETED).to_agent_decision(turn_input)
+
+    assert decision.based_on_event_ids == ()
+    assert decision.based_on_review_command_ids == (review_command_id,)
+    assert decision.based_on_action_attempt_ids == ()
+    assert decision.based_on_timer_ids == ()

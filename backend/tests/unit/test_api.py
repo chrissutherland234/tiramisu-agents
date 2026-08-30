@@ -1,12 +1,23 @@
+from typing import Any, cast
+
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from tiramisu_agents.api.main import app, create_app
+from tiramisu_agents.api.main import create_app
 from tiramisu_agents.api.settings import Settings
+
+
+def _settings(**values: object) -> Settings:
+    return Settings(**cast(Any, {"_env_file": None, **values}))
+
+
+def _app(*, settings: Settings | None = None) -> FastAPI:
+    return create_app(settings=settings or _settings())
 
 
 @pytest.mark.asyncio
 async def test_health_endpoint() -> None:
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=_app())
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/health")
 
@@ -21,7 +32,7 @@ async def test_health_endpoint() -> None:
 
 @pytest.mark.asyncio
 async def test_event_ingestion_is_disabled_without_development_opt_in() -> None:
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=_app())
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             "/v1/events",
@@ -39,7 +50,7 @@ async def test_event_ingestion_is_disabled_without_development_opt_in() -> None:
 
 @pytest.mark.asyncio
 async def test_naive_event_timestamp_is_request_validation_error() -> None:
-    custom_app = create_app(settings=Settings(allow_unsafe_development_tenant_header=True))
+    custom_app = create_app(settings=_settings(allow_unsafe_development_tenant_header=True))
     transport = ASGITransport(app=custom_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
@@ -58,7 +69,7 @@ async def test_naive_event_timestamp_is_request_validation_error() -> None:
 
 @pytest.mark.asyncio
 async def test_health_uses_constructed_app_settings() -> None:
-    custom_app = create_app(settings=Settings(environment="test"))
+    custom_app = create_app(settings=_settings(environment="test"))
     transport = ASGITransport(app=custom_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/health")
@@ -69,7 +80,7 @@ async def test_health_uses_constructed_app_settings() -> None:
 
 @pytest.mark.asyncio
 async def test_operator_api_is_disabled_without_development_opt_in() -> None:
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=_app())
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(
             "/v1/processes",
@@ -84,7 +95,7 @@ async def test_operator_api_is_disabled_without_development_opt_in() -> None:
 
 @pytest.mark.asyncio
 async def test_operator_api_requires_both_unsafe_identity_headers() -> None:
-    custom_app = create_app(settings=Settings(allow_unsafe_development_tenant_header=True))
+    custom_app = create_app(settings=_settings(allow_unsafe_development_tenant_header=True))
     transport = ASGITransport(app=custom_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(

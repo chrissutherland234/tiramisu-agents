@@ -2,6 +2,7 @@
 
 import os
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,6 +22,10 @@ pytestmark = pytest.mark.skipif(
     os.getenv("TIRAMISU_RUN_DB_TESTS") != "1",
     reason="requires the migrated PostgreSQL integration database",
 )
+
+
+def _settings(**values: object) -> Settings:
+    return Settings(**cast(Any, {"_env_file": None, **values}))
 
 
 def _database_urls() -> tuple[str, str]:
@@ -66,7 +71,7 @@ async def test_production_credentials_enforce_tenant_scope_lifecycle_and_suspens
     credential_service = TenantCredentialService()
     safety_service = TenantSafetyService()
     app = create_app(
-        settings=Settings(
+        settings=_settings(
             environment="production",
             database_url=runtime_url,
             migration_database_url=migration_url,

@@ -1,7 +1,8 @@
 import { fileURLToPath, URL } from "node:url";
 
 import vue from "@vitejs/plugin-vue";
-import { defineConfig, loadEnv } from "vite";
+import { loadEnv } from "vite";
+import { defineConfig } from "vitest/config";
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -24,6 +25,9 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/api/, ""),
         },
       },
+    },
+    test: {
+      exclude: ["e2e/**", "node_modules/**", "dist/**"],
     },
   };
 });

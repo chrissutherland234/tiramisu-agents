@@ -8,6 +8,7 @@ from tiramisu_agents.adapters.stubs import (
     StubBookingAdapter,
     StubBusinessState,
     StubCalendarAdapter,
+    StubMessagingAdapter,
     StubOutboundMessage,
     StubPaymentAdapter,
 )
@@ -85,6 +86,21 @@ async def test_calendar_requires_confirmation_and_completed_payment() -> None:
 
     assert retried == created
     assert len(state.calendar_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_messaging_requires_the_canonical_recipient_parameter() -> None:
+    state = StubBusinessState(now=datetime(2026, 9, 1, 9, tzinfo=UTC))
+    adapter = StubMessagingAdapter(state)
+
+    with pytest.raises(DefinitiveActionFailure, match="recipient must be a nonblank string"):
+        await adapter.execute(
+            ProviderActionRequest(
+                action_type="send_message",
+                parameters={"recipient_email": "customer@example.test", "body": "Hello"},
+                idempotency_key="e" * 64,
+            )
+        )
 
 
 def test_stub_provider_events_preserve_process_and_business_references() -> None:

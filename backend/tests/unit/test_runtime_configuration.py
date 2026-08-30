@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from tiramisu_agents.api.events import fictional_trigger_rules
 from tiramisu_agents.api.settings import Settings
 from tiramisu_agents.builtin import load_fictional_deployment
+from tiramisu_agents.builtin.fictional_agent_output import FictionalAgentDecisionOutput
 from tiramisu_agents.extensions import ExtensionManifest
 from tiramisu_agents.processes.definitions import ProcessDefinition
 from tiramisu_agents.temporal import worker as worker_module
@@ -43,6 +44,7 @@ def test_fictional_deployment_is_cwd_independent_and_consistent(
 
     assert deployment.definition.id == "enquiry_to_booking"
     assert set(deployment.bindings) == set(deployment.definition.allowed_actions)
+    assert deployment.agent_decision_output_type is FictionalAgentDecisionOutput
     assert trigger.process_type == deployment.definition.id
     assert trigger.definition_version == deployment.definition.version
     assert trigger.extension_manifest_hash == deployment.manifest.fingerprint()

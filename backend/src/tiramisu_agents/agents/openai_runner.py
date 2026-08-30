@@ -3,7 +3,6 @@
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, cast
-from uuid import UUID
 
 from agents import Agent, OpenAIProvider, RunConfig, Runner
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,6 +20,10 @@ from tiramisu_agents.core.contracts.processes import AgentTurnInput
 class AgentsSDKResult(Protocol):
     @property
     def final_output(self) -> Any: ...
+
+
+class AgentDecisionOutputContract(Protocol):
+    def to_agent_decision(self, turn_input: AgentTurnInput) -> AgentDecision: ...
 
 
 AgentsSDKExecutor = Callable[[Agent[None], str, int, RunConfig], Awaitable[AgentsSDKResult]]
@@ -55,25 +58,20 @@ class AgentDecisionOutput(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    based_on_event_ids: tuple[str, ...]
-    based_on_review_command_ids: tuple[str, ...] = ()
-    based_on_action_attempt_ids: tuple[str, ...] = ()
-    based_on_timer_ids: tuple[str, ...] = ()
     status: DecisionStatus
     actions: tuple[ActionProposalOutput, ...] = ()
     wake_conditions: tuple[WakeCondition, ...] = ()
     memory_update: MemoryUpdate = Field(default_factory=MemoryUpdate)
 
-    def to_agent_decision(self) -> AgentDecision:
+    def to_agent_decision(self, turn_input: AgentTurnInput) -> AgentDecision:
+        """Attach turn provenance from trusted inputs, never model output."""
         return AgentDecision(
-            based_on_event_ids=tuple(UUID(value) for value in self.based_on_event_ids),
-            based_on_review_command_ids=tuple(
-                UUID(value) for value in self.based_on_review_command_ids
-            ),
+            based_on_event_ids=tuple(event.event_id for event in turn_input.events),
+            based_on_review_command_ids=tuple(review.command_id for review in turn_input.reviews),
             based_on_action_attempt_ids=tuple(
-                UUID(value) for value in self.based_on_action_attempt_ids
+                action_result.attempt_id for action_result in turn_input.action_results
             ),
-            based_on_timer_ids=self.based_on_timer_ids,
+            based_on_timer_ids=turn_input.timer_ids,
             status=self.status,
             actions=tuple(action.to_action_proposal() for action in self.actions),
             wake_conditions=self.wake_conditions,
@@ -103,6 +101,7 @@ class OpenAIAgentsTurnRunner:
         max_turns: int = 1,
         tracing_disabled: bool = True,
         executor: AgentsSDKExecutor = _run_agents_sdk,
+        output_type: type[BaseModel] = AgentDecisionOutput,
     ) -> None:
         if not model.strip():
             raise ValueError("an explicit OpenAI model is required")
@@ -113,6 +112,7 @@ class OpenAIAgentsTurnRunner:
         self._max_turns = max_turns
         self._tracing_disabled = tracing_disabled
         self._executor = executor
+        self._output_type = output_type
 
     async def run_turn(self, turn_input: AgentTurnInput) -> AgentDecision:
         agent = Agent[None](
@@ -123,7 +123,7 @@ class OpenAIAgentsTurnRunner:
                 f"{turn_input.instructions}"
             ),
             model=self._model,
-            output_type=AgentDecisionOutput,
+            output_type=self._output_type,
             tools=[],
             handoffs=[],
         )
@@ -139,8 +139,8 @@ class OpenAIAgentsTurnRunner:
             self._max_turns,
             run_config,
         )
-        output = AgentDecisionOutput.model_validate(result.final_output)
-        return output.to_agent_decision()
+        output = self._output_type.model_validate(result.final_output)
+        return cast(AgentDecisionOutputContract, output).to_agent_decision(turn_input)
 
     @staticmethod
     def _render_prompt(turn_input: AgentTurnInput) -> str:
@@ -153,9 +153,19 @@ class OpenAIAgentsTurnRunner:
                 action_result.model_dump(mode="json") for action_result in turn_input.action_results
             ],
             "timer_ids": turn_input.timer_ids,
+            "decision_provenance": {
+                "event_ids": [str(event.event_id) for event in turn_input.events],
+                "review_command_ids": [str(review.command_id) for review in turn_input.reviews],
+                "action_attempt_ids": [
+                    str(action_result.attempt_id) for action_result in turn_input.action_results
+                ],
+                "timer_ids": list(turn_input.timer_ids),
+            },
         }
         return (
-            "Review this bounded process snapshot and its newly received events. "
-            "Return the next AgentDecision.\n"
+            "Review this bounded process snapshot and return the next AgentDecision. "
+            "Tiramisu, not you, assigns the decision's based_on_* provenance fields from "
+            "decision_provenance. In memory_update, cite only IDs from that current-turn "
+            "provenance; never cite historical IDs from the process snapshot.\n"
             f"{json.dumps(payload, sort_keys=True, separators=(',', ':'))}"
         )

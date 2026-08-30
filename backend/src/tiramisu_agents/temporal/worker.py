@@ -72,6 +72,7 @@ async def serve(tenant_ids: tuple[UUID, ...], *, settings: Settings | None = Non
             OpenAIAgentsTurnRunner(
                 model=settings.openai_model,
                 api_key=settings.openai_api_key.get_secret_value(),
+                output_type=deployment.agent_decision_output_type,
             ),
         )
         gateway_activities = ActionGatewayActivities(session_factory, registry)
