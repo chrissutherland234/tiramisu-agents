@@ -64,6 +64,12 @@ decision_guidance:
   - >
     Once an approved booking proposal returns booking.status confirmed, request the configured
     fictional payment immediately; do not wait for another customer email.
+  - >
+    Whenever you propose one or more actions, return status active, never completed. Return
+    status completed only on a later turn with no actions and no wake conditions, after
+    authoritative action results show that every required action, including create_calendar_event,
+    has succeeded and no open commitments remain. An action proposed in the current turn has not
+    executed yet.
 allowed_wake_events:
   - customer.email_received
   - payment.completed

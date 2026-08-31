@@ -20,6 +20,9 @@ def test_example_process_definition_compiles_to_policy_and_instructions() -> Non
     assert "nonblank" in definition.action_guidance["send_message"]
     assert "Action parameter guidance" in definition.compile_instructions()
     assert "treat it as the customer's slot selection" in definition.compile_instructions()
+    assert "Whenever you propose one or more actions, return status active" in (
+        definition.compile_instructions()
+    )
     assert len(definition.fingerprint()) == 64
     assert "Never claim" in definition.compile_instructions()
 
