@@ -39,7 +39,7 @@ async def test_booking_rejects_a_slot_the_provider_did_not_offer() -> None:
 
 
 @pytest.mark.asyncio
-async def test_calendar_requires_confirmation_and_completed_payment() -> None:
+async def test_calendar_requires_completed_payment() -> None:
     state = StubBusinessState(now=datetime(2026, 9, 1, 9, tzinfo=UTC))
     booking_adapter = StubBookingAdapter(state)
     payment_adapter = StubPaymentAdapter(state)
@@ -52,6 +52,8 @@ async def test_calendar_requires_confirmation_and_completed_payment() -> None:
             idempotency_key="b" * 64,
         )
     )
+    assert booking.result["status"] == "confirmed"
+    assert state.bookings[booking.provider_reference].status == "confirmed"
     calendar_request = ProviderActionRequest(
         action_type="create_calendar_event",
         parameters={
@@ -62,10 +64,7 @@ async def test_calendar_requires_confirmation_and_completed_payment() -> None:
         idempotency_key="c" * 64,
     )
 
-    with pytest.raises(DefinitiveActionFailure, match="confirmed booking"):
-        await calendar_adapter.execute(calendar_request)
-
-    state.bookings[booking.provider_reference].status = "confirmed"
+    assert state.bookings[booking.provider_reference].status == "confirmed"
     payment = await payment_adapter.execute(
         ProviderActionRequest(
             action_type="request_payment",
@@ -80,12 +79,26 @@ async def test_calendar_requires_confirmation_and_completed_payment() -> None:
     with pytest.raises(DefinitiveActionFailure, match="completed payment"):
         await calendar_adapter.execute(calendar_request)
 
-    state.payment_requests[payment.provider_reference].status = "completed"
+    payment_event = state.complete_payment(
+        tenant_id=uuid4(),
+        process_instance_id=uuid4(),
+        payment_reference=payment.provider_reference,
+    )
+    state.payment_requests[payment.provider_reference].status = "pending"
+    state.apply_event(payment_event)
     created = await calendar_adapter.execute(calendar_request)
     retried = await calendar_adapter.execute(calendar_request)
 
     assert retried == created
     assert len(state.calendar_events) == 1
+
+    reloaded_state = StubBusinessState(now=datetime(2026, 9, 1, 9, tzinfo=UTC))
+    reloaded_state.apply_event(
+        payment_event,
+        authoritative_facts={"booking.slot": slot, "customer.email": "customer-1"},
+    )
+    reloaded = await StubCalendarAdapter(reloaded_state).execute(calendar_request)
+    assert reloaded.result["created"] is True
 
 
 @pytest.mark.asyncio

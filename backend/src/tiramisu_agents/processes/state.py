@@ -140,9 +140,15 @@ class ProcessStateService:
             ]
             process.memory_summary_source_timer_ids = list(memory.summary_source_timer_ids)
         process.open_commitments = list(memory.open_commitments)
-        process.current_wake_conditions = [
-            wake.model_dump(mode="json") for wake in decision.wake_conditions
-        ]
+        wake_conditions = list(decision.wake_conditions)
+        if await self._has_pending_approval(session, tenant_id, process_instance_id) and not any(
+            isinstance(wake, HumanWakeCondition) for wake in wake_conditions
+        ):
+            # Approval is represented by the persisted approval-gated action.
+            # Project it as a human wake for operators instead of requiring the
+            # model to invent a separate, potentially orphaned wake condition.
+            wake_conditions.append(HumanWakeCondition(interaction="approval"))
+        process.current_wake_conditions = [wake.model_dump(mode="json") for wake in wake_conditions]
         process.authoritative_facts = authoritative
         process.customer_claims = claims
         process.fact_provenance = provenance
@@ -183,6 +189,19 @@ class ProcessStateService:
         session.add(revision)
         await session.flush()
         return self._result(revision)
+
+    @staticmethod
+    async def _has_pending_approval(
+        session: AsyncSession, tenant_id: UUID, process_instance_id: UUID
+    ) -> bool:
+        pending_action_id = await session.scalar(
+            select(ActionRequest.id).where(
+                ActionRequest.tenant_id == tenant_id,
+                ActionRequest.process_instance_id == process_instance_id,
+                ActionRequest.status == ActionRequestStatus.PENDING_APPROVAL.value,
+            )
+        )
+        return pending_action_id is not None
 
     @staticmethod
     async def _load_events(

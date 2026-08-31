@@ -1,7 +1,9 @@
 """Temporal Activity boundary for nondeterministic agent execution."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -10,6 +12,7 @@ from temporalio.exceptions import ApplicationError
 
 from tiramisu_agents.agents.context import PostgresAgentContextLoader
 from tiramisu_agents.agents.runner import AgentTurnRunner
+from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.security.tenancy import (
@@ -46,11 +49,13 @@ class AgentTurnActivities:
         runner: AgentTurnRunner,
         *,
         context_loader: PostgresAgentContextLoader | None = None,
+        event_observer: Callable[[CanonicalEvent, dict[str, Any]], None] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._registry = registry
         self._runner = runner
         self._context_loader = context_loader or PostgresAgentContextLoader()
+        self._event_observer = event_observer
 
     @activity.defn(name="run_agent_turn")
     async def run_agent_turn(self, command: AgentTurnCommand) -> AgentTurnActivityResult:
@@ -79,6 +84,9 @@ class AgentTurnActivities:
             # Recheck as close as possible to the nondeterministic model call.
             async with self._session_factory.begin() as session:
                 await require_active_tenant(session, tenant_id)
+            if self._event_observer is not None:
+                for event in turn_input.events:
+                    self._event_observer(event, turn_input.process.authoritative_facts)
         except (TenantUnavailable, TenantSuspended) as error:
             raise ApplicationError(
                 "tenant safety control blocks agent execution",

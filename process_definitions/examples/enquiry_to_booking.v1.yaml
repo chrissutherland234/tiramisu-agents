@@ -32,10 +32,11 @@ action_guidance:
     Use a positive integer days parameter describing the search horizon.
   propose_booking: >
     Use nonblank customer_id and slot parameters. The slot must come from an authoritative
-    availability result in the current process state.
+    availability result in the current process state. In this fictional adapter, an approved
+    proposal is immediately confirmed; do not wait for a separate booking.confirmed event.
   request_payment: >
-    Use a nonblank booking_reference for a confirmed booking, a positive integer amount_minor,
-    and a nonblank ISO currency code.
+    Use the confirmed booking_reference and the configured fictional demo amount of 12500 minor
+    units in NZD.
   create_calendar_event: >
     Use a nonblank booking_reference, the confirmed booking's starts_at value, and a nonblank
     customer-facing title. Only propose this after completed payment is authoritative.
@@ -53,9 +54,18 @@ decision_guidance:
   - >
     An operator request_revision instruction is binding for the next proposal. When it identifies
     a permitted next action, do not return a no-op waiting decision instead.
+  - >
+    Human approval is represented by proposing an action with its configured approval policy; do
+    not emit a standalone human approval wake condition.
+  - >
+    Every waiting decision must include at least one allowed wake condition. After offering
+    availability, wait for customer.email_received; after requesting payment, wait for
+    payment.completed or payment.failed.
+  - >
+    Once an approved booking proposal returns booking.status confirmed, request the configured
+    fictional payment immediately; do not wait for another customer email.
 allowed_wake_events:
   - customer.email_received
-  - booking.confirmed
   - payment.completed
   - payment.failed
 limits:

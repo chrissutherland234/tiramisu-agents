@@ -1,5 +1,6 @@
 """Stateful deterministic business-provider adapters for reference journeys."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -104,6 +105,60 @@ class StubBusinessState:
         if duration < timedelta(0):
             raise ValueError("stub business clock cannot move backwards")
         self.now += duration
+
+    def apply_event(
+        self,
+        event: CanonicalEvent,
+        *,
+        authoritative_facts: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Reconcile provider-local state from an inbound fictional event.
+
+        Local API event injection updates the durable process projection, while
+        the worker's fictional providers keep a small in-memory state of their
+        own. Applying provider completion events here keeps those two views in
+        sync before the next action is executed.
+        """
+        if event.event_type != "payment.completed":
+            return
+        facts = {observation.key: observation.value for observation in event.facts}
+        payment_reference = facts.get("payment.reference") or event.payload.get("payment_reference")
+        if not isinstance(payment_reference, str):
+            return
+        payment = self.payment_requests.get(payment_reference)
+        if payment is not None:
+            payment.status = "completed"
+            return
+
+        payload = event.payload
+        booking_reference = payload.get("booking_reference")
+        amount_minor = facts.get("payment.amount_minor")
+        currency = facts.get("payment.currency")
+        if not (
+            isinstance(booking_reference, str)
+            and isinstance(amount_minor, int)
+            and not isinstance(amount_minor, bool)
+            and isinstance(currency, str)
+        ):
+            return
+
+        known_facts = authoritative_facts or {}
+        booking_slot = known_facts.get("booking.slot")
+        customer_id = known_facts.get("customer.email", booking_reference)
+        if booking_reference not in self.bookings and isinstance(booking_slot, str):
+            self.bookings[booking_reference] = StubBooking(
+                reference=booking_reference,
+                customer_id=(customer_id if isinstance(customer_id, str) else booking_reference),
+                slot=booking_slot,
+                status="confirmed",
+            )
+        self.payment_requests[payment_reference] = StubPaymentRequest(
+            reference=payment_reference,
+            booking_reference=booking_reference,
+            amount_minor=amount_minor,
+            currency=currency.upper(),
+            status="completed",
+        )
 
     def customer_reply(
         self,
@@ -335,10 +390,11 @@ class StubBookingAdapter(_StatefulActionAdapter):
             reference=reference,
             customer_id=customer_id,
             slot=slot,
+            status="confirmed",
         )
         return ProviderActionResult(
             provider_reference=reference,
-            result={"booking_reference": reference, "status": "proposed", "slot": slot},
+            result={"booking_reference": reference, "status": "confirmed", "slot": slot},
             facts=(
                 FactObservation(
                     key="booking.reference",
@@ -348,7 +404,7 @@ class StubBookingAdapter(_StatefulActionAdapter):
                 FactObservation(
                     key="booking.status",
                     kind=FactKind.AUTHORITATIVE,
-                    value="proposed",
+                    value="confirmed",
                 ),
                 FactObservation(
                     key="booking.slot",

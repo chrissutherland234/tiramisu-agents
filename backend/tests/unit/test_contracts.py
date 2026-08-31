@@ -8,6 +8,7 @@ from tiramisu_agents.core.contracts.decisions import (
     AgentDecision,
     DecisionStatus,
     EventWakeCondition,
+    HumanWakeCondition,
     MemoryUpdate,
     TimerWakeCondition,
 )
@@ -85,6 +86,44 @@ def test_policy_accepts_an_allowed_bounded_decision() -> None:
     )
 
     assert validate_decision(decision, policy, workflow_now=now) is decision
+
+
+def test_policy_rejects_orphaned_human_wake_condition() -> None:
+    decision = AgentDecision(
+        based_on_event_ids=(),
+        status=DecisionStatus.WAITING,
+        wake_conditions=(HumanWakeCondition(interaction="approval"),),
+    )
+    policy = DecisionPolicy(
+        allowed_action_types=frozenset({"send_message"}),
+        allowed_wake_event_types=frozenset(),
+        human_wake_action_types=frozenset({"send_message"}),
+    )
+
+    with pytest.raises(DecisionRejected, match="requires an action"):
+        validate_decision(decision, policy, workflow_now=datetime.now(UTC))
+
+
+def test_policy_accepts_human_wake_for_an_approval_action() -> None:
+    decision = AgentDecision(
+        based_on_event_ids=(),
+        status=DecisionStatus.WAITING,
+        actions=(
+            ActionProposal(
+                logical_action_key="send_follow_up",
+                action_type="send_message",
+                rationale="The customer needs a follow-up.",
+            ),
+        ),
+        wake_conditions=(HumanWakeCondition(interaction="approval"),),
+    )
+    policy = DecisionPolicy(
+        allowed_action_types=frozenset({"send_message"}),
+        allowed_wake_event_types=frozenset(),
+        human_wake_action_types=frozenset({"send_message"}),
+    )
+
+    assert validate_decision(decision, policy, workflow_now=datetime.now(UTC)) is decision
 
 
 def test_policy_rejects_an_unregistered_action() -> None:

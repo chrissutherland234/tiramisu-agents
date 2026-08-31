@@ -7,6 +7,7 @@ from uuid import UUID
 from tiramisu_agents.core.contracts.decisions import (
     AgentDecision,
     EventWakeCondition,
+    HumanWakeCondition,
     TimerWakeCondition,
 )
 
@@ -19,6 +20,7 @@ class DecisionRejected(ValueError):
 class DecisionPolicy:
     allowed_action_types: frozenset[str]
     allowed_wake_event_types: frozenset[str]
+    human_wake_action_types: frozenset[str] = frozenset()
     max_actions_per_turn: int = 5
     max_timer_horizon: timedelta = timedelta(days=30)
 
@@ -27,6 +29,8 @@ class DecisionPolicy:
             raise ValueError("max_actions_per_turn cannot be negative")
         if self.max_timer_horizon <= timedelta(0):
             raise ValueError("max_timer_horizon must be positive")
+        if not self.human_wake_action_types.issubset(self.allowed_action_types):
+            raise ValueError("human wake action types must be allowed action types")
 
 
 def validate_decision(
@@ -89,6 +93,13 @@ def validate_decision(
         if action.logical_action_key in action_keys:
             raise DecisionRejected(f"duplicate logical action key: {action.logical_action_key}")
         action_keys.add(action.logical_action_key)
+
+    if any(isinstance(wake, HumanWakeCondition) for wake in decision.wake_conditions) and not any(
+        action.action_type in policy.human_wake_action_types for action in decision.actions
+    ):
+        raise DecisionRejected(
+            "human wake condition requires an action that requires human approval"
+        )
 
     for wake in decision.wake_conditions:
         if isinstance(wake, EventWakeCondition):

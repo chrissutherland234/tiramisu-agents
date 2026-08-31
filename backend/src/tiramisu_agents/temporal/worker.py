@@ -74,6 +74,9 @@ async def serve(tenant_ids: tuple[UUID, ...], *, settings: Settings | None = Non
                 api_key=settings.openai_api_key.get_secret_value(),
                 output_type=deployment.agent_decision_output_type,
             ),
+            event_observer=lambda event, facts: deployment.state.apply_event(
+                event, authoritative_facts=facts
+            ),
         )
         gateway_activities = ActionGatewayActivities(session_factory, registry)
         state_activities = ProcessStateActivities(session_factory, registry)

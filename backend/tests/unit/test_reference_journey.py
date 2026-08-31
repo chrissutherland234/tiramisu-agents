@@ -56,7 +56,6 @@ async def test_reference_journey_runs_every_primitive_to_completion() -> None:
     assert result.event_types == (
         "enquiry.created",
         "customer.email_received",
-        "booking.confirmed",
         "payment.completed",
     )
     assert result.action_types == (

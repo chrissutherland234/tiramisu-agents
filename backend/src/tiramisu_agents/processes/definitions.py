@@ -133,6 +133,11 @@ class ProcessDefinition(BaseModel):
         return DecisionPolicy(
             allowed_action_types=frozenset(self.allowed_actions),
             allowed_wake_event_types=frozenset(self.allowed_wake_events),
+            human_wake_action_types=frozenset(
+                action_type
+                for action_type, permission in self.action_permissions.items()
+                if permission is PermissionOutcome.REQUIRE_APPROVAL
+            ),
             max_actions_per_turn=self.limits.max_actions_per_turn,
             max_timer_horizon=timedelta(days=self.limits.maximum_timer_horizon_days),
         )

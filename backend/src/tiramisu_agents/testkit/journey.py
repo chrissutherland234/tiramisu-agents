@@ -245,13 +245,6 @@ async def run_enquiry_to_completion(
     if booking.result is None:
         raise RuntimeError("approved booking did not execute")
     booking_reference = booking.result.provider_reference
-    driver.record_event(
-        driver.state.confirm_booking(
-            tenant_id=driver.tenant_id,
-            process_instance_id=driver.process_instance_id,
-            booking_reference=booking_reference,
-        )
-    )
 
     payment = await driver.submit_action(
         ActionProposal(

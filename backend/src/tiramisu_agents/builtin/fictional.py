@@ -31,6 +31,7 @@ class FictionalDeployment:
     definition: ProcessDefinition
     bindings: dict[str, ActionAdapter]
     agent_decision_output_type: type[BaseModel]
+    state: StubBusinessState
 
     def trigger_rules(self) -> dict[str, ProcessBootstrap]:
         bootstrap = ProcessBootstrap(
@@ -52,7 +53,8 @@ def load_fictional_deployment(*, state: StubBusinessState | None = None) -> Fict
     manifest = ExtensionManifest.model_validate(manifest_document)
     definition = ProcessDefinition.model_validate(definition_document)
     registry = ProcessDefinitionRegistry([definition])
-    bindings = stub_business_bindings(state or StubBusinessState())
+    provider_state = state or StubBusinessState()
+    bindings = stub_business_bindings(provider_state)
 
     try:
         compatible = Version(__version__) in SpecifierSet(manifest.tiramisu_compatibility)
@@ -80,4 +82,5 @@ def load_fictional_deployment(*, state: StubBusinessState | None = None) -> Fict
         definition=definition,
         bindings=bindings,
         agent_decision_output_type=FictionalAgentDecisionOutput,
+        state=provider_state,
     )
