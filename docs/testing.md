@@ -1,6 +1,6 @@
 # Testing strategy and gap plan
 
-Last reviewed: 2026-08-31
+Last reviewed: 2026-09-01
 
 Tiramisu's tests must prove durable business invariants across boundaries, not merely achieve line coverage. The highest-risk failures happen between PostgreSQL, Temporal, model execution, operator commands, and external providers, where no shared transaction exists.
 
@@ -8,12 +8,12 @@ Tiramisu's tests must prove durable business invariants across boundaries, not m
 
 The repository currently has:
 
-- 106 backend tests: 74 unit/contract cases, 30 PostgreSQL or Temporal integration cases, and 2 committed-history replay cases.
+- 110 backend tests: 77 unit/contract cases, 31 PostgreSQL or Temporal integration cases, and 2 committed-history replay cases.
 - 2 Vue component tests covering the operator journey/review/intervention/dead-letter surface and permission degradation.
 - 1 Playwright live-stack journey covering real event ingestion, process inspection, takeover, resume, and the delivery-operations shell.
 - CI gates for locked dependency installation, Alembic drift, Ruff, Pyright, backend tests with PostgreSQL, Python package builds, Vue unit/type/build checks, the Playwright smoke, Compose startup, PostgreSQL runtime-role access, and Temporal health.
 
-Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, and a complete scripted enquiry-to-booking journey.
+Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, pinned pack/definition compatibility before model and provider I/O, published-only triggers, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, and a complete scripted enquiry-to-booking journey.
 
 The count is not itself a release signal. Agent evaluation, provider contracts, load behavior, security automation, migration upgrade paths, and several concurrency combinations remain absent or shallow.
 
@@ -25,8 +25,7 @@ Run on every change without PostgreSQL, Temporal, OpenAI, or network access. Cov
 
 Next additions:
 
-- Reject a process when its pinned extension manifest or definition fingerprint differs from the worker composition.
-- Prevent draft or retired definitions from starting processes outside an explicit development/test mode.
+- Add the full immutable definition publication lifecycle and an explicit isolated draft simulation mode.
 - Bound event payload bytes, fact counts and values, action parameters, review context, commitments, and rendered model context.
 - Add table-driven lifecycle tests for every process status × action/review/control operation.
 - Add generated/state-machine tests for decision provenance, logical action identity, and wake-plan invariants once the core transitions are factored into a genuinely infrastructure-free kernel.
@@ -116,13 +115,12 @@ Before a public deployment:
 
 Implement these in order:
 
-1. Version/published-definition compatibility tests and the corresponding runtime fences.
-2. Full tenant-table RLS/grant audit plus migration upgrade/round-trip CI.
-3. The Temporal race matrix for timer/event, takeover, review, result, and Continue-As-New combinations.
-4. A reusable scenario specification that runs through production kernel services and Temporal, replacing duplicate happy-path logic.
-5. Live-stack Playwright coverage for review revision, dead-letter recovery, intervention, and partial scopes.
-6. The first deterministic agent-evaluation corpus and shared messaging adapter contract.
-7. Load, fault-injection, security, and provider-sandbox suites after communication safety and real integrations exist.
+1. Full tenant-table RLS/grant audit plus migration upgrade/round-trip CI.
+2. The Temporal race matrix for timer/event, takeover, review, result, and Continue-As-New combinations.
+3. A reusable scenario specification that runs through production kernel services and Temporal, replacing duplicate happy-path logic.
+4. Live-stack Playwright coverage for review revision, dead-letter recovery, intervention, and partial scopes.
+5. The first deterministic agent-evaluation corpus and shared messaging adapter contract.
+6. Load, fault-injection, security, and provider-sandbox suites after communication safety and real integrations exist.
 
 ## Definition of done for a feature
 

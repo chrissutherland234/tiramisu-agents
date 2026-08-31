@@ -10,8 +10,8 @@ from tiramisu_agents.api.events import fictional_trigger_rules
 from tiramisu_agents.api.settings import Settings
 from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.builtin.fictional_agent_output import FictionalAgentDecisionOutput
-from tiramisu_agents.extensions import ExtensionManifest
-from tiramisu_agents.processes.definitions import ProcessDefinition
+from tiramisu_agents.extensions import ClientPack, ExtensionManifest
+from tiramisu_agents.processes.definitions import DefinitionStatus, ProcessDefinition
 from tiramisu_agents.temporal import worker as worker_module
 from tiramisu_agents.temporal.worker import (
     compose_fictional_worker,
@@ -48,6 +48,43 @@ def test_fictional_deployment_is_cwd_independent_and_consistent(
     assert trigger.process_type == deployment.definition.id
     assert trigger.definition_version == deployment.definition.version
     assert trigger.extension_manifest_hash == deployment.manifest.fingerprint()
+    assert trigger.client_pack_fingerprint == deployment.fingerprint()
+    assert trigger.process_definition_fingerprint == deployment.definition.fingerprint()
+    assert len(deployment.fingerprint()) == 64
+
+
+def test_client_pack_fingerprint_covers_runtime_composition_and_only_published_triggers() -> None:
+    deployment = load_fictional_deployment()
+    equivalent = ClientPack(
+        manifest=deployment.manifest,
+        definitions=deployment.definitions,
+        bindings=dict(reversed(tuple(deployment.bindings.items()))),
+        agent_decision_output_type=deployment.agent_decision_output_type,
+        policy_ids=tuple(reversed(deployment.policy_ids)),
+    )
+    changed_definition = deployment.definition.model_copy(
+        update={"goals": (*deployment.definition.goals, "Exercise changed behavior.")}
+    )
+    changed = ClientPack(
+        manifest=deployment.manifest,
+        definitions=(changed_definition,),
+        bindings=deployment.bindings,
+        agent_decision_output_type=deployment.agent_decision_output_type,
+        policy_ids=deployment.policy_ids,
+    )
+
+    assert equivalent.fingerprint() == deployment.fingerprint()
+    assert changed.fingerprint() != deployment.fingerprint()
+
+    for status in (DefinitionStatus.DRAFT, DefinitionStatus.RETIRED):
+        disabled = ClientPack(
+            manifest=deployment.manifest,
+            definitions=(deployment.definition.model_copy(update={"status": status}),),
+            bindings=deployment.bindings,
+            agent_decision_output_type=deployment.agent_decision_output_type,
+            policy_ids=deployment.policy_ids,
+        )
+        assert disabled.trigger_rules() == {}
 
 
 def test_bundled_fictional_configuration_matches_public_example() -> None:

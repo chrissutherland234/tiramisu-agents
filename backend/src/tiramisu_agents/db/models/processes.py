@@ -37,6 +37,14 @@ class ProcessInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "late_event_policy IN ('record_only')",
             name="late_event_policy_valid",
         ),
+        CheckConstraint(
+            "client_pack_fingerprint ~ '^[0-9a-f]{64}$'",
+            name="client_pack_fingerprint_sha256",
+        ),
+        CheckConstraint(
+            "process_definition_fingerprint ~ '^[0-9a-f]{64}$'",
+            name="process_definition_fingerprint_sha256",
+        ),
         UniqueConstraint("tenant_id", "id", name="uq_process_instances_tenant_id_id"),
         UniqueConstraint("tenant_id", "workflow_id", name="uq_process_instances_tenant_workflow"),
     )
@@ -47,6 +55,8 @@ class ProcessInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     process_type: Mapped[str] = mapped_column(String(100), nullable=False)
     definition_version: Mapped[str] = mapped_column(String(64), nullable=False)
     extension_manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    client_pack_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    process_definition_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), server_default="active", nullable=False)
     workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
     current_run_id: Mapped[str | None] = mapped_column(String(255))

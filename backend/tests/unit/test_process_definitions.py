@@ -12,8 +12,8 @@ def test_example_process_definition_compiles_to_policy_and_instructions() -> Non
     registry = ProcessDefinitionRegistry.from_yaml_files([EXAMPLE_PATH])
     definition = registry.get("enquiry_to_booking", "1")
 
-    assert definition.status is DefinitionStatus.DRAFT
-    assert registry.resolve_trigger("enquiry.created") is None
+    assert definition.status is DefinitionStatus.PUBLISHED
+    assert registry.resolve_trigger("enquiry.created") == definition
     assert registry.resolve_trigger("enquiry.created", include_drafts=True) == definition
     assert definition.decision_policy().max_actions_per_turn == 3
     assert definition.action_policy().permissions["send_message"] == "require_approval"

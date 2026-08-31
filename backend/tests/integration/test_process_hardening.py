@@ -45,6 +45,7 @@ from tiramisu_agents.db.session import (
     set_tenant_context,
 )
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
+from tiramisu_agents.processes.compatibility import DeploymentCompatibility
 from tiramisu_agents.processes.control import (
     InterventionInput,
     ProcessControlInput,
@@ -67,6 +68,7 @@ class _TestContext:
     tenant_id: UUID
     process_id: UUID
     enquiry: CanonicalEvent
+    compatibility: DeploymentCompatibility
 
 
 async def _delete_tenant_data(
@@ -127,6 +129,14 @@ async def _process_context() -> AsyncGenerator[_TestContext]:
             ),
         ),
     )
+    definition = ProcessDefinitionRegistry.from_yaml_files(
+        [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
+    ).get("enquiry_to_booking", "1")
+    compatibility = DeploymentCompatibility(
+        client_pack_fingerprint="b" * 64,
+        extension_manifest_hash="a" * 64,
+        definition_fingerprints={(definition.id, definition.version): definition.fingerprint()},
+    )
     try:
         async with admin_factory.begin() as session:
             session.add(Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="Hardening"))
@@ -138,6 +148,8 @@ async def _process_context() -> AsyncGenerator[_TestContext]:
                     process_type="enquiry_to_booking",
                     definition_version="1",
                     extension_manifest_hash="a" * 64,
+                    client_pack_fingerprint="b" * 64,
+                    process_definition_fingerprint=definition.fingerprint(),
                 ),
             )
         assert result.process_instance_id is not None
@@ -147,6 +159,7 @@ async def _process_context() -> AsyncGenerator[_TestContext]:
             tenant_id=tenant_id,
             process_id=result.process_instance_id,
             enquiry=enquiry,
+            compatibility=compatibility,
         )
     finally:
         await _delete_tenant_data(admin_factory, tenant_id)
@@ -342,6 +355,7 @@ async def test_takeover_serializes_with_the_final_provider_execution_fence() -> 
         executor = ActionExecutor(
             context.runtime_factory,
             ActionAdapterRegistry({"find_available_slots": adapter}),
+            context.compatibility,
         )
         execution = asyncio.create_task(
             executor.execute(

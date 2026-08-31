@@ -27,6 +27,10 @@ from tiramisu_agents.db.models.events import EventInbox
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.reviews import ReviewMessage, ReviewThread
 from tiramisu_agents.db.session import set_tenant_context
+from tiramisu_agents.processes.compatibility import (
+    DeploymentCompatibility,
+    DeploymentCompatibilityError,
+)
 from tiramisu_agents.processes.definitions import ProcessDefinition
 
 _wake_condition_adapter: TypeAdapter[WakeCondition] = TypeAdapter(WakeCondition)
@@ -66,6 +70,7 @@ class PostgresAgentContextLoader:
         action_attempt_ids: tuple[UUID, ...] = (),
         timer_ids: tuple[str, ...] = (),
         definition: ProcessDefinition,
+        compatibility: DeploymentCompatibility,
     ) -> AgentTurnInput:
         if not event_ids and not review_command_ids and not action_attempt_ids and not timer_ids:
             raise AgentContextError("an agent turn requires at least one wake source")
@@ -94,7 +99,16 @@ class PostgresAgentContextLoader:
             process.process_type != definition.id
             or process.definition_version != definition.version
         ):
-            raise AgentContextError("process instance definition does not match the registry")
+            raise DeploymentCompatibilityError(
+                "process instance definition identity does not match the workflow command"
+            )
+        compatibility.require_process(
+            process_type=process.process_type,
+            definition_version=process.definition_version,
+            client_pack_fingerprint=process.client_pack_fingerprint,
+            extension_manifest_hash=process.extension_manifest_hash,
+            process_definition_fingerprint=process.process_definition_fingerprint,
+        )
 
         stored_events = (
             await session.scalars(

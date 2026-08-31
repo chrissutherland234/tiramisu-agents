@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.client import Client
+from temporalio.exceptions import ApplicationError
 from tiramisu_agents.actions.execution import ActionExecutionRejected, ActionExecutor
 from tiramisu_agents.actions.gateway import ActionGateway, ActionPersistenceConflict
 from tiramisu_agents.actions.reconciliation import (
@@ -43,10 +44,15 @@ from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, R
 from tiramisu_agents.db.models.tenancy import Tenant, TenantSafetyEvent
 from tiramisu_agents.db.session import create_engine, create_session_factory, set_tenant_context
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
+from tiramisu_agents.processes.compatibility import DeploymentCompatibility
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateService
 from tiramisu_agents.reviews.service import ReviewConflict, ReviewService
 from tiramisu_agents.security.tenancy import TenantSafetyService
+from tiramisu_agents.temporal.activities.action_execution import (
+    ActionExecutionActivities,
+    ExecuteActionCommand,
+)
 from tiramisu_agents.temporal.activities.action_gateway import (
     ActionGatewayActivities,
     PersistActionsCommand,
@@ -117,6 +123,11 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
     definition = ProcessDefinitionRegistry.from_yaml_files(
         [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
     ).get("enquiry_to_booking", "1")
+    compatibility = DeploymentCompatibility(
+        client_pack_fingerprint="b" * 64,
+        extension_manifest_hash="a" * 64,
+        definition_fingerprints={(definition.id, definition.version): definition.fingerprint()},
+    )
     tenant_id = uuid4()
     other_tenant_id = uuid4()
     turn_id = uuid4()
@@ -186,6 +197,8 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                     process_type=definition.id,
                     definition_version=definition.version,
                     extension_manifest_hash="a" * 64,
+                    client_pack_fingerprint="b" * 64,
+                    process_definition_fingerprint=definition.fingerprint(),
                 ),
             )
         assert ingested.process_instance_id is not None
@@ -346,7 +359,29 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                     "propose_booking": StubActionAdapter(),
                 }
             ),
+            compatibility,
         )
+        async with admin_factory.begin() as session:
+            process = await session.get(ProcessInstance, ingested.process_instance_id)
+            assert process is not None
+            process.client_pack_fingerprint = "d" * 64
+        with pytest.raises(ApplicationError) as incompatible:
+            await ActionExecutionActivities(executor).execute_action(
+                ExecuteActionCommand(
+                    tenant_id=str(tenant_id),
+                    process_instance_id=str(ingested.process_instance_id),
+                    action_request_id=str(first[1].action_request_id),
+                    revision=1,
+                )
+            )
+        assert incompatible.value.type == "DeploymentCompatibilityError"
+        assert incompatible.value.non_retryable is True
+        assert availability_adapter.requests == []
+        async with admin_factory.begin() as session:
+            process = await session.get(ProcessInstance, ingested.process_instance_id)
+            assert process is not None
+            process.client_pack_fingerprint = "b" * 64
+
         async with admin_factory.begin() as session:
             await TenantSafetyService().set_status(
                 session,
@@ -496,6 +531,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
             runtime_factory,
             ProcessDefinitionRegistry([definition]),
             result_agent,
+            compatibility=compatibility,
         ).run_agent_turn(
             AgentTurnCommand(
                 tenant_id=str(tenant_id),
@@ -593,6 +629,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
             runtime_factory,
             ProcessDefinitionRegistry([definition]),
             scripted_agent,
+            compatibility=compatibility,
         ).run_agent_turn(
             AgentTurnCommand(
                 tenant_id=str(tenant_id),

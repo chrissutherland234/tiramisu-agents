@@ -23,6 +23,7 @@ from tiramisu_agents.db.models.processes import ProcessInstance, ProcessStateRev
 from tiramisu_agents.db.models.tenancy import Tenant
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
+from tiramisu_agents.processes.compatibility import DeploymentCompatibility
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateConflict, ProcessStateService
 
@@ -105,6 +106,8 @@ async def test_process_state_projects_sourced_knowledge_and_versioned_memory() -
                     process_type="enquiry_to_booking",
                     definition_version="1",
                     extension_manifest_hash="a" * 64,
+                    client_pack_fingerprint="b" * 64,
+                    process_definition_fingerprint=definition.fingerprint(),
                 ),
             )
         assert ingested.process_instance_id is not None
@@ -182,6 +185,13 @@ async def test_process_state_projects_sourced_knowledge_and_versioned_memory() -
                 turn_id=uuid4(),
                 event_ids=(confirmation.event_id,),
                 definition=definition,
+                compatibility=DeploymentCompatibility(
+                    client_pack_fingerprint="b" * 64,
+                    extension_manifest_hash="a" * 64,
+                    definition_fingerprints={
+                        (definition.id, definition.version): definition.fingerprint()
+                    },
+                ),
             )
             revisions = (
                 await session.scalars(

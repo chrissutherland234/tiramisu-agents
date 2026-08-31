@@ -868,7 +868,7 @@ The following architecture decision records are gates for the durable kernel:
 ### Phase 2 — Durable agent kernel
 
 - [ ] Implement `AgentWorkflow`. The process mailbox now sequences bounded event, timer, review, control, and action-result turns; executes or defers proposals; persists effective lifecycle/wake outcomes and durable interventions; performs immediate lookup-only reconciliation; rolls history over at safe Continue-As-New boundaries; and exposes turn/pending-action state. Delayed reconciliation schedules and mature production failure operations remain.
-- [ ] Enforce process-pinned client-pack/manifest and definition compatibility before model or provider I/O. The manifest hash is persisted today but is not checked by worker execution; silent same-version behavior changes must fail closed.
+- [x] Enforce process-pinned client-pack/manifest and definition compatibility before model or provider I/O. Process creation now pins a canonical complete-pack fingerprint, manifest hash, and definition fingerprint; mismatches stop before external I/O and create an operator-visible intervention. Historical rows are marked unverified and fail closed pending an audited migration.
 - [x] Implement the initial deterministic process mailbox with event deduplication, replaceable event/timer wake plans, state queries, and time-skipping tests.
 - [x] Implement canonical event ingestion and source-event deduplication.
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
@@ -913,7 +913,7 @@ Recommended initial journey:
 - [x] Add immutable YAML process-definition contracts, validation, fingerprinting, trigger resolution, and deterministic policy/instruction compilation for the fictional process. Persistence and the authoring/publication lifecycle remain outstanding.
 - [ ] Add the process-definition draft, validation, evaluation, approval, publication, and retirement lifecycle.
 - [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition. Explicit `module:attribute` loading from an installed/editable package, the validated public `ClientPack` contract, a downstream editable-package example, and shared API/worker composition are complete. Persisted installation audit, runtime enable/disable, deployment-to-tenant assignment, provider credential resolution, and lifecycle controls remain.
-- [ ] Enforce published-only production process triggers and immutable definition identities. Draft execution belongs in an explicit simulation/test mode; active-instance upgrades require a separate audited migration path.
+- [x] Enforce published-only production process triggers and fingerprint-bound definition identities. Draft/retired definitions cannot install real triggers, and same-version behavior drift fails closed for active instances. An explicit draft simulation mode and audited active-instance migration remain separate work.
 - [ ] Add tenant prompt and policy configuration.
 - [ ] Add the tool and integration registry.
 - [ ] Add safe client-editable settings.
@@ -1128,12 +1128,11 @@ Status: Accepted. Recorded in ADR-011 on 2026-08-31.
 
 The initial executable milestone—fictional enquiry through booking, payment, calendar, and completion—is working through both an integration-free demonstration and the real PostgreSQL/Temporal path. The next milestone is to make that foundation safe to evolve and credible for a second client pack:
 
-1. Enforce pinned manifest/definition compatibility and published-only production triggers.
-2. Implement ADR-011's deployment identity and document tenant assignment, pack upgrade/rollback, and active-instance migration rules.
-3. Add ingress/context bounds and the missing communication safety envelope: opt-out, quiet hours, auto-responder/loop detection, rate, cost, token, and process-lifetime budgets.
-4. Implement quarantine resolution and replay with operator visibility.
-5. Refactor the scenario kit to drive production kernel services and complete the ordered gaps in [`docs/testing.md`](docs/testing.md), beginning with RLS/migration audits and Temporal races.
-6. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
+1. Implement ADR-011's deployment identity and document tenant assignment, pack upgrade/rollback, and active-instance migration rules.
+2. Add ingress/context bounds and the missing communication safety envelope: opt-out, quiet hours, auto-responder/loop detection, rate, cost, token, and process-lifetime budgets.
+3. Implement quarantine resolution and replay with operator visibility.
+4. Refactor the scenario kit to drive production kernel services and complete the ordered gaps in [`docs/testing.md`](docs/testing.md), beginning with RLS/migration audits and Temporal races.
+5. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
 
 D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), and D-012 (data/compliance requirements) remain explicit gates before production integrations. D-014 is now accepted as ADR-011. A GitHub-issue triage/Codex handoff pack is a useful later validation of that boundary, after version fencing is enforced.
 

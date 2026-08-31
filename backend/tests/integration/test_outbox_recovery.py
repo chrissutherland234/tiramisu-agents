@@ -152,6 +152,8 @@ async def test_dead_letter_can_be_inspected_and_idempotently_requeued() -> None:
                     process_type="enquiry_to_booking",
                     definition_version="1",
                     extension_manifest_hash="a" * 64,
+                    client_pack_fingerprint="b" * 64,
+                    process_definition_fingerprint="c" * 64,
                 ),
             )
         assert ingested.outbox_message_id is not None

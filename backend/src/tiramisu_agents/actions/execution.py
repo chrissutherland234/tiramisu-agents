@@ -33,6 +33,7 @@ from tiramisu_agents.db.models.actions import (
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.reviews import ApprovalDecision
 from tiramisu_agents.db.session import set_tenant_context
+from tiramisu_agents.processes.compatibility import DeploymentCompatibility
 from tiramisu_agents.security.tenancy import (
     TenantSuspended,
     TenantUnavailable,
@@ -76,9 +77,11 @@ class ActionExecutor:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         adapters: ActionAdapterRegistry,
+        compatibility: DeploymentCompatibility,
     ) -> None:
         self._session_factory = session_factory
         self._adapters = adapters
+        self._compatibility = compatibility
 
     async def execute(
         self,
@@ -90,13 +93,14 @@ class ActionExecutor:
     ) -> ActionExecutionResult:
         async with self._session_factory.begin() as session:
             await self._require_execution_enabled(session, tenant_id)
-            request, action_revision, _, _ = await self._load_authorized_action(
+            request, action_revision, _, process = await self._load_authorized_action(
                 session,
                 tenant_id=tenant_id,
                 process_instance_id=process_instance_id,
                 action_request_id=action_request_id,
                 revision=revision,
             )
+            self._require_compatible_process(process)
             adapter = self._adapters.resolve(request.action_type)
             key = execution_idempotency_key(
                 tenant_id,
@@ -170,6 +174,7 @@ class ActionExecutor:
                 action_request_id=action_request_id,
                 revision=revision,
             )
+            self._require_compatible_process(process)
             provider_request = ProviderActionRequest(
                 action_type=request.action_type,
                 parameters=action_revision.parameters,
@@ -228,13 +233,14 @@ class ActionExecutor:
 
         async with self._session_factory.begin() as session:
             await set_tenant_context(session, tenant_id)
-            request, action_revision, _, _ = await self._load_authorized_action(
+            request, action_revision, _, process = await self._load_authorized_action(
                 session,
                 tenant_id=tenant_id,
                 process_instance_id=process_instance_id,
                 action_request_id=action_request_id,
                 revision=revision,
             )
+            self._require_compatible_process(process)
             adapter = self._adapters.resolve(request.action_type)
             key = execution_idempotency_key(
                 tenant_id,
@@ -276,6 +282,15 @@ class ActionExecutor:
                 "provider lookup could not establish the execution outcome",
             )
         return await self._record_success(tenant_id, action_request_id, key, recovered)
+
+    def _require_compatible_process(self, process: ProcessInstance) -> None:
+        self._compatibility.require_process(
+            process_type=process.process_type,
+            definition_version=process.definition_version,
+            client_pack_fingerprint=process.client_pack_fingerprint,
+            extension_manifest_hash=process.extension_manifest_hash,
+            process_definition_fingerprint=process.process_definition_fingerprint,
+        )
 
     async def _load_authorized_action(
         self,

@@ -98,6 +98,7 @@ async def serve(
                 api_key=settings.openai_api_key.get_secret_value(),
                 output_type=deployment.agent_decision_output_type,
             ),
+            compatibility=deployment.compatibility,
             authorized_tenant_ids=authorized_tenant_ids,
         )
         gateway_activities = ActionGatewayActivities(
@@ -114,6 +115,7 @@ async def serve(
             ActionExecutor(
                 session_factory,
                 ActionAdapterRegistry(deployment.bindings),
+                deployment.compatibility,
             ),
             authorized_tenant_ids=authorized_tenant_ids,
         )

@@ -377,6 +377,7 @@ async def test_full_scripted_journey_survives_worker_restarts() -> None:
                     runtime_factory,
                     fresh_deployment.registry,
                     runner,
+                    compatibility=fresh_deployment.compatibility,
                     context_loader=PostgresAgentContextLoader(),
                     authorized_tenant_ids=authorized,
                 )
@@ -394,6 +395,7 @@ async def test_full_scripted_journey_survives_worker_restarts() -> None:
                     ActionExecutor(
                         runtime_factory,
                         ActionAdapterRegistry(fresh_deployment.bindings),
+                        fresh_deployment.compatibility,
                     ),
                     authorized_tenant_ids=authorized,
                 )

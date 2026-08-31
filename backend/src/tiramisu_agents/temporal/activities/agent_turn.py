@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -14,6 +15,11 @@ from tiramisu_agents.agents.context import PostgresAgentContextLoader
 from tiramisu_agents.agents.runner import AgentTurnRunner
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
+from tiramisu_agents.db.models.processes import ProcessInstance
+from tiramisu_agents.processes.compatibility import (
+    DeploymentCompatibility,
+    DeploymentCompatibilityError,
+)
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.security.tenancy import (
     TenantNotAuthorized,
@@ -50,6 +56,7 @@ class AgentTurnActivities:
         registry: ProcessDefinitionRegistry,
         runner: AgentTurnRunner,
         *,
+        compatibility: DeploymentCompatibility,
         context_loader: PostgresAgentContextLoader | None = None,
         event_observer: Callable[[CanonicalEvent, dict[str, Any]], None] | None = None,
         authorized_tenant_ids: frozenset[UUID] | None = None,
@@ -57,6 +64,7 @@ class AgentTurnActivities:
         self._session_factory = session_factory
         self._registry = registry
         self._runner = runner
+        self._compatibility = compatibility
         self._context_loader = context_loader or PostgresAgentContextLoader()
         self._event_observer = event_observer
         self._authorized_tenant_ids = authorized_tenant_ids
@@ -72,9 +80,16 @@ class AgentTurnActivities:
                 type="TenantNotAuthorized",
                 non_retryable=True,
             ) from error
-        definition = self._registry.get(
-            command.process_definition_id, command.process_definition_version
-        )
+        try:
+            definition = self._registry.get(
+                command.process_definition_id, command.process_definition_version
+            )
+        except LookupError as error:
+            raise ApplicationError(
+                "process definition is not present in the deployed client pack",
+                type="DeploymentCompatibilityError",
+                non_retryable=True,
+            ) from error
         try:
             async with self._session_factory.begin() as session:
                 await require_active_tenant(session, tenant_id)
@@ -92,13 +107,34 @@ class AgentTurnActivities:
                     ),
                     timer_ids=command.timer_ids,
                     definition=definition,
+                    compatibility=self._compatibility,
                 )
             # Recheck as close as possible to the nondeterministic model call.
             async with self._session_factory.begin() as session:
                 await require_active_tenant(session, tenant_id)
+                process = await session.scalar(
+                    select(ProcessInstance).where(
+                        ProcessInstance.id == UUID(command.process_instance_id)
+                    )
+                )
+                if process is None:
+                    raise DeploymentCompatibilityError("process instance is unavailable")
+                self._compatibility.require_process(
+                    process_type=process.process_type,
+                    definition_version=process.definition_version,
+                    client_pack_fingerprint=process.client_pack_fingerprint,
+                    extension_manifest_hash=process.extension_manifest_hash,
+                    process_definition_fingerprint=process.process_definition_fingerprint,
+                )
             if self._event_observer is not None:
                 for event in turn_input.events:
                     self._event_observer(event, turn_input.process.authoritative_facts)
+        except DeploymentCompatibilityError as error:
+            raise ApplicationError(
+                str(error),
+                type="DeploymentCompatibilityError",
+                non_retryable=True,
+            ) from error
         except (TenantUnavailable, TenantSuspended) as error:
             raise ApplicationError(
                 "tenant safety control blocks agent execution",

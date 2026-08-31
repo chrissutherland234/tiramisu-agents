@@ -483,6 +483,106 @@ async def test_failed_turn_enters_intervention_and_operator_retry_replays_same_s
 
 
 @pytest.mark.asyncio
+async def test_provider_compatibility_failure_enters_intervention_without_being_swallowed() -> None:
+    task_queue = f"provider-compatibility-test-{uuid4()}"
+    action_request_id = str(uuid4())
+    intervention_commands: list[dict[str, Any]] = []
+    intervention_recorded = asyncio.Event()
+
+    @activity.defn(name="run_agent_turn")
+    async def run_agent_turn(command: dict[str, Any]) -> dict[str, str]:
+        return {
+            "decision_json": json.dumps(
+                {
+                    "decision_id": str(uuid4()),
+                    "based_on_event_ids": command["event_ids"],
+                    "based_on_review_command_ids": [],
+                    "based_on_action_attempt_ids": [],
+                    "based_on_timer_ids": [],
+                    "status": "active",
+                    "actions": [],
+                    "wake_conditions": [],
+                    "memory_update": {},
+                }
+            )
+        }
+
+    @activity.defn(name="persist_agent_actions")
+    async def persist_agent_actions(_command: dict[str, Any]) -> dict[str, str]:
+        return {
+            "actions_json": json.dumps(
+                [
+                    {
+                        "action_request_id": action_request_id,
+                        "revision": 1,
+                        "outcome": "allow",
+                        "status": "allowed",
+                    }
+                ]
+            )
+        }
+
+    @activity.defn(name="execute_action")
+    async def execute_action(_command: dict[str, Any]) -> dict[str, str]:
+        raise ApplicationError(
+            "process client pack does not match worker",
+            type="DeploymentCompatibilityError",
+            non_retryable=True,
+        )
+
+    @activity.defn(name="record_process_intervention")
+    async def record_process_intervention(command: dict[str, Any]) -> None:
+        intervention_commands.append(command)
+        intervention_recorded.set()
+
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as environment,
+        Worker(
+            environment.client,
+            task_queue=task_queue,
+            workflows=[ProcessMailboxWorkflow],
+            activities=[
+                run_agent_turn,
+                persist_agent_actions,
+                persist_process_state,
+                execute_action,
+                record_process_intervention,
+            ],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            ProcessMailboxWorkflow.run,
+            MailboxInput(
+                tenant_id="tenant-1",
+                process_instance_id="process-1",
+                process_definition_id="example",
+                process_definition_version="1",
+            ),
+            id=f"provider-compatibility-mailbox-{uuid4()}",
+            task_queue=task_queue,
+        )
+        event = MailboxEvent(event_id=str(uuid4()), event_type="enquiry.created")
+        await handle.signal(ProcessMailboxWorkflow.receive_event, event)
+        await asyncio.wait_for(intervention_recorded.wait(), timeout=2)
+
+        state = await handle.query(ProcessMailboxWorkflow.state)
+        for _ in range(100):
+            if not state.turn_in_progress and state.wake_plan is not None:
+                break
+            await asyncio.sleep(0.01)
+            state = await handle.query(ProcessMailboxWorkflow.state)
+
+        assert state.wake_plan is not None
+        assert state.wake_plan.human_interactions == ("operator",)
+        assert state.pending_action_request_ids == (action_request_id,)
+        assert intervention_commands[0]["error_type"] == "DeploymentCompatibilityError"
+        assert state.execution_records[-1].error is not None
+
+        await handle.signal(ProcessMailboxWorkflow.close)
+        await handle.result()
+
+
+@pytest.mark.asyncio
 async def test_unknown_continuation_schema_fails_closed() -> None:
     task_queue = f"continuation-schema-test-{uuid4()}"
     async with (

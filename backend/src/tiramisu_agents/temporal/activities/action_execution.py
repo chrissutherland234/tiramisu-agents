@@ -8,6 +8,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from tiramisu_agents.actions.execution import ActionExecutionRejected, ActionExecutor
+from tiramisu_agents.processes.compatibility import DeploymentCompatibilityError
 from tiramisu_agents.security.tenancy import TenantNotAuthorized, require_authorized_tenant
 
 
@@ -53,7 +54,12 @@ class ActionExecutionActivities:
                 action_request_id=UUID(command.action_request_id),
                 revision=command.revision,
             )
-        except (ActionExecutionRejected, TenantNotAuthorized, LookupError) as error:
+        except (
+            ActionExecutionRejected,
+            DeploymentCompatibilityError,
+            TenantNotAuthorized,
+            LookupError,
+        ) as error:
             raise ApplicationError(
                 str(error), type=type(error).__name__, non_retryable=True
             ) from error

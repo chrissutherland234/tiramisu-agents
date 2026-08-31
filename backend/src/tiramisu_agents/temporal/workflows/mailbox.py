@@ -994,6 +994,10 @@ class ProcessMailboxWorkflow:
                             error=str(reconciliation_error),
                         )
                     )
+                    if _is_activity_error_type(
+                        reconciliation_error, "DeploymentCompatibilityError"
+                    ):
+                        raise
             if result["status"] in {"succeeded", "failed"}:
                 self._remove_pending_action(action_request_id)
             return result
@@ -1006,6 +1010,8 @@ class ProcessMailboxWorkflow:
                     error=str(error),
                 )
             )
+            if _is_activity_error_type(error, "DeploymentCompatibilityError"):
+                raise
             return None
 
     def _add_pending_action(self, action_request_id: str) -> None:

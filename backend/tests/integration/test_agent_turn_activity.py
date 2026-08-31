@@ -21,6 +21,7 @@ from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.tenancy import Tenant, TenantSafetyEvent
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
+from tiramisu_agents.processes.compatibility import DeploymentCompatibility
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.security.tenancy import TenantSafetyService
 from tiramisu_agents.temporal.activities.agent_turn import AgentTurnActivities, AgentTurnCommand
@@ -65,6 +66,12 @@ async def test_activity_loads_context_and_rejects_out_of_policy_decision() -> No
     registry = ProcessDefinitionRegistry.from_yaml_files(
         [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
     )
+    definition = registry.get("enquiry_to_booking", "1")
+    compatibility = DeploymentCompatibility(
+        client_pack_fingerprint="b" * 64,
+        extension_manifest_hash="a" * 64,
+        definition_fingerprints={(definition.id, definition.version): definition.fingerprint()},
+    )
     tenant_id = uuid4()
     event = CanonicalEvent(
         tenant_id=tenant_id,
@@ -97,7 +104,12 @@ async def test_activity_loads_context_and_rejects_out_of_policy_decision() -> No
         ),
     )
     scripted_agent = ScriptedAgent([valid_decision, invalid_decision])
-    activities = AgentTurnActivities(runtime_factory, registry, scripted_agent)
+    activities = AgentTurnActivities(
+        runtime_factory,
+        registry,
+        scripted_agent,
+        compatibility=compatibility,
+    )
 
     try:
         async with admin_factory.begin() as session:
@@ -110,6 +122,8 @@ async def test_activity_loads_context_and_rejects_out_of_policy_decision() -> No
                     process_type="enquiry_to_booking",
                     definition_version="1",
                     extension_manifest_hash="a" * 64,
+                    client_pack_fingerprint="b" * 64,
+                    process_definition_fingerprint=definition.fingerprint(),
                 ),
             )
         assert ingested.process_instance_id is not None
@@ -135,6 +149,21 @@ async def test_activity_loads_context_and_rejects_out_of_policy_decision() -> No
             await activities.run_agent_turn(command)
         assert raised.value.non_retryable is True
         assert raised.value.type == "DecisionRejected"
+
+        async with admin_factory.begin() as session:
+            process = await session.get(ProcessInstance, ingested.process_instance_id)
+            assert process is not None
+            process.client_pack_fingerprint = "d" * 64
+        prior_turn_count = len(scripted_agent.turn_inputs)
+        with pytest.raises(ApplicationError) as incompatible:
+            await activities.run_agent_turn(command)
+        assert incompatible.value.non_retryable is True
+        assert incompatible.value.type == "DeploymentCompatibilityError"
+        assert len(scripted_agent.turn_inputs) == prior_turn_count
+        async with admin_factory.begin() as session:
+            process = await session.get(ProcessInstance, ingested.process_instance_id)
+            assert process is not None
+            process.client_pack_fingerprint = "b" * 64
 
         async with admin_factory.begin() as session:
             await TenantSafetyService().set_status(

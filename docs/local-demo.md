@@ -68,6 +68,12 @@ uv run alembic upgrade head
 uv run tiramisu-admin bootstrap-local
 ```
 
+Migration `20260901_12` intentionally marks processes created by older builds as
+having an unverified client-pack composition. Those existing processes will wait
+for operator intervention instead of making model or provider calls. For the
+fictional demo, ingest a new enquiry after upgrading; do not manually copy the
+new fingerprints onto historical rows.
+
 The final command is repeatable and prints the identity used by the Vue console:
 
 ```json

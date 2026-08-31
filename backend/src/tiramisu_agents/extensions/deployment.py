@@ -1,7 +1,9 @@
 """Stable startup-time contract for a separately installed client pack."""
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from hashlib import sha256
 from types import MappingProxyType
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
@@ -12,7 +14,8 @@ from tiramisu_agents import __version__
 from tiramisu_agents.core.ports.actions import ActionAdapter
 from tiramisu_agents.events.ingestion import ProcessBootstrap
 from tiramisu_agents.extensions.manifest import ExtensionManifest
-from tiramisu_agents.processes.definitions import ProcessDefinition
+from tiramisu_agents.processes.compatibility import DeploymentCompatibility
+from tiramisu_agents.processes.definitions import DefinitionStatus, ProcessDefinition
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 
 
@@ -35,6 +38,8 @@ class ClientPack:
     agent_decision_output_type: type[BaseModel]
     policy_ids: tuple[str, ...]
     registry: ProcessDefinitionRegistry = field(init=False, repr=False)
+    compatibility: DeploymentCompatibility = field(init=False, repr=False)
+    _fingerprint: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         definitions = tuple(self.definitions)
@@ -82,11 +87,54 @@ class ClientPack:
             raise ClientPackError("policy registrations do not cover the manifest")
         if not callable(getattr(self.agent_decision_output_type, "to_agent_decision", None)):
             raise ClientPackError("agent decision output type must implement to_agent_decision")
+
+        canonical_composition = {
+            "schema_version": 1,
+            "manifest": self.manifest.model_dump(mode="json"),
+            "definitions": [
+                definition.model_dump(mode="json")
+                for definition in sorted(definitions, key=lambda item: (item.id, item.version))
+            ],
+            "agent_decision_output": {
+                "type": (
+                    f"{self.agent_decision_output_type.__module__}."
+                    f"{self.agent_decision_output_type.__qualname__}"
+                ),
+                "json_schema": self.agent_decision_output_type.model_json_schema(),
+            },
+            "policy_ids": sorted(policy_ids),
+            "action_bindings": {
+                action_type: {
+                    "adapter_id": adapter.id,
+                    "guarantees_idempotency": adapter.guarantees_idempotency,
+                }
+                for action_type, adapter in sorted(bindings.items())
+            },
+        }
+        canonical_json = json.dumps(
+            canonical_composition,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        fingerprint = sha256(canonical_json.encode()).hexdigest()
+        object.__setattr__(self, "_fingerprint", fingerprint)
+        object.__setattr__(
+            self,
+            "compatibility",
+            DeploymentCompatibility(
+                client_pack_fingerprint=fingerprint,
+                extension_manifest_hash=self.manifest.fingerprint(),
+                definition_fingerprints={
+                    (definition.id, definition.version): definition.fingerprint()
+                    for definition in definitions
+                },
+            ),
+        )
         registry = ProcessDefinitionRegistry(definitions)
         # Resolve every trigger now so ambiguous configuration fails before API
         # traffic or worker polling begins.
         for event_type in self.trigger_rules():
-            registry.resolve_trigger(event_type, include_drafts=True)
+            registry.resolve_trigger(event_type)
         object.__setattr__(self, "registry", registry)
 
     @property
@@ -96,13 +144,22 @@ class ClientPack:
             raise ClientPackError("client pack contains more than one process definition")
         return self.definitions[0]
 
+    def fingerprint(self) -> str:
+        """Return the deterministic identity of the complete runtime composition."""
+
+        return self._fingerprint
+
     def trigger_rules(self) -> dict[str, ProcessBootstrap]:
         rules: dict[str, ProcessBootstrap] = {}
         for definition in self.definitions:
+            if definition.status is not DefinitionStatus.PUBLISHED:
+                continue
             bootstrap = ProcessBootstrap(
                 process_type=definition.id,
                 definition_version=definition.version,
                 extension_manifest_hash=self.manifest.fingerprint(),
+                client_pack_fingerprint=self.fingerprint(),
+                process_definition_fingerprint=definition.fingerprint(),
             )
             for event_type in definition.trigger_events:
                 if event_type in rules:

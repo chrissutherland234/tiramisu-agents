@@ -118,6 +118,8 @@ async def test_ingestion_deduplicates_and_quarantines_unmatched_events() -> None
                     process_type="enquiry_to_booking",
                     definition_version="1",
                     extension_manifest_hash="a" * 64,
+                    client_pack_fingerprint="b" * 64,
+                    process_definition_fingerprint="c" * 64,
                 ),
             )
         assert created.created is True
@@ -287,6 +289,8 @@ async def test_concurrent_trigger_delivery_creates_one_process() -> None:
         process_type="enquiry_to_booking",
         definition_version="1",
         extension_manifest_hash="a" * 64,
+        client_pack_fingerprint="b" * 64,
+        process_definition_fingerprint="c" * 64,
     )
 
     async def ingest(event: CanonicalEvent) -> IngestionResult:
@@ -357,6 +361,8 @@ async def test_expired_dispatcher_cannot_overwrite_newer_publish() -> None:
                     process_type="enquiry_to_booking",
                     definition_version="1",
                     extension_manifest_hash="a" * 64,
+                    client_pack_fingerprint="b" * 64,
+                    process_definition_fingerprint="c" * 64,
                 ),
             )
 
@@ -433,6 +439,8 @@ async def test_outbox_signal_with_start_is_safe_to_redeliver() -> None:
                     process_type="enquiry_to_booking",
                     definition_version="1",
                     extension_manifest_hash="a" * 64,
+                    client_pack_fingerprint="b" * 64,
+                    process_definition_fingerprint="c" * 64,
                 ),
             )
             workflow_id = await session.scalar(

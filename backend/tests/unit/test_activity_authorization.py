@@ -10,6 +10,7 @@ from temporalio.exceptions import ApplicationError
 from tiramisu_agents.actions.execution import ActionExecutor
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
 from tiramisu_agents.db.session import create_engine, create_session_factory
+from tiramisu_agents.processes.compatibility import DeploymentCompatibility
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.temporal.activities.action_execution import (
     ActionExecutionActivities,
@@ -45,6 +46,12 @@ async def test_all_tenant_bearing_activities_reject_unassigned_tenant_before_io(
     registry = ProcessDefinitionRegistry.from_yaml_files(
         [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
     )
+    definition = registry.get("enquiry_to_booking", "1")
+    compatibility = DeploymentCompatibility(
+        client_pack_fingerprint="b" * 64,
+        extension_manifest_hash="a" * 64,
+        definition_fingerprints={(definition.id, definition.version): definition.fingerprint()},
+    )
     unauthorized_tenant = uuid4()
     authorized = frozenset({uuid4()})
     process_id = uuid4()
@@ -53,6 +60,7 @@ async def test_all_tenant_bearing_activities_reject_unassigned_tenant_before_io(
         session_factory,
         registry,
         ScriptedAgent([]),
+        compatibility=compatibility,
         authorized_tenant_ids=authorized,
     )
     gateway = ActionGatewayActivities(
@@ -66,7 +74,7 @@ async def test_all_tenant_bearing_activities_reject_unassigned_tenant_before_io(
         authorized_tenant_ids=authorized,
     )
     execution = ActionExecutionActivities(
-        ActionExecutor(session_factory, ActionAdapterRegistry({})),
+        ActionExecutor(session_factory, ActionAdapterRegistry({}), compatibility),
         authorized_tenant_ids=authorized,
     )
 

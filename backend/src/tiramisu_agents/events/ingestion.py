@@ -22,6 +22,8 @@ class ProcessBootstrap:
     process_type: str
     definition_version: str
     extension_manifest_hash: str
+    client_pack_fingerprint: str
+    process_definition_fingerprint: str
     late_event_policy: str = "record_only"
 
 
@@ -240,6 +242,8 @@ class EventIngestionService:
                 process_type=bootstrap.process_type,
                 definition_version=bootstrap.definition_version,
                 extension_manifest_hash=bootstrap.extension_manifest_hash,
+                client_pack_fingerprint=bootstrap.client_pack_fingerprint,
+                process_definition_fingerprint=bootstrap.process_definition_fingerprint,
                 status="active",
                 workflow_id=f"tenant/{tenant_id}/process/{process_id}",
                 late_event_policy=bootstrap.late_event_policy,

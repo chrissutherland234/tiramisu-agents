@@ -202,6 +202,8 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
                     process_type=definition.id,
                     definition_version=definition.version,
                     extension_manifest_hash="a" * 64,
+                    client_pack_fingerprint="b" * 64,
+                    process_definition_fingerprint=definition.fingerprint(),
                 ),
             )
         assert ingested.process_instance_id is not None

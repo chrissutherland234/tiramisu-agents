@@ -1,6 +1,6 @@
 id: enquiry_to_booking
 version: "1"
-status: draft
+status: published
 trigger_events:
   - enquiry.created
 goals:
