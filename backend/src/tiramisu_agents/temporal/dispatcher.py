@@ -18,6 +18,7 @@ from tiramisu_agents.db.models.tenancy import Tenant
 from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.temporal.workflows.mailbox import (
     MailboxActionResolution,
+    MailboxControl,
     MailboxEvent,
     MailboxInput,
     MailboxReview,
@@ -84,11 +85,11 @@ class TemporalOutboxDispatcher:
         try:
             if message.message_type == "temporal.process_event":
                 signal_name = "receive_event"
-                signal_argument: MailboxEvent | MailboxReview | MailboxActionResolution = (
-                    MailboxEvent(
-                        event_id=str(message.payload["event_id"]),
-                        event_type=str(message.payload["event_type"]),
-                    )
+                signal_argument: (
+                    MailboxEvent | MailboxReview | MailboxActionResolution | MailboxControl
+                ) = MailboxEvent(
+                    event_id=str(message.payload["event_id"]),
+                    event_type=str(message.payload["event_type"]),
                 )
             elif message.message_type == "temporal.process_review":
                 signal_name = "receive_review"
@@ -106,6 +107,20 @@ class TemporalOutboxDispatcher:
                     action_request_id=str(message.payload["action_request_id"]),
                     action_attempt_id=str(message.payload["action_attempt_id"]),
                     status=str(message.payload["status"]),
+                )
+            elif message.message_type == "temporal.process_control":
+                signal_name = "receive_control"
+                signal_argument = MailboxControl(
+                    command_id=str(message.payload["command_id"]),
+                    command_type=str(message.payload["command_type"]),
+                    event_ids=tuple(str(value) for value in message.payload.get("event_ids", ())),
+                    review_command_ids=tuple(
+                        str(value) for value in message.payload.get("review_command_ids", ())
+                    ),
+                    action_attempt_ids=tuple(
+                        str(value) for value in message.payload.get("action_attempt_ids", ())
+                    ),
+                    timer_ids=tuple(str(value) for value in message.payload.get("timer_ids", ())),
                 )
             else:
                 raise RuntimeError(f"unsupported Temporal message type: {message.message_type}")
@@ -174,6 +189,7 @@ class TemporalOutboxDispatcher:
                         "temporal.process_event",
                         "temporal.process_review",
                         "temporal.action_resolution",
+                        "temporal.process_control",
                     )
                 ),
                 OutboxMessage.available_at <= now,

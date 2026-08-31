@@ -98,6 +98,62 @@ async def test_mailbox_deduplicates_events_and_wakes_for_events_and_timers() -> 
 
 
 @pytest.mark.asyncio
+async def test_mailbox_closes_completed_decision_with_stale_wake() -> None:
+    task_queue = f"terminal-test-{uuid4()}"
+
+    @activity.defn(name="run_agent_turn")
+    async def run_agent_turn(_command: dict[str, Any]) -> dict[str, str]:
+        return {
+            "decision_json": json.dumps(
+                {
+                    "decision_id": str(uuid4()),
+                    "based_on_event_ids": [],
+                    "based_on_review_command_ids": [],
+                    "based_on_action_attempt_ids": [],
+                    "based_on_timer_ids": [],
+                    "status": "completed",
+                    "actions": [],
+                    "wake_conditions": [{"type": "event", "event_type": "payment.completed"}],
+                    "memory_update": {},
+                }
+            )
+        }
+
+    @activity.defn(name="persist_agent_actions")
+    async def persist_agent_actions(_command: dict[str, Any]) -> dict[str, str]:
+        return {"actions_json": "[]"}
+
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as environment,
+        Worker(
+            environment.client,
+            task_queue=task_queue,
+            workflows=[ProcessMailboxWorkflow],
+            activities=[run_agent_turn, persist_agent_actions, persist_process_state],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            ProcessMailboxWorkflow.run,
+            MailboxInput(
+                tenant_id="tenant-1",
+                process_instance_id="process-1",
+                process_definition_id="example",
+                process_definition_version="1",
+            ),
+            id=f"terminal-mailbox-{uuid4()}",
+            task_queue=task_queue,
+        )
+        await handle.signal(
+            ProcessMailboxWorkflow.receive_event,
+            MailboxEvent(event_id=str(uuid4()), event_type="enquiry.created"),
+        )
+
+        result = await handle.result()
+
+    assert result.closed is True
+
+
+@pytest.mark.asyncio
 async def test_mailbox_recovers_buffered_events_and_wait_after_worker_restart() -> None:
     task_queue = f"restart-test-{uuid4()}"
     workflow_id = f"restarted-mailbox-{uuid4()}"
@@ -689,7 +745,8 @@ async def test_mailbox_runs_result_turn_after_approved_action_executes() -> None
                 break
             await asyncio.sleep(0.01)
         assert state.pending_action_request_ids == (action_request_id,)
-        assert state.wake_plan is None
+        assert state.wake_plan is not None
+        assert state.wake_plan.human_interactions == ("approval",)
         assert state.execution_records == ()
 
         await handle.signal(
@@ -848,7 +905,8 @@ async def test_autonomous_result_cannot_arm_a_timer_while_an_approval_is_pending
 
         assert state.pending_action_request_ids == (approval_action_id,)
         assert state.turn_records[1].action_attempt_ids == (attempt_id,)
-        assert state.wake_plan is None
+        assert state.wake_plan is not None
+        assert state.wake_plan.human_interactions == ("approval",)
 
         await handle.signal(ProcessMailboxWorkflow.close)
         assert (await handle.result()).closed is True
@@ -984,7 +1042,8 @@ async def test_continue_as_new_preserves_mailbox_approval_deduplication_and_time
         assert state.completed_turn_count == 1
         assert state.pending_action_request_ids == (action_request_id,)
         assert state.buffered_events == (buffered_event,)
-        assert state.wake_plan is None
+        assert state.wake_plan is not None
+        assert state.wake_plan.human_interactions == ("approval",)
 
         # A delivery retried after the run boundary remains deduplicated.
         await handle.signal(ProcessMailboxWorkflow.receive_event, initial_event)

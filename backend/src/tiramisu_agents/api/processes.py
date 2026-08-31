@@ -24,9 +24,20 @@ from tiramisu_agents.db.models.actions import (
     ApprovalRequest,
 )
 from tiramisu_agents.db.models.events import EventInbox
-from tiramisu_agents.db.models.processes import ProcessInstance, ProcessStateRevision
+from tiramisu_agents.db.models.processes import (
+    ProcessControlCommand,
+    ProcessInstance,
+    ProcessIntervention,
+    ProcessStateRevision,
+)
 from tiramisu_agents.db.models.reviews import ReviewMessage, ReviewThread
 from tiramisu_agents.db.session import set_tenant_context
+from tiramisu_agents.processes.control import (
+    ProcessControlConflict,
+    ProcessControlInput,
+    ProcessControlService,
+    ProcessControlType,
+)
 from tiramisu_agents.reviews.service import ReviewConflict, ReviewService
 from tiramisu_agents.security.credentials import CredentialScope
 
@@ -126,6 +137,28 @@ class ReviewCommandResponse(BaseModel):
     thread_status: str
     approval_status: str
     action_status: str
+
+
+class ProcessControlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command_id: UUID = Field(default_factory=uuid4)
+    command_type: ProcessControlType
+    reason: str = Field(min_length=1, max_length=10_000)
+    intervention_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def require_intervention_for_retry(self) -> "ProcessControlRequest":
+        if self.command_type is ProcessControlType.RETRY and self.intervention_id is None:
+            raise ValueError("retry requires intervention_id")
+        if self.command_type is not ProcessControlType.RETRY and self.intervention_id is not None:
+            raise ValueError("intervention_id is only valid for retry")
+        return self
+
+
+class ProcessControlResponse(BaseModel):
+    command_id: UUID
+    command_type: ProcessControlType
 
 
 def _session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
@@ -281,6 +314,23 @@ async def submit_review_command(
                 status_code=status.HTTP_404_NOT_FOUND, detail="review thread not found"
             )
         thread, approval = target
+        process = await session.scalar(
+            select(ProcessInstance).where(ProcessInstance.id == thread.process_instance_id)
+        )
+        if process is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="process not found")
+        registry = request.app.state.process_registry
+        if registry is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="process definition registry is unavailable",
+            )
+        definition = registry.get(process.process_type, process.definition_version)
+        if body.command_type not in definition.review.commands:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="review command is not enabled by the process definition",
+            )
         required_scope = (
             CredentialScope.REVIEWS_COMMENT
             if body.command_type is ReviewCommandType.COMMENT
@@ -317,6 +367,40 @@ async def submit_review_command(
         thread_status=result.thread_status,
         approval_status=result.approval_status,
         action_status=result.action_status,
+    )
+
+
+@router.post(
+    "/processes/{process_instance_id}/controls",
+    response_model=ProcessControlResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def submit_process_control(
+    process_instance_id: UUID,
+    body: ProcessControlRequest,
+    request: Request,
+    identity: Annotated[OperatorIdentity, Depends(require_operator_identity)],
+) -> ProcessControlResponse:
+    identity.require_scope(CredentialScope.PROCESSES_CONTROL)
+    try:
+        async with _session_factory(request).begin() as session:
+            stored = await ProcessControlService().apply_control(
+                session,
+                ProcessControlInput(
+                    command_id=body.command_id,
+                    tenant_id=identity.tenant_id,
+                    process_instance_id=process_instance_id,
+                    actor_id=identity.actor_id,
+                    command_type=body.command_type,
+                    reason=body.reason,
+                    intervention_id=body.intervention_id,
+                ),
+            )
+    except ProcessControlConflict as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return ProcessControlResponse(
+        command_id=stored.id,
+        command_type=ProcessControlType(stored.command_type),
     )
 
 
@@ -392,6 +476,11 @@ async def _load_timeline(
                 "revision": revision.revision,
                 "parameters": revision.parameters,
                 "rationale": revision.rationale,
+                "supersedes_action_request_id": (
+                    str(action.supersedes_action_request_id)
+                    if action.supersedes_action_request_id is not None
+                    else None
+                ),
             },
         )
         for action, revision in action_rows
@@ -441,5 +530,58 @@ async def _load_timeline(
             },
         )
         for message in messages
+    )
+    interventions = (
+        await session.scalars(
+            select(ProcessIntervention)
+            .where(ProcessIntervention.process_instance_id == process_instance_id)
+            .order_by(ProcessIntervention.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    items.extend(
+        TimelineItem(
+            id=str(intervention.id),
+            kind="intervention",
+            occurred_at=intervention.created_at,
+            title=intervention.error_type,
+            status=intervention.status,
+            detail={
+                "kind": intervention.kind,
+                "error": intervention.error,
+                "agent_turn_id": str(intervention.agent_turn_id),
+                "resolved_by_command_id": (
+                    str(intervention.resolved_by_command_id)
+                    if intervention.resolved_by_command_id is not None
+                    else None
+                ),
+            },
+        )
+        for intervention in interventions
+    )
+    controls = (
+        await session.scalars(
+            select(ProcessControlCommand)
+            .where(ProcessControlCommand.process_instance_id == process_instance_id)
+            .order_by(ProcessControlCommand.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    items.extend(
+        TimelineItem(
+            id=str(control.id),
+            kind="control",
+            occurred_at=control.created_at,
+            title=control.command_type.replace("_", " ").title(),
+            status=None,
+            detail={
+                "actor_id": str(control.actor_id),
+                "reason": control.reason,
+                "intervention_id": (
+                    str(control.intervention_id) if control.intervention_id is not None else None
+                ),
+            },
+        )
+        for control in controls
     )
     return sorted(items, key=lambda item: (item.occurred_at, item.kind, item.id))[-limit:]

@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from hashlib import sha256
 from uuid import UUID
 
@@ -22,7 +23,9 @@ from tiramisu_agents.db.models.actions import (
     ActionRevision,
     ApprovalRequest,
 )
-from tiramisu_agents.db.models.reviews import ReviewThread
+from tiramisu_agents.db.models.events import EventInbox
+from tiramisu_agents.db.models.processes import ProcessInstance
+from tiramisu_agents.db.models.reviews import ReviewMessage, ReviewThread
 from tiramisu_agents.db.session import set_tenant_context
 
 
@@ -39,6 +42,14 @@ class PersistedAction:
     status: ActionRequestStatus
     approval_request_id: UUID | None
     review_thread_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationPolicy:
+    outbound_action_types: frozenset[str]
+    reply_event_types: frozenset[str]
+    max_follow_ups_without_reply: int
+    minimum_follow_up_interval: timedelta
 
 
 def action_payload_hash(action: ActionProposal) -> str:
@@ -63,10 +74,61 @@ class ActionGateway:
         process_definition_version: str,
         decision: AgentDecision,
         policy: ConfiguredActionPolicy,
+        communication_policy: CommunicationPolicy | None = None,
+        workflow_now: datetime | None = None,
     ) -> tuple[PersistedAction, ...]:
         await set_tenant_context(session, tenant_id)
-        return tuple(
-            [
+        process_status = await session.scalar(
+            select(ProcessInstance.status).where(
+                ProcessInstance.tenant_id == tenant_id,
+                ProcessInstance.id == process_instance_id,
+            )
+        )
+        if process_status is None:
+            raise ActionPersistenceConflict("process instance not found")
+        if process_status in {"paused", "completed", "cancelled", "failed"}:
+            raise ActionPersistenceConflict(
+                f"process state does not permit new actions: {process_status}"
+            )
+        revision_targets = await self._revision_targets(
+            session,
+            tenant_id=tenant_id,
+            process_instance_id=process_instance_id,
+            review_command_ids=decision.based_on_review_command_ids,
+        )
+        used_targets: set[UUID] = set()
+        persisted: list[PersistedAction] = []
+        for action in decision.actions:
+            existing_action_id = await session.scalar(
+                select(ActionRequest.id).where(
+                    ActionRequest.tenant_id == tenant_id,
+                    ActionRequest.process_instance_id == process_instance_id,
+                    ActionRequest.agent_turn_id == agent_turn_id,
+                    ActionRequest.logical_action_key == action.logical_action_key,
+                )
+            )
+            if (
+                existing_action_id is None
+                and communication_policy is not None
+                and workflow_now is not None
+                and action.action_type in communication_policy.outbound_action_types
+            ):
+                await self._enforce_communication_policy(
+                    session,
+                    tenant_id=tenant_id,
+                    process_instance_id=process_instance_id,
+                    policy=communication_policy,
+                    workflow_now=workflow_now,
+                )
+            matching_targets = tuple(
+                request_id
+                for request_id, action_type in revision_targets
+                if action_type == action.action_type and request_id not in used_targets
+            )
+            supersedes_action_request_id = matching_targets[0] if matching_targets else None
+            if supersedes_action_request_id is not None:
+                used_targets.add(supersedes_action_request_id)
+            persisted.append(
                 await self._persist_action(
                     session,
                     tenant_id=tenant_id,
@@ -81,12 +143,82 @@ class ActionGateway:
                         str(value) for value in decision.based_on_action_attempt_ids
                     ),
                     based_on_timer_ids=decision.based_on_timer_ids,
+                    supersedes_action_request_id=supersedes_action_request_id,
                     action=action,
                     policy=policy,
                 )
-                for action in decision.actions
-            ]
+            )
+        return tuple(persisted)
+
+    @staticmethod
+    async def _enforce_communication_policy(
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+        process_instance_id: UUID,
+        policy: CommunicationPolicy,
+        workflow_now: datetime,
+    ) -> None:
+        last_reply_at = await session.scalar(
+            select(EventInbox.received_at)
+            .where(
+                EventInbox.tenant_id == tenant_id,
+                EventInbox.process_instance_id == process_instance_id,
+                EventInbox.event_type.in_(policy.reply_event_types),
+            )
+            .order_by(EventInbox.received_at.desc())
+            .limit(1)
         )
+        sent_statuses = (
+            ActionRequestStatus.ALLOWED.value,
+            ActionRequestStatus.PENDING_APPROVAL.value,
+            ActionRequestStatus.APPROVED.value,
+            ActionRequestStatus.EXECUTING.value,
+            ActionRequestStatus.SUCCEEDED.value,
+            ActionRequestStatus.UNKNOWN.value,
+            ActionRequestStatus.RECONCILING.value,
+        )
+        query = select(ActionRequest).where(
+            ActionRequest.tenant_id == tenant_id,
+            ActionRequest.process_instance_id == process_instance_id,
+            ActionRequest.action_type.in_(policy.outbound_action_types),
+            ActionRequest.status.in_(sent_statuses),
+        )
+        if last_reply_at is not None:
+            query = query.where(ActionRequest.created_at > last_reply_at)
+        prior = (
+            await session.scalars(query.order_by(ActionRequest.created_at.desc(), ActionRequest.id))
+        ).all()
+        if len(prior) >= policy.max_follow_ups_without_reply:
+            raise ActionPersistenceConflict("maximum follow-ups without a reply has been reached")
+        if prior and workflow_now < prior[0].created_at + policy.minimum_follow_up_interval:
+            raise ActionPersistenceConflict("minimum follow-up interval has not elapsed")
+
+    @staticmethod
+    async def _revision_targets(
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+        process_instance_id: UUID,
+        review_command_ids: tuple[UUID, ...],
+    ) -> tuple[tuple[UUID, str], ...]:
+        if not review_command_ids:
+            return ()
+        rows = (
+            await session.execute(
+                select(ActionRequest.id, ActionRequest.action_type)
+                .join(ApprovalRequest, ApprovalRequest.action_request_id == ActionRequest.id)
+                .join(ReviewThread, ReviewThread.approval_request_id == ApprovalRequest.id)
+                .join(ReviewMessage, ReviewMessage.review_thread_id == ReviewThread.id)
+                .where(
+                    ReviewMessage.tenant_id == tenant_id,
+                    ReviewMessage.process_instance_id == process_instance_id,
+                    ReviewMessage.id.in_(review_command_ids),
+                    ReviewMessage.message_type == "request_revision",
+                )
+            )
+        ).all()
+        return tuple((row.id, row.action_type) for row in rows)
 
     async def _persist_action(
         self,
@@ -100,6 +232,7 @@ class ActionGateway:
         based_on_review_command_ids: tuple[str, ...],
         based_on_action_attempt_ids: tuple[str, ...],
         based_on_timer_ids: tuple[str, ...],
+        supersedes_action_request_id: UUID | None,
         action: ActionProposal,
         policy: ConfiguredActionPolicy,
     ) -> PersistedAction:
@@ -121,6 +254,7 @@ class ActionGateway:
                 process_definition_version=process_definition_version,
                 current_revision=1,
                 status=status.value,
+                supersedes_action_request_id=supersedes_action_request_id,
             )
             .on_conflict_do_nothing(constraint="uq_action_request_turn_logical_key")
             .returning(ActionRequest.id)
@@ -137,6 +271,8 @@ class ActionGateway:
             raise ActionPersistenceConflict("action request identity could not be reserved")
         if request.action_type != action.action_type:
             raise ActionPersistenceConflict("logical action key was reused for another action type")
+        if request.supersedes_action_request_id != supersedes_action_request_id:
+            raise ActionPersistenceConflict("action revision lineage changed during replay")
 
         payload_hash = action_payload_hash(action)
         await session.execute(

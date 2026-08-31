@@ -61,6 +61,7 @@ async def serve(tenant_ids: tuple[UUID, ...], *, settings: Settings | None = Non
         namespace=settings.temporal_namespace,
     )
     activities: list[Callable[..., Any]] = []
+    authorized_tenant_ids = frozenset(tenant_ids)
     orchestrate_agent_turns = False
     if deployment is not None:
         assert settings.openai_model is not None
@@ -74,22 +75,30 @@ async def serve(tenant_ids: tuple[UUID, ...], *, settings: Settings | None = Non
                 api_key=settings.openai_api_key.get_secret_value(),
                 output_type=deployment.agent_decision_output_type,
             ),
-            event_observer=lambda event, facts: deployment.state.apply_event(
-                event, authoritative_facts=facts
-            ),
+            authorized_tenant_ids=authorized_tenant_ids,
         )
-        gateway_activities = ActionGatewayActivities(session_factory, registry)
-        state_activities = ProcessStateActivities(session_factory, registry)
+        gateway_activities = ActionGatewayActivities(
+            session_factory,
+            registry,
+            authorized_tenant_ids=authorized_tenant_ids,
+        )
+        state_activities = ProcessStateActivities(
+            session_factory,
+            registry,
+            authorized_tenant_ids=authorized_tenant_ids,
+        )
         execution_activities = ActionExecutionActivities(
             ActionExecutor(
                 session_factory,
                 ActionAdapterRegistry(deployment.bindings),
-            )
+            ),
+            authorized_tenant_ids=authorized_tenant_ids,
         )
         activities = [
             agent_activities.run_agent_turn,
             gateway_activities.persist_agent_actions,
             state_activities.persist_process_state,
+            state_activities.record_process_intervention,
             execution_activities.execute_action,
             execution_activities.reconcile_action,
         ]

@@ -132,6 +132,7 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
     app = create_app(
         settings=_settings(environment="production"),
         session_factory=runtime_factory,
+        process_registry=ProcessDefinitionRegistry([definition]),
     )
 
     try:

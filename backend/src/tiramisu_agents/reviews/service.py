@@ -47,6 +47,25 @@ class ReviewService:
         )
         if thread is None:
             raise ReviewConflict("review thread not found")
+        process = await session.scalar(
+            select(ProcessInstance)
+            .where(
+                ProcessInstance.tenant_id == command.tenant_id,
+                ProcessInstance.id == command.process_instance_id,
+            )
+            .with_for_update()
+        )
+        if process is None:
+            raise ReviewConflict("review process not found")
+        if command.command_type is not ReviewCommandType.COMMENT and process.status in {
+            "paused",
+            "completed",
+            "cancelled",
+            "failed",
+        }:
+            raise ReviewConflict(
+                f"process state does not permit a review decision: {process.status}"
+            )
         approval = await session.scalar(
             select(ApprovalRequest)
             .where(

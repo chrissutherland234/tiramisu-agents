@@ -127,7 +127,7 @@ class FictionalAgentDecisionOutput(BaseModel):
 
     status: DecisionStatus
     actions: tuple[FictionalActionProposalOutput, ...] = ()
-    wake_conditions: tuple[FictionalWakeCondition, ...] = Field(min_length=1)
+    wake_conditions: tuple[FictionalWakeCondition, ...] = ()
     memory_update: MemoryUpdate = Field(default_factory=MemoryUpdate)
 
     @model_validator(mode="after")

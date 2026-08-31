@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
@@ -383,7 +383,13 @@ class StubBookingAdapter(_StatefulActionAdapter):
             )
         customer_id = _require_string(request.parameters, "customer_id")
         slot = _require_string(request.parameters, "slot")
-        if slot not in self.state.available_slots:
+        durable_slots = request.authoritative_facts.get("booking.available_slots")
+        available_slots = (
+            tuple(value for value in cast(list[object], durable_slots) if isinstance(value, str))
+            if isinstance(durable_slots, list)
+            else self.state.available_slots
+        )
+        if slot not in available_slots:
             raise DefinitiveActionFailure("booking slot is not available")
         reference = f"booking_{request.idempotency_key[:16]}"
         self.state.bookings[reference] = StubBooking(
@@ -423,7 +429,11 @@ class StubPaymentAdapter(_StatefulActionAdapter):
             raise DefinitiveActionFailure("payment adapter only supports request_payment")
         booking_reference = _require_string(request.parameters, "booking_reference")
         booking = self.state.bookings.get(booking_reference)
-        if booking is None or booking.status != "confirmed":
+        durable_booking_matches = (
+            request.authoritative_facts.get("booking.reference") == booking_reference
+            and request.authoritative_facts.get("booking.status") == "confirmed"
+        )
+        if (booking is None or booking.status != "confirmed") and not durable_booking_matches:
             raise DefinitiveActionFailure("payment requires a confirmed booking")
         amount_minor = _require_positive_int(request.parameters, "amount_minor")
         currency = _require_string(request.parameters, "currency").upper()
@@ -475,16 +485,23 @@ class StubCalendarAdapter(_StatefulActionAdapter):
             raise DefinitiveActionFailure("calendar adapter only supports create_calendar_event")
         booking_reference = _require_string(request.parameters, "booking_reference")
         booking = self.state.bookings.get(booking_reference)
-        if booking is None or booking.status != "confirmed":
+        durable_booking_matches = (
+            request.authoritative_facts.get("booking.reference") == booking_reference
+            and request.authoritative_facts.get("booking.status") == "confirmed"
+        )
+        if (booking is None or booking.status != "confirmed") and not durable_booking_matches:
             raise DefinitiveActionFailure("calendar event requires a confirmed booking")
         paid = any(
             payment.booking_reference == booking_reference and payment.status == "completed"
             for payment in self.state.payment_requests.values()
         )
-        if not paid:
+        if not paid and request.authoritative_facts.get("payment.status") != "completed":
             raise DefinitiveActionFailure("calendar event requires completed payment")
         starts_at = _require_string(request.parameters, "starts_at")
-        if starts_at != booking.slot:
+        booking_slot = (
+            booking.slot if booking is not None else request.authoritative_facts.get("booking.slot")
+        )
+        if starts_at != booking_slot:
             raise DefinitiveActionFailure("calendar event must use the confirmed booking slot")
         title = _require_string(request.parameters, "title")
         reference = f"calendar_{request.idempotency_key[:16]}"

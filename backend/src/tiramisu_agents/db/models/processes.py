@@ -1,10 +1,12 @@
 """Durable process instances and immutable state revisions."""
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
+    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Integer,
@@ -30,6 +32,10 @@ class ProcessInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="status_valid",
         ),
         CheckConstraint("state_version >= 0", name="state_version_nonnegative"),
+        CheckConstraint(
+            "late_event_policy IN ('record_only')",
+            name="late_event_policy_valid",
+        ),
         UniqueConstraint("tenant_id", "id", name="uq_process_instances_tenant_id_id"),
         UniqueConstraint("tenant_id", "workflow_id", name="uq_process_instances_tenant_workflow"),
     )
@@ -43,6 +49,9 @@ class ProcessInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), server_default="active", nullable=False)
     workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
     current_run_id: Mapped[str | None] = mapped_column(String(255))
+    late_event_policy: Mapped[str] = mapped_column(
+        String(32), server_default="record_only", nullable=False
+    )
     authoritative_facts: Mapped[dict[str, Any]] = mapped_column(
         JSONB, server_default=text("'{}'::jsonb"), nullable=False
     )
@@ -140,3 +149,70 @@ class ProcessStateRevision(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     based_on_review_command_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     based_on_action_attempt_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     based_on_timer_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+
+
+class ProcessIntervention(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Durable operator-visible record of an orchestration failure or safety stop."""
+
+    __tablename__ = "process_interventions"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('turn_failure', 'action_chain_limit')",
+            name="kind_valid",
+        ),
+        CheckConstraint("status IN ('open', 'resolved')", name="status_valid"),
+        ForeignKeyConstraint(
+            ["tenant_id", "process_instance_id"],
+            ["process_instances.tenant_id", "process_instances.id"],
+            name="fk_process_interventions_process_instance",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "process_instance_id",
+            "agent_turn_id",
+            name="uq_process_intervention_turn",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    process_instance_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    agent_turn_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), server_default="open", nullable=False)
+    error_type: Mapped[str] = mapped_column(String(150), nullable=False)
+    error: Mapped[str] = mapped_column(Text, nullable=False)
+    source_event_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    source_review_command_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    source_action_attempt_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    source_timer_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    resolved_by_command_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ProcessControlCommand(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Immutable, attributed operator command for one process mailbox."""
+
+    __tablename__ = "process_control_commands"
+    __table_args__ = (
+        CheckConstraint(
+            "command_type IN ('retry', 'wake', 'takeover', 'resume')",
+            name="command_type_valid",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "process_instance_id"],
+            ["process_instances.tenant_id", "process_instances.id"],
+            name="fk_process_control_commands_process_instance",
+            ondelete="RESTRICT",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    process_instance_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    actor_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    intervention_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    command_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb"), nullable=False
+    )

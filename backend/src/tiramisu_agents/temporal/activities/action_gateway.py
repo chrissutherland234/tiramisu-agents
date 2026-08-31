@@ -2,17 +2,22 @@
 
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from tiramisu_agents.actions.gateway import ActionGateway, ActionPersistenceConflict
+from tiramisu_agents.actions.gateway import (
+    ActionGateway,
+    ActionPersistenceConflict,
+    CommunicationPolicy,
+)
 from tiramisu_agents.core.contracts.decisions import AgentDecision
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
+from tiramisu_agents.security.tenancy import TenantNotAuthorized, require_authorized_tenant
 
 
 @dataclass(frozen=True)
@@ -42,13 +47,24 @@ class ActionGatewayActivities:
         registry: ProcessDefinitionRegistry,
         *,
         gateway: ActionGateway | None = None,
+        authorized_tenant_ids: frozenset[UUID] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._registry = registry
         self._gateway = gateway or ActionGateway()
+        self._authorized_tenant_ids = authorized_tenant_ids
 
     @activity.defn(name="persist_agent_actions")
     async def persist_agent_actions(self, command: PersistActionsCommand) -> PersistActionsResult:
+        tenant_id = UUID(command.tenant_id)
+        try:
+            require_authorized_tenant(tenant_id, self._authorized_tenant_ids)
+        except TenantNotAuthorized as error:
+            raise ApplicationError(
+                "worker deployment is not authorized for this tenant",
+                type="TenantNotAuthorized",
+                non_retryable=True,
+            ) from error
         definition = self._registry.get(
             command.process_definition_id, command.process_definition_version
         )
@@ -70,12 +86,25 @@ class ActionGatewayActivities:
             async with self._session_factory.begin() as session:
                 persisted = await self._gateway.persist_decision(
                     session,
-                    tenant_id=UUID(command.tenant_id),
+                    tenant_id=tenant_id,
                     process_instance_id=UUID(command.process_instance_id),
                     agent_turn_id=UUID(command.agent_turn_id),
                     process_definition_version=definition.version,
                     decision=decision,
                     policy=definition.action_policy(),
+                    communication_policy=CommunicationPolicy(
+                        outbound_action_types=frozenset(
+                            definition.communications.outbound_action_types
+                        ),
+                        reply_event_types=frozenset(definition.communications.reply_event_types),
+                        max_follow_ups_without_reply=(
+                            definition.limits.max_follow_ups_without_reply
+                        ),
+                        minimum_follow_up_interval=timedelta(
+                            hours=definition.limits.minimum_follow_up_interval_hours
+                        ),
+                    ),
+                    workflow_now=command.workflow_now,
                 )
         except (ActionPersistenceConflict, DecisionRejected) as error:
             raise ApplicationError(

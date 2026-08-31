@@ -1,7 +1,8 @@
 """Provider-neutral action execution contracts."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
+from uuid import UUID
 
 from tiramisu_agents.core.contracts.knowledge import FactObservation
 
@@ -11,6 +12,9 @@ class ProviderActionRequest:
     action_type: str
     parameters: dict[str, Any]
     idempotency_key: str
+    tenant_id: UUID | None = None
+    process_instance_id: UUID | None = None
+    authoritative_facts: dict[str, Any] = field(default_factory=lambda: {})
 
 
 @dataclass(frozen=True, slots=True)

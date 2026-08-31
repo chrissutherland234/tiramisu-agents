@@ -22,6 +22,7 @@ class ProcessBootstrap:
     process_type: str
     definition_version: str
     extension_manifest_hash: str
+    late_event_policy: str = "record_only"
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +79,20 @@ class EventIngestionService:
             process_id = await self._create_process(session, event.tenant_id, bootstrap)
             status = "matched"
             reason = "process_created_from_trigger"
+        deliver_to_workflow = True
         if process_id is not None and status == "matched":
+            process = await session.scalar(
+                select(ProcessInstance).where(ProcessInstance.id == process_id)
+            )
+            if process is None:
+                raise RuntimeError("matched process instance is unavailable")
+            if process.status in {"completed", "cancelled", "failed"}:
+                if process.late_event_policy != "record_only":
+                    raise RuntimeError(
+                        f"unsupported terminal late-event policy: {process.late_event_policy}"
+                    )
+                reason = "terminal_process_record_only"
+                deliver_to_workflow = False
             await self._persist_references(
                 session,
                 tenant_id=event.tenant_id,
@@ -110,7 +124,7 @@ class EventIngestionService:
             return existing
 
         outbox_id: UUID | None = None
-        if process_id is not None and status == "matched":
+        if process_id is not None and status == "matched" and deliver_to_workflow:
             workflow_id = await session.scalar(
                 select(ProcessInstance.workflow_id).where(ProcessInstance.id == process_id)
             )
@@ -228,6 +242,7 @@ class EventIngestionService:
                 extension_manifest_hash=bootstrap.extension_manifest_hash,
                 status="active",
                 workflow_id=f"tenant/{tenant_id}/process/{process_id}",
+                late_event_policy=bootstrap.late_event_policy,
             )
         )
         await session.flush()

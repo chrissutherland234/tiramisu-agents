@@ -16,9 +16,11 @@ from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.security.tenancy import (
+    TenantNotAuthorized,
     TenantSuspended,
     TenantUnavailable,
     require_active_tenant,
+    require_authorized_tenant,
 )
 
 
@@ -50,16 +52,26 @@ class AgentTurnActivities:
         *,
         context_loader: PostgresAgentContextLoader | None = None,
         event_observer: Callable[[CanonicalEvent, dict[str, Any]], None] | None = None,
+        authorized_tenant_ids: frozenset[UUID] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._registry = registry
         self._runner = runner
         self._context_loader = context_loader or PostgresAgentContextLoader()
         self._event_observer = event_observer
+        self._authorized_tenant_ids = authorized_tenant_ids
 
     @activity.defn(name="run_agent_turn")
     async def run_agent_turn(self, command: AgentTurnCommand) -> AgentTurnActivityResult:
         tenant_id = UUID(command.tenant_id)
+        try:
+            require_authorized_tenant(tenant_id, self._authorized_tenant_ids)
+        except TenantNotAuthorized as error:
+            raise ApplicationError(
+                "worker deployment is not authorized for this tenant",
+                type="TenantNotAuthorized",
+                non_retryable=True,
+            ) from error
         definition = self._registry.get(
             command.process_definition_id, command.process_definition_version
         )

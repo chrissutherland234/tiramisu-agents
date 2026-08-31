@@ -38,6 +38,16 @@ class ActionRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="fk_action_requests_process_instance",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "process_instance_id", "supersedes_action_request_id"],
+            [
+                "action_requests.tenant_id",
+                "action_requests.process_instance_id",
+                "action_requests.id",
+            ],
+            name="fk_action_requests_superseded_action",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("tenant_id", "process_instance_id", "id", name="uq_action_request_ref"),
         UniqueConstraint(
             "tenant_id",
@@ -55,6 +65,7 @@ class ActionRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     logical_action_key: Mapped[str] = mapped_column(String(200), nullable=False)
     action_type: Mapped[str] = mapped_column(String(100), nullable=False)
     process_definition_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    supersedes_action_request_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
     current_revision: Mapped[int] = mapped_column(Integer, server_default="1", nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
 

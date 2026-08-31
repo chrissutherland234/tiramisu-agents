@@ -17,6 +17,7 @@ class CredentialScope(StrEnum):
     REVIEWS_READ = "reviews:read"
     REVIEWS_COMMENT = "reviews:comment"
     REVIEWS_DECIDE = "reviews:decide"
+    PROCESSES_CONTROL = "processes:control"
 
 
 @dataclass(frozen=True, slots=True)

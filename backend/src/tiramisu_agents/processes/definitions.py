@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from tiramisu_agents.core.action_policy import ConfiguredActionPolicy
 from tiramisu_agents.core.contracts.actions import PermissionOutcome
 from tiramisu_agents.core.contracts.processes import ProcessStatus
+from tiramisu_agents.core.contracts.reviews import ReviewCommandType
 from tiramisu_agents.core.policy import DecisionPolicy
 
 IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -35,7 +36,31 @@ class ProcessLimits(BaseModel):
 class ReviewConfiguration(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    commands: tuple[str, ...] = ()
+    commands: tuple[ReviewCommandType, ...] = ()
+
+    @field_validator("commands")
+    @classmethod
+    def validate_supported_commands(
+        cls, values: tuple[ReviewCommandType, ...]
+    ) -> tuple[ReviewCommandType, ...]:
+        supported = {
+            ReviewCommandType.APPROVE,
+            ReviewCommandType.REJECT,
+            ReviewCommandType.REQUEST_REVISION,
+            ReviewCommandType.COMMENT,
+        }
+        if not set(values).issubset(supported):
+            raise ValueError("process definition advertises an unsupported review command")
+        if len(values) != len(set(values)):
+            raise ValueError("review commands must be unique")
+        return values
+
+
+class CommunicationConfiguration(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    outbound_action_types: tuple[str, ...] = ()
+    reply_event_types: tuple[str, ...] = ()
 
 
 class ProcessDefinition(BaseModel):
@@ -56,6 +81,7 @@ class ProcessDefinition(BaseModel):
     allowed_wake_events: tuple[str, ...] = ()
     limits: ProcessLimits
     review: ReviewConfiguration = Field(default_factory=ReviewConfiguration)
+    communications: CommunicationConfiguration = Field(default_factory=CommunicationConfiguration)
     integrations: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("id")
@@ -117,12 +143,32 @@ class ProcessDefinition(BaseModel):
             raise ValueError("goals cannot be blank")
         return values
 
+    @field_validator("terminal_states")
+    @classmethod
+    def validate_terminal_states(
+        cls, values: tuple[ProcessStatus, ...]
+    ) -> tuple[ProcessStatus, ...]:
+        terminal = {
+            ProcessStatus.COMPLETED,
+            ProcessStatus.CANCELLED,
+            ProcessStatus.FAILED,
+        }
+        if not set(values).issubset(terminal):
+            raise ValueError("terminal_states can only contain terminal process statuses")
+        if ProcessStatus.COMPLETED not in values:
+            raise ValueError("terminal_states must include completed")
+        return values
+
     @model_validator(mode="after")
     def require_explicit_action_permissions(self) -> "ProcessDefinition":
         if set(self.action_permissions) != set(self.allowed_actions):
             raise ValueError("every allowed action must have exactly one permission classification")
         if not set(self.action_guidance).issubset(self.allowed_actions):
             raise ValueError("action guidance can only describe allowed actions")
+        if not set(self.communications.outbound_action_types).issubset(self.allowed_actions):
+            raise ValueError("communication actions must be allowed actions")
+        if not set(self.communications.reply_event_types).issubset(self.allowed_wake_events):
+            raise ValueError("communication reply events must be allowed wake events")
         return self
 
     def fingerprint(self) -> str:

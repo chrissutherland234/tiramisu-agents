@@ -19,6 +19,10 @@ class TenantSuspended(PermissionError):
     """Raised when a live control forbids autonomous work for a tenant."""
 
 
+class TenantNotAuthorized(PermissionError):
+    """Raised when a worker deployment is not assigned to a tenant."""
+
+
 class SafetyControlConflict(ValueError):
     """Raised when a requested safety transition does not change current state."""
 
@@ -30,6 +34,14 @@ async def require_active_tenant(session: AsyncSession, tenant_id: UUID) -> None:
         raise TenantUnavailable(str(tenant_id))
     if tenant_status != "active":
         raise TenantSuspended(str(tenant_id))
+
+
+def require_authorized_tenant(
+    tenant_id: UUID,
+    authorized_tenant_ids: frozenset[UUID] | None,
+) -> None:
+    if authorized_tenant_ids is not None and tenant_id not in authorized_tenant_ids:
+        raise TenantNotAuthorized(str(tenant_id))
 
 
 @dataclass(frozen=True, slots=True)

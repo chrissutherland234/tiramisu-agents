@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from uuid import UUID
 
+from pydantic import TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +12,7 @@ from tiramisu_agents.core.contracts.decisions import (
     AgentDecision,
     DecisionStatus,
     HumanWakeCondition,
+    WakeCondition,
 )
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
@@ -25,6 +27,9 @@ class ProcessStateConflict(ValueError):
     """Raised when a turn cannot safely update the current process projection."""
 
 
+_wake_condition_adapter: TypeAdapter[WakeCondition] = TypeAdapter(WakeCondition)
+
+
 @dataclass(frozen=True, slots=True)
 class AppliedProcessState:
     process_instance_id: UUID
@@ -32,6 +37,9 @@ class AppliedProcessState:
     decision_id: UUID
     version: int
     status: ProcessStatus
+    wake_conditions: tuple[WakeCondition, ...]
+    pending_action_request_ids: tuple[UUID, ...]
+    terminal: bool
 
 
 class ProcessStateService:
@@ -45,6 +53,7 @@ class ProcessStateService:
         process_instance_id: UUID,
         agent_turn_id: UUID,
         decision: AgentDecision,
+        terminal_states: frozenset[ProcessStatus] | None = None,
     ) -> AppliedProcessState:
         await set_tenant_context(session, tenant_id)
         process = await session.scalar(
@@ -68,7 +77,11 @@ class ProcessStateService:
         if existing is not None:
             if existing.decision_id != decision.decision_id:
                 raise ProcessStateConflict("agent turn was reused for another decision")
-            return self._result(existing)
+            open_actions = await self._load_open_actions(
+                session,
+                process_instance_id=process_instance_id,
+            )
+            return self._result(existing, open_actions=open_actions)
         reused_decision = await session.scalar(
             select(ProcessStateRevision.id).where(
                 ProcessStateRevision.tenant_id == tenant_id,
@@ -121,10 +134,14 @@ class ProcessStateService:
                 provenance=provenance,
             )
 
-        status = await self._next_status(
+        open_actions = await self._load_open_actions(
             session,
             process_instance_id=process_instance_id,
+        )
+        status = self._next_status(
             decision=decision,
+            open_actions=open_actions,
+            terminal_states=terminal_states,
         )
         memory = decision.memory_update
         if memory.summary is not None:
@@ -140,14 +157,11 @@ class ProcessStateService:
             ]
             process.memory_summary_source_timer_ids = list(memory.summary_source_timer_ids)
         process.open_commitments = list(memory.open_commitments)
-        wake_conditions = list(decision.wake_conditions)
-        if await self._has_pending_approval(session, tenant_id, process_instance_id) and not any(
-            isinstance(wake, HumanWakeCondition) for wake in wake_conditions
-        ):
-            # Approval is represented by the persisted approval-gated action.
-            # Project it as a human wake for operators instead of requiring the
-            # model to invent a separate, potentially orphaned wake condition.
-            wake_conditions.append(HumanWakeCondition(interaction="approval"))
+        wake_conditions = self._effective_wake_conditions(
+            decision=decision,
+            status=status,
+            open_actions=open_actions,
+        )
         process.current_wake_conditions = [wake.model_dump(mode="json") for wake in wake_conditions]
         process.authoritative_facts = authoritative
         process.customer_claims = claims
@@ -188,20 +202,7 @@ class ProcessStateService:
         )
         session.add(revision)
         await session.flush()
-        return self._result(revision)
-
-    @staticmethod
-    async def _has_pending_approval(
-        session: AsyncSession, tenant_id: UUID, process_instance_id: UUID
-    ) -> bool:
-        pending_action_id = await session.scalar(
-            select(ActionRequest.id).where(
-                ActionRequest.tenant_id == tenant_id,
-                ActionRequest.process_instance_id == process_instance_id,
-                ActionRequest.status == ActionRequestStatus.PENDING_APPROVAL.value,
-            )
-        )
-        return pending_action_id is not None
+        return self._result(revision, open_actions=open_actions)
 
     @staticmethod
     async def _load_events(
@@ -269,15 +270,14 @@ class ProcessStateService:
             }
 
     @staticmethod
-    async def _next_status(
+    async def _load_open_actions(
         session: AsyncSession,
         *,
         process_instance_id: UUID,
-        decision: AgentDecision,
-    ) -> ProcessStatus:
-        open_statuses = (
-            await session.scalars(
-                select(ActionRequest.status).where(
+    ) -> tuple[tuple[UUID, ActionRequestStatus], ...]:
+        rows = (
+            await session.execute(
+                select(ActionRequest.id, ActionRequest.status).where(
                     ActionRequest.process_instance_id == process_instance_id,
                     ActionRequest.status.in_(
                         (
@@ -292,14 +292,24 @@ class ProcessStateService:
                 )
             )
         ).all()
-        if decision.status is DecisionStatus.COMPLETED and open_statuses:
+        return tuple((row.id, ActionRequestStatus(row.status)) for row in rows)
+
+    @staticmethod
+    def _next_status(
+        *,
+        decision: AgentDecision,
+        open_actions: tuple[tuple[UUID, ActionRequestStatus], ...],
+        terminal_states: frozenset[ProcessStatus] | None,
+    ) -> ProcessStatus:
+        open_statuses = {status for _, status in open_actions}
+        if decision.status is DecisionStatus.COMPLETED and open_actions:
             raise ProcessStateConflict("completed decision has unresolved actions")
         if any(
             value
             in {
-                ActionRequestStatus.PENDING_APPROVAL.value,
-                ActionRequestStatus.UNKNOWN.value,
-                ActionRequestStatus.RECONCILING.value,
+                ActionRequestStatus.PENDING_APPROVAL,
+                ActionRequestStatus.UNKNOWN,
+                ActionRequestStatus.RECONCILING,
             }
             for value in open_statuses
         ):
@@ -307,6 +317,8 @@ class ProcessStateService:
         if open_statuses:
             return ProcessStatus.ACTIVE
         if decision.status is DecisionStatus.COMPLETED:
+            if terminal_states is not None and ProcessStatus.COMPLETED not in terminal_states:
+                raise ProcessStateConflict("completed is not a configured terminal state")
             return ProcessStatus.COMPLETED
         if decision.status is DecisionStatus.ESCALATED or any(
             isinstance(wake, HumanWakeCondition) for wake in decision.wake_conditions
@@ -317,11 +329,53 @@ class ProcessStateService:
         return ProcessStatus.ACTIVE
 
     @staticmethod
-    def _result(revision: ProcessStateRevision) -> AppliedProcessState:
+    def _effective_wake_conditions(
+        *,
+        decision: AgentDecision,
+        status: ProcessStatus,
+        open_actions: tuple[tuple[UUID, ActionRequestStatus], ...],
+    ) -> list[WakeCondition]:
+        open_statuses = {action_status for _, action_status in open_actions}
+        if ActionRequestStatus.PENDING_APPROVAL in open_statuses:
+            return [HumanWakeCondition(interaction="approval")]
+        if open_statuses & {
+            ActionRequestStatus.UNKNOWN,
+            ActionRequestStatus.RECONCILING,
+        }:
+            return [HumanWakeCondition(interaction="operator")]
+        if open_actions:
+            return []
+        if status in {
+            ProcessStatus.COMPLETED,
+            ProcessStatus.CANCELLED,
+            ProcessStatus.FAILED,
+        }:
+            return []
+        if status is ProcessStatus.REVIEW and not decision.wake_conditions:
+            return [HumanWakeCondition(interaction="operator")]
+        return list(decision.wake_conditions)
+
+    @staticmethod
+    def _result(
+        revision: ProcessStateRevision,
+        *,
+        open_actions: tuple[tuple[UUID, ActionRequestStatus], ...],
+    ) -> AppliedProcessState:
+        wake_conditions = tuple(
+            _wake_condition_adapter.validate_python(value) for value in revision.wake_conditions
+        )
         return AppliedProcessState(
             process_instance_id=revision.process_instance_id,
             agent_turn_id=revision.agent_turn_id,
             decision_id=revision.decision_id,
             version=revision.version,
             status=ProcessStatus(revision.process_status),
+            wake_conditions=wake_conditions,
+            pending_action_request_ids=tuple(action_id for action_id, _ in open_actions),
+            terminal=revision.process_status
+            in {
+                ProcessStatus.COMPLETED.value,
+                ProcessStatus.CANCELLED.value,
+                ProcessStatus.FAILED.value,
+            },
         )

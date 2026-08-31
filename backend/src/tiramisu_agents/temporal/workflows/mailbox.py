@@ -22,6 +22,15 @@ def _is_activity_error_type(error: ActivityError, expected_type: str) -> bool:
     return False
 
 
+def _activity_error_type(error: ActivityError) -> str:
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, ApplicationError):
+            return current.type or type(current).__name__
+        current = current.__cause__
+    return type(error).__name__
+
+
 @dataclass(frozen=True)
 class MailboxEvent:
     event_id: str
@@ -46,12 +55,23 @@ class MailboxActionResolution:
 
 
 @dataclass(frozen=True)
+class MailboxControl:
+    command_id: str
+    command_type: str
+    event_ids: tuple[str, ...] = ()
+    review_command_ids: tuple[str, ...] = ()
+    action_attempt_ids: tuple[str, ...] = ()
+    timer_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class WakePlan:
     """Wake conditions from the most recently accepted agent decision."""
 
     event_types: tuple[str, ...] = ()
     timer_id: str | None = None
     timer_at: datetime | None = None
+    human_interactions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -98,6 +118,8 @@ class MailboxContinuation:
     seen_review_command_ids: tuple[str, ...] = ()
     buffered_action_resolutions: tuple[dict[str, Any], ...] = ()
     seen_action_resolution_ids: tuple[str, ...] = ()
+    buffered_controls: tuple[dict[str, Any], ...] = ()
+    seen_control_command_ids: tuple[str, ...] = ()
     recent_wake_records: tuple[dict[str, Any], ...] = ()
     recent_turn_records: tuple[dict[str, Any], ...] = ()
     recent_execution_records: tuple[dict[str, Any], ...] = ()
@@ -124,6 +146,7 @@ class MailboxState:
     buffered_events: tuple[MailboxEvent, ...]
     buffered_reviews: tuple[MailboxReview, ...]
     buffered_action_resolutions: tuple[MailboxActionResolution, ...]
+    buffered_controls: tuple[MailboxControl, ...]
     wake_records: tuple[WakeRecord, ...]
     turn_records: tuple[TurnRecord, ...]
     execution_records: tuple[ExecutionRecord, ...]
@@ -151,6 +174,8 @@ class ProcessMailboxWorkflow:
         self._seen_review_command_ids: set[str] = set()
         self._buffered_action_resolutions: list[MailboxActionResolution] = []
         self._seen_action_resolution_ids: set[str] = set()
+        self._buffered_controls: list[MailboxControl] = []
+        self._seen_control_command_ids: set[str] = set()
         self._wake_records: list[WakeRecord] = []
         self._turn_records: list[TurnRecord] = []
         self._execution_records: list[ExecutionRecord] = []
@@ -232,6 +257,23 @@ class ProcessMailboxWorkflow:
                 await self._run_turn(action_attempt_ids=(resolution.action_attempt_id,))
                 continue
 
+            if self._buffered_controls:
+                control = self._buffered_controls.pop(0)
+                self._started = True
+                if control.command_type == "takeover":
+                    self._wake_plan = WakePlan(human_interactions=("operator",))
+                    self._timer_due_at = None
+                    self._plan_revision += 1
+                elif control.command_type == "retry":
+                    self._clear_wake_plan()
+                    await self._run_turn(
+                        event_ids=control.event_ids,
+                        review_command_ids=control.review_command_ids,
+                        action_attempt_ids=control.action_attempt_ids,
+                        timer_ids=control.timer_ids,
+                    )
+                continue
+
             matching_index = self._matching_event_index()
             if matching_index is not None:
                 event = self._buffered_events.pop(matching_index)
@@ -275,6 +317,7 @@ class ProcessMailboxWorkflow:
                         or self._plan_revision != awaited_revision
                         or bool(self._buffered_reviews)
                         or bool(self._buffered_action_resolutions)
+                        or bool(self._buffered_controls)
                         or (
                             not self._started
                             and self._wake_plan is None
@@ -313,6 +356,14 @@ class ProcessMailboxWorkflow:
         self._buffered_action_resolutions.append(resolution)
 
     @workflow.signal
+    def receive_control(self, control: MailboxControl) -> None:
+        """Idempotently deliver an attributed persisted operator control."""
+        if control.command_id in self._seen_control_command_ids:
+            return
+        self._seen_control_command_ids.add(control.command_id)
+        self._buffered_controls.append(control)
+
+    @workflow.signal
     def replace_wake_plan(self, plan: WakePlan) -> None:
         """Atomically replace the previous turn's wake conditions."""
         self._wake_plan = plan
@@ -331,6 +382,7 @@ class ProcessMailboxWorkflow:
             buffered_events=tuple(self._buffered_events),
             buffered_reviews=tuple(self._buffered_reviews),
             buffered_action_resolutions=tuple(self._buffered_action_resolutions),
+            buffered_controls=tuple(self._buffered_controls),
             wake_records=tuple(self._wake_records),
             turn_records=tuple(self._turn_records),
             execution_records=tuple(self._execution_records),
@@ -380,6 +432,18 @@ class ProcessMailboxWorkflow:
                 for resolution in self._buffered_action_resolutions
             ),
             seen_action_resolution_ids=tuple(sorted(self._seen_action_resolution_ids)),
+            buffered_controls=tuple(
+                {
+                    "command_id": control.command_id,
+                    "command_type": control.command_type,
+                    "event_ids": control.event_ids,
+                    "review_command_ids": control.review_command_ids,
+                    "action_attempt_ids": control.action_attempt_ids,
+                    "timer_ids": control.timer_ids,
+                }
+                for control in self._buffered_controls
+            ),
+            seen_control_command_ids=tuple(sorted(self._seen_control_command_ids)),
             recent_wake_records=tuple(
                 {
                     "reason": record.reason,
@@ -425,6 +489,7 @@ class ProcessMailboxWorkflow:
                         if self._wake_plan.timer_at is not None
                         else None
                     ),
+                    "human_interactions": self._wake_plan.human_interactions,
                 }
                 if self._wake_plan is not None
                 else None
@@ -451,6 +516,7 @@ class ProcessMailboxWorkflow:
         prestart_events = tuple(self._buffered_events)
         prestart_reviews = tuple(self._buffered_reviews)
         prestart_action_resolutions = tuple(self._buffered_action_resolutions)
+        prestart_controls = tuple(self._buffered_controls)
         prestart_wake_plan = self._wake_plan
         self._started = continuation.started
         self._buffered_events = [
@@ -482,6 +548,22 @@ class ProcessMailboxWorkflow:
             for document in continuation.buffered_action_resolutions
         ]
         self._seen_action_resolution_ids = set(continuation.seen_action_resolution_ids)
+        self._buffered_controls = [
+            MailboxControl(
+                command_id=str(document["command_id"]),
+                command_type=str(document["command_type"]),
+                event_ids=tuple(str(value) for value in document.get("event_ids", ())),
+                review_command_ids=tuple(
+                    str(value) for value in document.get("review_command_ids", ())
+                ),
+                action_attempt_ids=tuple(
+                    str(value) for value in document.get("action_attempt_ids", ())
+                ),
+                timer_ids=tuple(str(value) for value in document.get("timer_ids", ())),
+            )
+            for document in continuation.buffered_controls
+        ]
+        self._seen_control_command_ids = set(continuation.seen_control_command_ids)
         self._wake_records = [
             WakeRecord(
                 reason=str(document["reason"]),
@@ -528,6 +610,9 @@ class ProcessMailboxWorkflow:
                     if wake_plan["timer_at"] is not None
                     else None
                 ),
+                human_interactions=tuple(
+                    str(value) for value in wake_plan.get("human_interactions", ())
+                ),
             )
             if wake_plan is not None
             else None
@@ -544,6 +629,8 @@ class ProcessMailboxWorkflow:
             self.receive_review(review)
         for resolution in prestart_action_resolutions:
             self.receive_action_resolution(resolution)
+        for control in prestart_controls:
+            self.receive_control(control)
         if prestart_wake_plan is not None:
             self._wake_plan = prestart_wake_plan
             self._timer_due_at = prestart_wake_plan.timer_at
@@ -638,23 +725,26 @@ class ProcessMailboxWorkflow:
                 ),
             )
             actions_json = str(action_result["actions_json"])
-            await workflow.execute_activity(
-                "persist_process_state",
-                {
-                    "tenant_id": self._tenant_id,
-                    "process_instance_id": self._process_instance_id,
-                    "process_definition_id": self._process_definition_id,
-                    "process_definition_version": self._process_definition_version,
-                    "agent_turn_id": turn_id,
-                    "event_ids": event_ids,
-                    "workflow_now": workflow_now,
-                    "decision_json": decision_json,
-                    "review_command_ids": review_command_ids,
-                    "action_attempt_ids": action_attempt_ids,
-                    "timer_ids": timer_ids,
-                },
-                start_to_close_timeout=timedelta(minutes=1),
-                retry_policy=RetryPolicy(maximum_attempts=5),
+            process_state_result = cast(
+                dict[str, Any],
+                await workflow.execute_activity(
+                    "persist_process_state",
+                    {
+                        "tenant_id": self._tenant_id,
+                        "process_instance_id": self._process_instance_id,
+                        "process_definition_id": self._process_definition_id,
+                        "process_definition_version": self._process_definition_version,
+                        "agent_turn_id": turn_id,
+                        "event_ids": event_ids,
+                        "workflow_now": workflow_now,
+                        "decision_json": decision_json,
+                        "review_command_ids": review_command_ids,
+                        "action_attempt_ids": action_attempt_ids,
+                        "timer_ids": timer_ids,
+                    },
+                    start_to_close_timeout=timedelta(minutes=1),
+                    retry_policy=RetryPolicy(maximum_attempts=5),
+                ),
             )
             actions = cast(list[dict[str, Any]], json.loads(actions_json))
             execution_results: list[dict[str, Any]] = []
@@ -698,11 +788,31 @@ class ProcessMailboxWorkflow:
                         chain_depth=chain_depth + 1,
                     )
                 else:
-                    self._clear_wake_plan()
+                    await self._record_intervention(
+                        intervention_id=str(workflow.uuid4()),
+                        turn_id=turn_id,
+                        kind="action_chain_limit",
+                        error_type="ActionChainLimitReached",
+                        error="automatic action-result chain limit reached",
+                        event_ids=(),
+                        review_command_ids=(),
+                        action_attempt_ids=result_attempt_ids,
+                        timer_ids=(),
+                    )
+                    self._wake_plan = WakePlan(human_interactions=("operator",))
+                    self._timer_due_at = None
+                    self._plan_revision += 1
             elif requires_approval or self._pending_action_request_ids:
-                self._clear_wake_plan()
+                if "terminal" in process_state_result:
+                    self._apply_turn_outcome(process_state_result, decision_json=decision_json)
+                else:
+                    # Compatibility for pre-outcome histories and workflow-only
+                    # tests: a persisted approval always owns the effective wake.
+                    self._wake_plan = WakePlan(human_interactions=("approval",))
+                    self._timer_due_at = None
+                    self._plan_revision += 1
             else:
-                self._apply_decision_wake_plan(decision_json)
+                self._apply_turn_outcome(process_state_result, decision_json=decision_json)
         except ActivityError as error:
             self._turn_records.append(
                 TurnRecord(
@@ -717,22 +827,55 @@ class ProcessMailboxWorkflow:
                     error=str(error),
                 )
             )
+            await self._record_intervention(
+                intervention_id=str(workflow.uuid4()),
+                turn_id=turn_id,
+                kind="turn_failure",
+                error_type=_activity_error_type(error),
+                error=str(error),
+                event_ids=event_ids,
+                review_command_ids=review_command_ids,
+                action_attempt_ids=action_attempt_ids,
+                timer_ids=timer_ids,
+            )
+            self._wake_plan = WakePlan(human_interactions=("operator",))
+            self._timer_due_at = None
+            self._plan_revision += 1
         finally:
             self._turn_in_progress = False
             self._turns_since_continue += 1
             self._completed_turn_count += 1
 
-    def _apply_decision_wake_plan(self, decision_json: str) -> None:
+    def _apply_turn_outcome(
+        self,
+        process_state_result: dict[str, Any],
+        *,
+        decision_json: str,
+    ) -> None:
         decision = cast(dict[str, Any], json.loads(decision_json))
-        wakes = cast(list[dict[str, Any]], decision.get("wake_conditions", []))
+        # Old replay fixtures and workflow-only tests predate the canonical
+        # process-state result. Fall back to the accepted decision only for
+        # those histories; new executions use the PostgreSQL projection.
+        if "terminal" in process_state_result:
+            terminal = bool(process_state_result["terminal"])
+            wakes = cast(
+                list[dict[str, Any]],
+                json.loads(str(process_state_result.get("wake_conditions_json", "[]"))),
+            )
+        else:
+            terminal = decision.get("status") == "completed"
+            wakes = cast(list[dict[str, Any]], decision.get("wake_conditions", []))
         event_types = tuple(str(item["event_type"]) for item in wakes if item["type"] == "event")
+        human_interactions = tuple(
+            str(item["interaction"]) for item in wakes if item["type"] == "human"
+        )
         timers = [
             (index, datetime.fromisoformat(str(item["at"])))
             for index, item in enumerate(wakes)
             if item["type"] == "timer"
         ]
         selected_timer = min(timers, key=lambda item: item[1]) if timers else None
-        if decision.get("status") == "completed" and not wakes:
+        if terminal:
             self._closed = True
             return
         self._wake_plan = WakePlan(
@@ -741,9 +884,42 @@ class ProcessMailboxWorkflow:
                 f"{decision['decision_id']}:timer:{selected_timer[0]}" if selected_timer else None
             ),
             timer_at=selected_timer[1] if selected_timer else None,
+            human_interactions=human_interactions,
         )
         self._timer_due_at = self._wake_plan.timer_at
         self._plan_revision += 1
+
+    async def _record_intervention(
+        self,
+        *,
+        intervention_id: str,
+        turn_id: str,
+        kind: str,
+        error_type: str,
+        error: str,
+        event_ids: tuple[str, ...],
+        review_command_ids: tuple[str, ...],
+        action_attempt_ids: tuple[str, ...],
+        timer_ids: tuple[str, ...],
+    ) -> None:
+        await workflow.execute_activity(
+            "record_process_intervention",
+            {
+                "intervention_id": intervention_id,
+                "tenant_id": self._tenant_id,
+                "process_instance_id": self._process_instance_id,
+                "agent_turn_id": turn_id,
+                "kind": kind,
+                "error_type": error_type,
+                "error": error,
+                "event_ids": event_ids,
+                "review_command_ids": review_command_ids,
+                "action_attempt_ids": action_attempt_ids,
+                "timer_ids": timer_ids,
+            },
+            start_to_close_timeout=timedelta(minutes=1),
+            retry_policy=RetryPolicy(maximum_attempts=5),
+        )
 
     async def _execute_pending_action(
         self, action_request_id: str, revision: int

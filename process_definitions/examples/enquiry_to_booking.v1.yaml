@@ -79,8 +79,11 @@ review:
     - reject
     - request_revision
     - comment
-    - correct_fact
-    - cancel
+communications:
+  outbound_action_types:
+    - send_message
+  reply_event_types:
+    - customer.email_received
 integrations:
   messaging: stub.messaging.v1
   booking: stub.booking.v1

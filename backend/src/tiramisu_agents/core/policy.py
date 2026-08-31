@@ -6,6 +6,7 @@ from uuid import UUID
 
 from tiramisu_agents.core.contracts.decisions import (
     AgentDecision,
+    DecisionStatus,
     EventWakeCondition,
     HumanWakeCondition,
     TimerWakeCondition,
@@ -85,6 +86,14 @@ def validate_decision(
 
     if len(decision.actions) > policy.max_actions_per_turn:
         raise DecisionRejected("decision exceeds the maximum actions per turn")
+    if decision.status is DecisionStatus.COMPLETED and decision.actions:
+        raise DecisionRejected("completed decision cannot propose unresolved actions")
+    if (
+        decision.status is DecisionStatus.ACTIVE
+        and not decision.actions
+        and not decision.wake_conditions
+    ):
+        raise DecisionRejected("active decision requires an action or wake condition")
 
     action_keys: set[str] = set()
     for action in decision.actions:

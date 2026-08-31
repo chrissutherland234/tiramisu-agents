@@ -30,6 +30,7 @@ from tiramisu_agents.db.models.actions import (
     ActionRevision,
     ApprovalRequest,
 )
+from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.reviews import ApprovalDecision
 from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.security.tenancy import (
@@ -89,7 +90,7 @@ class ActionExecutor:
     ) -> ActionExecutionResult:
         async with self._session_factory.begin() as session:
             await self._require_execution_enabled(session, tenant_id)
-            request, action_revision, _ = await self._load_authorized_action(
+            request, action_revision, _, process = await self._load_authorized_action(
                 session,
                 tenant_id=tenant_id,
                 process_instance_id=process_instance_id,
@@ -141,6 +142,9 @@ class ActionExecutor:
                 action_type=request.action_type,
                 parameters=action_revision.parameters,
                 idempotency_key=key,
+                tenant_id=tenant_id,
+                process_instance_id=process_instance_id,
+                authoritative_facts=dict(process.authoritative_facts),
             )
 
         if not is_new_attempt:
@@ -203,7 +207,7 @@ class ActionExecutor:
 
         async with self._session_factory.begin() as session:
             await set_tenant_context(session, tenant_id)
-            request, action_revision, _ = await self._load_authorized_action(
+            request, action_revision, _, _ = await self._load_authorized_action(
                 session,
                 tenant_id=tenant_id,
                 process_instance_id=process_instance_id,
@@ -260,10 +264,10 @@ class ActionExecutor:
         process_instance_id: UUID,
         action_request_id: UUID,
         revision: int,
-    ) -> tuple[ActionRequest, ActionRevision, ActionPolicyRecord]:
+    ) -> tuple[ActionRequest, ActionRevision, ActionPolicyRecord, ProcessInstance]:
         row = (
             await session.execute(
-                select(ActionRequest, ActionRevision, ActionPolicyRecord)
+                select(ActionRequest, ActionRevision, ActionPolicyRecord, ProcessInstance)
                 .join(
                     ActionRevision,
                     (ActionRevision.action_request_id == ActionRequest.id)
@@ -273,6 +277,11 @@ class ActionExecutor:
                     ActionPolicyRecord,
                     (ActionPolicyRecord.action_request_id == ActionRequest.id)
                     & (ActionPolicyRecord.revision == revision),
+                )
+                .join(
+                    ProcessInstance,
+                    (ProcessInstance.tenant_id == ActionRequest.tenant_id)
+                    & (ProcessInstance.id == ActionRequest.process_instance_id),
                 )
                 .where(
                     ActionRequest.tenant_id == tenant_id,
@@ -284,7 +293,11 @@ class ActionExecutor:
         ).one_or_none()
         if row is None:
             raise ActionExecutionRejected("action revision not found")
-        request, action_revision, policy = row[0], row[1], row[2]
+        request, action_revision, policy, process = row[0], row[1], row[2], row[3]
+        if process.status in {"paused", "completed", "cancelled", "failed"}:
+            raise ActionExecutionRejected(
+                f"process state does not permit action execution: {process.status}"
+            )
         if request.current_revision != revision:
             raise ActionExecutionRejected("action revision is no longer current")
         outcome = PermissionOutcome(policy.outcome)
@@ -325,7 +338,7 @@ class ActionExecutor:
                 raise ActionExecutionRejected("approved action is no longer executable")
         else:
             raise ActionExecutionRejected("policy denied action execution")
-        return request, action_revision, policy
+        return request, action_revision, policy, process
 
     async def _record_success(
         self,

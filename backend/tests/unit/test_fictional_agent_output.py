@@ -64,6 +64,12 @@ def test_fictional_waiting_output_requires_a_wake() -> None:
         FictionalAgentDecisionOutput.model_validate({"status": "waiting"})
 
 
+def test_fictional_completed_output_allows_no_wake() -> None:
+    output = FictionalAgentDecisionOutput.model_validate({"status": "completed"})
+
+    assert output.wake_conditions == ()
+
+
 def test_fictional_output_adds_payment_after_confirmed_booking_result() -> None:
     booking_reference = "booking_demo_123"
     turn_input = AgentTurnInput(
