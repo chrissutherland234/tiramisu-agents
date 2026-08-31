@@ -15,6 +15,7 @@ from tiramisu_agents.api.processes import router as processes_router
 from tiramisu_agents.api.settings import Settings, get_settings
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.events.ingestion import ProcessBootstrap
+from tiramisu_agents.extensions import ClientPack, load_configured_client_pack
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 
 
@@ -41,6 +42,7 @@ def create_app(
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     trigger_rules: Mapping[str, ProcessBootstrap] | None = None,
     process_registry: ProcessDefinitionRegistry | None = None,
+    client_pack: ClientPack | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
     owned_engine = None
@@ -62,16 +64,17 @@ def create_app(
     )
     app.state.settings = resolved_settings
     app.state.session_factory = session_factory
-    if resolved_settings.load_fictional_example_processes and (
-        trigger_rules is None or process_registry is None
-    ):
-        from tiramisu_agents.builtin import load_fictional_deployment
-
-        deployment = load_fictional_deployment()
+    if client_pack is None and (trigger_rules is None or process_registry is None):
+        client_pack = load_configured_client_pack(
+            resolved_settings.client_pack_factory,
+            load_fictional_example=resolved_settings.load_fictional_example_processes,
+        )
+    if client_pack is not None:
         if trigger_rules is None:
-            trigger_rules = deployment.trigger_rules()
+            trigger_rules = client_pack.trigger_rules()
         if process_registry is None:
-            process_registry = deployment.registry
+            process_registry = client_pack.registry
+    app.state.client_pack = client_pack
     app.state.trigger_rules = dict(trigger_rules or {})
     app.state.process_registry = process_registry
     app.add_api_route(

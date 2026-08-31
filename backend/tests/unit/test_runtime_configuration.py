@@ -74,10 +74,12 @@ def test_bundled_fictional_configuration_matches_public_example() -> None:
 def test_settings_normalize_and_reject_unsafe_runtime_combinations() -> None:
     settings = _settings(
         openai_model="   ",
+        client_pack_factory="   ",
         log_level="warning",
     )
     assert settings.openai_model is None
     assert settings.openai_api_key is None
+    assert settings.client_pack_factory is None
     assert settings.log_level == "WARNING"
 
     with pytest.raises(ValidationError, match="unsafe development identity"):
@@ -92,6 +94,11 @@ def test_settings_normalize_and_reject_unsafe_runtime_combinations() -> None:
         )
     with pytest.raises(ValidationError, match="task queue"):
         _settings(temporal_task_queue="not a queue!")
+    with pytest.raises(ValidationError, match="either TIRAMISU_CLIENT_PACK_FACTORY"):
+        _settings(
+            client_pack_factory="example:create",
+            load_fictional_example_processes=True,
+        )
     with pytest.raises(ValidationError, match=r"postgresql\+asyncpg"):
         _settings(database_url="sqlite+aiosqlite:///tiramisu.db")
 

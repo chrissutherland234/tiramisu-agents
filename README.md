@@ -2,7 +2,7 @@
 
 Tiramisu is an open-source foundation for durable, long-running business agents. One logical agent follows a customer journey or case, performs bounded reasoning turns, and sleeps durably in Temporal until an approved event, timer, or human interaction wakes it.
 
-The project is in its foundation phase. See [PLAN.md](PLAN.md), the [local fictional demo guide](docs/local-demo.md), the [runtime configuration guide](docs/configuration.md), the [security operations guide](docs/security.md), the [Temporal recovery guide](docs/temporal-recovery.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
+The project is in its foundation phase. See [PLAN.md](PLAN.md), the [local fictional demo guide](docs/local-demo.md), the [runtime configuration guide](docs/configuration.md), the [client-pack composition guide](docs/client-packs.md), the [security operations guide](docs/security.md), the [Temporal recovery guide](docs/temporal-recovery.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
 
 ## Current shape
 
@@ -53,7 +53,7 @@ Mailbox executions Continue-As-New at a safe boundary after a bounded number of 
 
 The current process projection separates provider/event-sourced authoritative facts from customer claims and records source provenance for both. Model-authored summaries and open commitments are stored separately, summaries must cite inputs from the exact bounded turn, and every applied decision creates an immutable versioned state revision containing its wake plan. Activity retries reuse the existing revision, while terminal and paused process states fail closed. This is the durable memory foundation; application-owned message history and compaction remain future work.
 
-The Vue operator console lists tenant processes and pending reviews, then presents the selected process's durable wake plan, memory, facts and claims, commitments, and combined event/decision/action/review timeline. Operators can comment, approve the exact payload, reject it, or provide revision feedback for another bounded agent turn. The API has an initial tenant-bound bearer credential baseline with endpoint scopes, approval roles, expiry, revocation, and tenant suspension. The current Vue identity form remains development-only; a production browser session and external identity-provider integration are still required.
+The Vue operator console lists tenant processes and pending reviews, then presents the selected process's durable wake plan, memory, facts and claims, commitments, and combined event/decision/action/review timeline. Operators can comment, approve the exact payload, reject it, provide revision feedback for another bounded agent turn, inspect dead-lettered deliveries, open their related process, and requeue them with a required audit reason. The API has an initial tenant-bound bearer credential baseline with endpoint scopes, approval roles, expiry, revocation, and tenant suspension. The current Vue identity form remains development-only; a production browser session and external identity-provider integration are still required.
 
 The provider-neutral execution stage writes an action attempt before calling the provider, uses a stable payload-bound idempotency key, revalidates exact human approval immediately before dispatch, and distinguishes definitive failure from an ambiguous outcome. An unknown outcome triggers a lookup-only reconciliation Activity that cannot repeat the side effect. If the provider still cannot establish the truth, an operator may resolve it only with an immutable, attributed evidence record. That resolution is delivered transactionally through the outbox to the same Temporal mailbox and becomes authoritative context for another bounded agent turn.
 
@@ -92,7 +92,16 @@ The runtime role cannot enumerate tenants. Signed provider-webhook verification,
 
 ## Public and private extensions
 
-The generic platform, test kit, stub adapters, and reusable provider adapters live here. Client-specific processes, prompts, policies, proprietary adapters, evaluations, and deployment composition belong in separate private client-pack repositories. Private packs must use the same extension manifest and contract tests as the fictional public example.
+The generic platform, test kit, stub adapters, and reusable provider adapters live here. Client-specific processes, prompts, policies, proprietary adapters, evaluations, and deployment composition belong in separate private client-pack repositories. Private packs return the public `tiramisu_agents.extensions.ClientPack` contract from an explicit zero-argument startup factory and must use the same manifest and contract tests as the fictional public example.
+
+Install the core and a downstream pack as editable packages, then configure the exact same trusted factory path in the API and worker environment:
+
+```bash
+uv pip install -e . -e examples/fictional_client_pack
+export TIRAMISU_CLIENT_PACK_FACTORY=tiramisu_fictional_client_pack:create_client_pack
+```
+
+The factory is imported and validated before API traffic or Temporal worker polling. It is never discovered or imported from workflow code. The first contract intentionally supports one deployment composition per service process and no custom Temporal Activities; dynamic per-tenant pack selection, lifecycle controls, and custom Activity registration remain future work.
 
 ## License
 

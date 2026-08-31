@@ -6,6 +6,7 @@ import HomeView from "./HomeView.vue";
 const processId = "11111111-1111-4111-8111-111111111111";
 const threadId = "22222222-2222-4222-8222-222222222222";
 const interventionId = "77777777-7777-4777-8777-777777777777";
+const deadLetterId = "99999999-9999-4999-8999-999999999999";
 const now = "2026-08-30T10:00:00Z";
 
 const summary = {
@@ -78,6 +79,29 @@ const detail = {
   ],
 };
 
+const deadLetter = {
+  id: deadLetterId,
+  process_instance_id: processId,
+  message_type: "temporal.process_event",
+  destination: `process:${processId}`,
+  attempt_count: 8,
+  last_error: "Temporal unavailable",
+  dead_lettered_at: now,
+  created_at: now,
+};
+
+const recoveryCommand = {
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  outbox_message_id: deadLetterId,
+  actor_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  command_type: "requeue",
+  reason: "Temporal was restored.",
+  previous_attempt_count: 8,
+  previous_error: "Temporal unavailable",
+  previous_dead_lettered_at: now,
+  created_at: now,
+};
+
 describe("operator console", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -102,6 +126,12 @@ describe("operator console", () => {
         ? [summary]
         : url.endsWith("/v1/reviews")
           ? [review]
+          : url.endsWith("/v1/outbox/dead-letters")
+            ? [deadLetter]
+            : url.endsWith("/v1/outbox/recovery-commands")
+              ? [recoveryCommand]
+              : url.endsWith(`/v1/outbox/dead-letters/${deadLetterId}/requeue`)
+                ? { command_id: recoveryCommand.id, outbox_message_id: deadLetterId, status: "pending" }
           : url.includes("/commands")
             ? {
                 command_id: "55555555-5555-4555-8555-555555555555",
@@ -132,10 +162,18 @@ describe("operator console", () => {
     expect(wrapper.get('[data-testid="intervention-controls"]').text()).toContain(
       "DecisionRejected",
     );
+    expect(wrapper.get('[data-testid="delivery-operations"]').text()).toContain(
+      "Temporal unavailable",
+    );
+    expect(wrapper.get('[data-testid="delivery-operations"]').text()).toContain(
+      "Temporal was restored.",
+    );
     expect(wrapper.text()).toContain("Tuesday please");
     expect(wrapper.text()).toContain("event · 66666666…6666");
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/processes");
-    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+    const processListCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith("/v1/processes"),
+    );
+    expect(processListCall?.[1]?.headers).toMatchObject({
       "X-Tiramisu-Tenant-ID": "tenant-id",
       "X-Tiramisu-Actor-ID": "actor-id",
     });
@@ -175,5 +213,60 @@ describe("operator console", () => {
       intervention_id: interventionId,
     });
     expect(wrapper.text()).toContain("Failed turn queued for retry");
+
+    const deliveryOperations = wrapper.get('[data-testid="delivery-operations"]');
+    await deliveryOperations
+      .get('textarea[placeholder^="Provider restored"]')
+      .setValue("Temporal cluster connectivity has been restored.");
+    await deliveryOperations.get("button.button-primary").trigger("click");
+    await flushPromises();
+
+    const requeueCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith(`/v1/outbox/dead-letters/${deadLetterId}/requeue`),
+    );
+    expect(requeueCall).toBeDefined();
+    expect(JSON.parse(String(requeueCall?.[1]?.body))).toEqual({
+      reason: "Temporal cluster connectivity has been restored.",
+    });
+    expect(wrapper.text()).toContain("Delivery requeued");
+  });
+
+  it("keeps journey inspection available without outbox permission", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/v1/outbox/")) {
+          return new Response(JSON.stringify({ detail: "missing scope: outbox:read" }), {
+            status: 403,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        const payload = url.endsWith("/v1/processes")
+          ? [summary]
+          : url.endsWith("/v1/reviews")
+            ? [review]
+            : detail;
+        return new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+    const wrapper = mount(HomeView);
+
+    await wrapper.get('[data-testid="tenant-id"]').setValue("tenant-id");
+    await wrapper.get('[data-testid="actor-id"]').setValue("actor-id");
+    await wrapper.get('[data-testid="connect"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="process-detail"]').text()).toContain(
+      "enquiry to booking",
+    );
+    expect(wrapper.get('[data-testid="delivery-operations"]').text()).toContain(
+      "Delivery operations unavailable",
+    );
+    expect(wrapper.text()).toContain("missing scope: outbox:read");
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
   });
 });

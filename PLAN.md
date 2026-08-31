@@ -1,7 +1,7 @@
 # Tiramisu — Long-Running Business Agents Project Plan
 
 Status: Draft  
-Last updated: 2026-08-30
+Last updated: 2026-08-31
 
 Working project name: **Tiramisu**  
 Name rationale: “Pick me up” reflects agents waking from durable waits and continuing with the same context. The layered dessert also reflects the platform's workflow, memory, policy, and integration layers.
@@ -905,7 +905,7 @@ Recommended initial journey:
 
 - [x] Add immutable YAML process-definition contracts, validation, fingerprinting, trigger resolution, and deterministic policy/instruction compilation for the fictional process. Persistence and the authoring/publication lifecycle remain outstanding.
 - [ ] Add the process-definition draft, validation, evaluation, approval, publication, and retirement lifecycle.
-- [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition. The initial bundled fictional pack now has one CWD-independent, compatibility-checked composition shared by API triggers and worker definitions/adapters; third-party installation, persistence, audit, and lifecycle controls remain.
+- [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition. Explicit `module:attribute` loading from an installed/editable package, the validated public `ClientPack` contract, a downstream editable-package example, and shared API/worker composition are complete. Persisted installation audit, runtime enable/disable, tenant-specific adapter routing, and lifecycle controls remain.
 - [ ] Add tenant prompt and policy configuration.
 - [ ] Add the tool and integration registry.
 - [ ] Add safe client-editable settings.
@@ -919,7 +919,7 @@ Recommended initial journey:
 ### Phase 5 — Production hardening
 
 - [ ] Harden and load-test per-tenant usage limits, budgets, circuit breakers, and back-pressure.
-- [ ] Add mature stuck-workflow, quarantine, reconciliation-backlog, and dead-letter operations. Explicit tenant-scoped dead-letter inspection, immutable requeue audit, fresh bounded attempt cycles, and permissioned APIs are complete; bulk operations, alerts, retention, and the other operational backlogs remain.
+- [ ] Add mature stuck-workflow, quarantine, reconciliation-backlog, and dead-letter operations. Explicit tenant-scoped dead-letter inspection, immutable requeue audit, fresh bounded attempt cycles, permissioned APIs, and a reasoned Vue recovery view with process links and history are complete; bulk operations, alerts, retention, and the other operational backlogs remain.
 - [ ] Complete tenant-specific PII retention, deletion, legal-hold, residency, and audit controls.
 - [ ] Add secret management and credential rotation.
 - [ ] Expand agent quality, regression, adversarial, and safety evals.

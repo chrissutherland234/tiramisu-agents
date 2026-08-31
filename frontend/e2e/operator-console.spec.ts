@@ -40,6 +40,7 @@ test("ingests and displays a real process through the local stack", async ({ pag
   await expect(page.getByText("Local identity")).toBeVisible();
   await expect(page.getByRole("heading", { name: /processes$/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
+  await expect(page.getByTestId("delivery-operations")).toContainText("Dead-letter queue");
   await expect(page.getByTestId("process-list")).toContainText("enquiry to booking");
   await expect(page.getByTestId("process-detail")).toContainText("enquiry to booking");
   await expect(page.getByTestId("timeline")).toContainText("enquiry.created");

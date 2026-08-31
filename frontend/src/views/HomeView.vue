@@ -3,12 +3,14 @@ import { computed, onMounted, reactive, ref } from "vue";
 
 import {
   operatorApi,
+  type DeadLetterSummary,
   type OperatorCredentials,
   type PendingReview,
   type ProcessControlType,
   type ProcessDetail,
   type ProcessIntervention,
   type ProcessSummary,
+  type RecoveryCommandSummary,
   type ReviewCommandType,
   type WakeCondition,
 } from "@/api";
@@ -16,14 +18,18 @@ import {
 const credentials = reactive<OperatorCredentials>({ tenantId: "", actorId: "" });
 const processes = ref<ProcessSummary[]>([]);
 const reviews = ref<PendingReview[]>([]);
+const deadLetters = ref<DeadLetterSummary[]>([]);
+const recoveryCommands = ref<RecoveryCommandSummary[]>([]);
 const selected = ref<ProcessDetail | null>(null);
 const reviewNotes = reactive<Record<string, string>>({});
 const interventionReasons = reactive<Record<string, string>>({});
+const requeueReasons = reactive<Record<string, string>>({});
 const processControlReason = ref("");
 const connected = ref(false);
 const loading = ref(false);
 const error = ref("");
 const notice = ref("");
+const operationsError = ref("");
 
 const selectedReviews = computed(() =>
   reviews.value.filter((review) => review.process_instance_id === selected.value?.id),
@@ -52,12 +58,26 @@ async function refresh(preferredProcessId?: string) {
   loading.value = true;
   error.value = "";
   try {
-    const [nextProcesses, nextReviews] = await Promise.all([
+    const operationsRequest = Promise.all([
+      operatorApi.listDeadLetters(credentials),
+      operatorApi.listRecoveryCommands(credentials),
+    ])
+      .then(([letters, commands]) => ({ letters, commands, error: "" }))
+      .catch((cause: unknown) => ({
+        letters: [] as DeadLetterSummary[],
+        commands: [] as RecoveryCommandSummary[],
+        error: cause instanceof Error ? cause.message : "Delivery operations are unavailable.",
+      }));
+    const [nextProcesses, nextReviews, operations] = await Promise.all([
       operatorApi.listProcesses(credentials),
       operatorApi.listReviews(credentials),
+      operationsRequest,
     ]);
     processes.value = nextProcesses;
     reviews.value = nextReviews;
+    deadLetters.value = operations.letters;
+    recoveryCommands.value = operations.commands;
+    operationsError.value = operations.error;
     const processId =
       preferredProcessId ??
       selected.value?.id ??
@@ -66,6 +86,26 @@ async function refresh(preferredProcessId?: string) {
     selected.value = processId ? await operatorApi.getProcess(credentials, processId) : null;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Could not load the operator view.";
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function requeueDeadLetter(message: DeadLetterSummary) {
+  const reason = (requeueReasons[message.id] ?? "").trim();
+  if (!reason) {
+    error.value = "Add a reason before requeueing a dead-lettered delivery.";
+    return;
+  }
+  loading.value = true;
+  error.value = "";
+  try {
+    await operatorApi.requeueDeadLetter(credentials, message.id, reason);
+    notice.value = "Delivery requeued. The recovery decision is retained in audit history.";
+    requeueReasons[message.id] = "";
+    await refresh(message.process_instance_id ?? undefined);
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Could not requeue the delivery.";
   } finally {
     loading.value = false;
   }
@@ -204,6 +244,52 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
 
     <div v-if="error" class="alert alert-error" role="alert">{{ error }}</div>
     <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
+
+    <section v-if="connected" class="delivery-operations" data-testid="delivery-operations">
+      <div class="section-heading">
+        <div><p class="eyebrow">Delivery operations</p><h2>Dead-letter queue</h2></div>
+        <span :class="{ 'danger-count': deadLetters.length }">{{ deadLetters.length }} waiting</span>
+      </div>
+      <div v-if="deadLetters.length" class="dead-letter-list">
+        <article v-for="message in deadLetters" :key="message.id" class="dead-letter-card">
+          <div class="dead-letter-copy">
+            <span>{{ message.message_type.replaceAll('_', ' ') }} · {{ formatDate(message.dead_lettered_at) }}</span>
+            <h3>{{ message.last_error ?? "Delivery exhausted its retry policy." }}</h3>
+            <p>{{ message.attempt_count }} attempts · {{ message.destination }}</p>
+            <button
+              v-if="message.process_instance_id"
+              class="text-button"
+              @click="selectProcess(message.process_instance_id)"
+            >Open process {{ shortId(message.process_instance_id) }}</button>
+            <small v-else>No process is attached to this delivery.</small>
+          </div>
+          <div class="requeue-control">
+            <label>
+              <span>Why is retry safe now?</span>
+              <textarea
+                v-model="requeueReasons[message.id]"
+                rows="3"
+                placeholder="Provider restored, configuration corrected, or other evidence…"
+              />
+            </label>
+            <button class="button button-primary" :disabled="loading" @click="requeueDeadLetter(message)">Requeue delivery</button>
+          </div>
+        </article>
+      </div>
+      <div v-else-if="operationsError" class="operations-empty operations-unavailable"><strong>Delivery operations unavailable.</strong><span>{{ operationsError }}</span></div>
+      <div v-else class="operations-empty"><strong>No dead-lettered deliveries.</strong><span>Exhausted delivery failures will appear here for attributed recovery.</span></div>
+
+      <details v-if="recoveryCommands.length" class="recovery-history">
+        <summary>{{ recoveryCommands.length }} recent recovery decisions</summary>
+        <ol>
+          <li v-for="command in recoveryCommands" :key="command.id">
+            <div><strong>{{ command.command_type }}</strong><time>{{ formatDate(command.created_at) }}</time></div>
+            <p>{{ command.reason }}</p>
+            <small>{{ command.previous_attempt_count }} previous attempts · message {{ shortId(command.outbox_message_id) }} · actor {{ shortId(command.actor_id) }}</small>
+          </li>
+        </ol>
+      </details>
+    </section>
 
     <section v-if="connected" class="workspace" :class="{ 'is-loading': loading }">
       <aside class="process-rail">

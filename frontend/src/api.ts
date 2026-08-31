@@ -82,6 +82,29 @@ export interface PendingReview {
   created_at: string;
 }
 
+export interface DeadLetterSummary {
+  id: string;
+  process_instance_id: string | null;
+  message_type: string;
+  destination: string;
+  attempt_count: number;
+  last_error: string | null;
+  dead_lettered_at: string;
+  created_at: string;
+}
+
+export interface RecoveryCommandSummary {
+  id: string;
+  outbox_message_id: string;
+  actor_id: string;
+  command_type: string;
+  reason: string;
+  previous_attempt_count: number;
+  previous_error: string | null;
+  previous_dead_lettered_at: string;
+  created_at: string;
+}
+
 export type ReviewCommandType = "approve" | "reject" | "request_revision" | "comment";
 export type ProcessControlType = "retry" | "wake" | "takeover" | "resume";
 
@@ -115,6 +138,19 @@ export const operatorApi = {
     request<ProcessDetail>(`/v1/processes/${processId}`, credentials),
   listReviews: (credentials: OperatorCredentials) =>
     request<PendingReview[]>("/v1/reviews", credentials),
+  listDeadLetters: (credentials: OperatorCredentials) =>
+    request<DeadLetterSummary[]>("/v1/outbox/dead-letters", credentials),
+  listRecoveryCommands: (credentials: OperatorCredentials) =>
+    request<RecoveryCommandSummary[]>("/v1/outbox/recovery-commands", credentials),
+  requeueDeadLetter: (
+    credentials: OperatorCredentials,
+    outboxMessageId: string,
+    reason: string,
+  ) =>
+    request(`/v1/outbox/dead-letters/${outboxMessageId}/requeue`, credentials, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
   submitReview: (
     credentials: OperatorCredentials,
     review: PendingReview,

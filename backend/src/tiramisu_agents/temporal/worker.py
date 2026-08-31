@@ -16,12 +16,15 @@ from tiramisu_agents.agents.openai_runner import OpenAIAgentsTurnRunner
 from tiramisu_agents.api.settings import Settings, get_settings
 from tiramisu_agents.builtin import FictionalDeployment, load_fictional_deployment
 from tiramisu_agents.db.session import create_engine, create_session_factory
+from tiramisu_agents.extensions import ClientPack, load_configured_client_pack
 from tiramisu_agents.temporal.activities.action_execution import ActionExecutionActivities
 from tiramisu_agents.temporal.activities.action_gateway import ActionGatewayActivities
 from tiramisu_agents.temporal.activities.agent_turn import AgentTurnActivities
 from tiramisu_agents.temporal.activities.process_state import ProcessStateActivities
 from tiramisu_agents.temporal.dispatcher import TemporalOutboxDispatcher
 from tiramisu_agents.temporal.workflows.mailbox import ProcessMailboxWorkflow
+
+_CLIENT_PACK_UNSET = object()
 
 
 def resolve_worker_tenants(
@@ -37,23 +40,43 @@ def resolve_worker_tenants(
 
 
 def compose_fictional_worker(settings: Settings) -> FictionalDeployment:
-    if settings.openai_model is None:
-        raise ValueError(
-            "TIRAMISU_OPENAI_MODEL is required when fictional process orchestration is enabled"
-        )
-    if settings.openai_api_key is None:
-        raise ValueError(
-            "OPENAI_API_KEY is required when fictional process orchestration is enabled"
-        )
+    """Compatibility helper for the bundled local example."""
+    _require_agent_model_configuration(settings)
     return load_fictional_deployment()
 
 
-async def serve(tenant_ids: tuple[UUID, ...], *, settings: Settings | None = None) -> None:
+def compose_worker_client_pack(settings: Settings) -> ClientPack | None:
+    deployment = load_configured_client_pack(
+        settings.client_pack_factory,
+        load_fictional_example=settings.load_fictional_example_processes,
+    )
+    if deployment is not None:
+        _require_agent_model_configuration(settings)
+    return deployment
+
+
+def _require_agent_model_configuration(settings: Settings) -> None:
+    if settings.openai_model is None:
+        raise ValueError(
+            "TIRAMISU_OPENAI_MODEL is required when client-pack orchestration is enabled"
+        )
+    if settings.openai_api_key is None:
+        raise ValueError("OPENAI_API_KEY is required when client-pack orchestration is enabled")
+
+
+async def serve(
+    tenant_ids: tuple[UUID, ...],
+    *,
+    settings: Settings | None = None,
+    client_pack: ClientPack | None | object = _CLIENT_PACK_UNSET,
+) -> None:
     settings = settings or get_settings()
     tenant_ids = resolve_worker_tenants(settings, tenant_ids)
     deployment = (
-        compose_fictional_worker(settings) if settings.load_fictional_example_processes else None
+        compose_worker_client_pack(settings) if client_pack is _CLIENT_PACK_UNSET else client_pack
     )
+    if deployment is not None and not isinstance(deployment, ClientPack):
+        raise TypeError("client_pack must be a ClientPack or None")
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
     client = await Client.connect(
@@ -145,8 +168,7 @@ def run() -> None:
     logging.basicConfig(level=settings.log_level)
     try:
         tenant_ids = resolve_worker_tenants(settings, tuple(arguments.tenant_id))
-        if settings.load_fictional_example_processes:
-            compose_fictional_worker(settings)
+        client_pack = compose_worker_client_pack(settings)
     except ValueError as error:
         parser.error(str(error))
-    asyncio.run(serve(tenant_ids, settings=settings))
+    asyncio.run(serve(tenant_ids, settings=settings, client_pack=client_pack))

@@ -37,10 +37,19 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, ge=1, le=65535)
     allow_unsafe_development_tenant_header: bool = False
     load_fictional_example_processes: bool = False
+    client_pack_factory: str | None = None
 
     @field_validator("openai_model", mode="before")
     @classmethod
     def normalize_optional_model(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("client_pack_factory", mode="before")
+    @classmethod
+    def normalize_optional_client_pack_factory(cls, value: object) -> object:
         if isinstance(value, str):
             stripped = value.strip()
             return stripped or None
@@ -100,6 +109,10 @@ class Settings(BaseSettings):
             and self.load_fictional_example_processes
         ):
             raise ValueError("the fictional client pack is restricted to development and tests")
+        if self.client_pack_factory and self.load_fictional_example_processes:
+            raise ValueError(
+                "configure either TIRAMISU_CLIENT_PACK_FACTORY or the fictional example"
+            )
         return self
 
 
