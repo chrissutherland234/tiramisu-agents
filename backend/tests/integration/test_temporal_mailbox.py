@@ -453,7 +453,13 @@ async def test_failed_turn_enters_intervention_and_operator_retry_replays_same_s
         await asyncio.wait_for(intervention_recorded.wait(), timeout=2)
 
         waiting = await handle.query(ProcessMailboxWorkflow.state)
+        for _ in range(100):
+            if not waiting.turn_in_progress and waiting.wake_plan is not None:
+                break
+            await asyncio.sleep(0.01)
+            waiting = await handle.query(ProcessMailboxWorkflow.state)
         assert waiting.closed is False
+        assert waiting.turn_in_progress is False
         assert waiting.wake_plan is not None
         assert waiting.wake_plan.human_interactions == ("operator",)
         assert len(intervention_commands) == 1

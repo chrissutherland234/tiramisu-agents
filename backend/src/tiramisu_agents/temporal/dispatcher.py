@@ -30,7 +30,7 @@ class DispatchStatus(StrEnum):
     EMPTY = "empty"
     PUBLISHED = "published"
     RETRY_SCHEDULED = "retry_scheduled"
-    FAILED = "failed"
+    DEAD_LETTERED = "dead_lettered"
     CLAIM_LOST = "claim_lost"
 
 
@@ -154,6 +154,7 @@ class TemporalOutboxDispatcher:
                 .values(
                     status="published",
                     published_at=datetime.now(UTC),
+                    dead_lettered_at=None,
                     claimed_at=None,
                     claim_token=None,
                     last_error=None,
@@ -256,11 +257,12 @@ class TemporalOutboxDispatcher:
                     OutboxMessage.claim_token == message.claim_token,
                 )
                 .values(
-                    status="failed" if terminal else "pending",
+                    status="dead_letter" if terminal else "pending",
                     claimed_at=None,
                     claim_token=None,
                     last_error=error_text,
                     available_at=next_available_at,
+                    dead_lettered_at=datetime.now(UTC) if terminal else None,
                 )
                 .returning(OutboxMessage.id)
             )
@@ -271,7 +273,7 @@ class TemporalOutboxDispatcher:
                 error=error_text,
             )
         return DispatchResult(
-            status=DispatchStatus.FAILED if terminal else DispatchStatus.RETRY_SCHEDULED,
+            status=(DispatchStatus.DEAD_LETTERED if terminal else DispatchStatus.RETRY_SCHEDULED),
             message_id=message.id,
             error=error_text,
         )

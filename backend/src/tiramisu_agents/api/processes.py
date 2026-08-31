@@ -82,7 +82,24 @@ class ProcessDetail(BaseModel):
     current_wake_conditions: tuple[WakeCondition, ...]
     created_at: datetime
     updated_at: datetime
+    interventions: tuple["ProcessInterventionSummary", ...]
     timeline: tuple[TimelineItem, ...]
+
+
+class ProcessInterventionSummary(BaseModel):
+    id: UUID
+    agent_turn_id: UUID
+    kind: str
+    status: str
+    error_type: str
+    error: str
+    source_event_ids: tuple[UUID, ...]
+    source_review_command_ids: tuple[UUID, ...]
+    source_action_attempt_ids: tuple[UUID, ...]
+    source_timer_ids: tuple[str, ...]
+    resolved_by_command_id: UUID | None
+    resolved_at: datetime | None
+    created_at: datetime
 
 
 class PendingReview(BaseModel):
@@ -219,6 +236,13 @@ async def get_process(
         )
         if process is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="process not found")
+        interventions = (
+            await session.scalars(
+                select(ProcessIntervention)
+                .where(ProcessIntervention.process_instance_id == process_instance_id)
+                .order_by(ProcessIntervention.created_at.desc())
+            )
+        ).all()
         timeline = await _load_timeline(session, process_instance_id, limit=timeline_limit)
         return ProcessDetail(
             id=process.id,
@@ -241,6 +265,28 @@ async def get_process(
             ),
             created_at=process.created_at,
             updated_at=process.updated_at,
+            interventions=tuple(
+                ProcessInterventionSummary(
+                    id=item.id,
+                    agent_turn_id=item.agent_turn_id,
+                    kind=item.kind,
+                    status=item.status,
+                    error_type=item.error_type,
+                    error=item.error,
+                    source_event_ids=tuple(UUID(value) for value in item.source_event_ids),
+                    source_review_command_ids=tuple(
+                        UUID(value) for value in item.source_review_command_ids
+                    ),
+                    source_action_attempt_ids=tuple(
+                        UUID(value) for value in item.source_action_attempt_ids
+                    ),
+                    source_timer_ids=tuple(item.source_timer_ids),
+                    resolved_by_command_id=item.resolved_by_command_id,
+                    resolved_at=item.resolved_at,
+                    created_at=item.created_at,
+                )
+                for item in interventions
+            ),
             timeline=tuple(timeline),
         )
 

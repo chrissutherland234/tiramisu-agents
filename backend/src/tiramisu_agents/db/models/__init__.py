@@ -11,7 +11,12 @@ from tiramisu_agents.db.models.actions import (
     ActionRevision,
     ApprovalRequest,
 )
-from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
+from tiramisu_agents.db.models.events import (
+    EventInbox,
+    ExternalCorrelation,
+    OutboxMessage,
+    OutboxRecoveryCommand,
+)
 from tiramisu_agents.db.models.processes import (
     ProcessControlCommand,
     ProcessInstance,
@@ -32,6 +37,7 @@ __all__ = [
     "EventInbox",
     "ExternalCorrelation",
     "OutboxMessage",
+    "OutboxRecoveryCommand",
     "ProcessInstance",
     "ProcessIntervention",
     "ProcessControlCommand",

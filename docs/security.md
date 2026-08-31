@@ -55,6 +55,12 @@ uv run tiramisu-admin set-tenant-status \
 
 Suspension is independently checked at API authentication, event ingestion, PostgreSQL-to-Temporal dispatch, immediately before a model call, and immediately before a provider side effect. Pending outbox messages and workflows remain durable, and resume when the tenant is explicitly returned to `active`. Lookup-only reconciliation remains available because it does not repeat a side effect.
 
+Outbox operations use separate least-privilege scopes. `outbox:read` permits
+dead-letter and recovery-history inspection; `outbox:requeue` permits an
+attributed requeue after bounded delivery exhaustion. A requeue never changes
+the message identity or payload, only starts a fresh bounded attempt cycle, and
+the previous error plus actor-supplied reason remain immutable audit evidence.
+
 Each suspend/resume transition creates an immutable reasoned safety event. Repeating the current status is rejected so operators cannot mistake a no-op for a new transition.
 
 A suspension cannot cancel a provider request that has already crossed the final check and begun executing. Provider idempotency, durable action attempts, lookup-only reconciliation, and the incident procedure remain necessary for that race. Resume with the same command and `--status active` only after the cause is understood.

@@ -42,6 +42,29 @@ The replay JSON files under `backend/tests/replay/` are compatibility fixtures, 
 
 For a worker outage, restore workers against the same Temporal namespace and task queue with the same deployment-authorized tenant assignments. Temporal resumes outstanding workflow and Activity tasks; the PostgreSQL dispatcher resumes pending messages and reclaims stale publishing claims. Signal-With-Start and workflow-level IDs make uncertain delivery safe to retry.
 
+After the configured bounded attempts are exhausted, the message moves to the
+explicit `dead_letter` state and records its last error and dead-letter time. An
+operator with `outbox:read` can inspect the queue and immutable recovery history:
+
+```text
+GET /v1/outbox/dead-letters
+GET /v1/outbox/recovery-commands
+```
+
+Once the underlying incident is resolved, an operator with `outbox:requeue`
+may submit a reason and stable command ID:
+
+```text
+POST /v1/outbox/dead-letters/{message_id}/requeue
+```
+
+The row is locked during recovery. Only a dead-lettered message can be
+requeued, and repeating the exact command is idempotent. A successful requeue
+starts a fresh bounded delivery-attempt cycle; the previous attempt count,
+error, dead-letter timestamp, actor, and reason remain in an immutable recovery
+command. Requeueing is safe for the supported Temporal messages because their
+stable IDs and mailbox-level deduplication make delivery at least once.
+
 Before resolving an ambiguous provider action, inspect the durable action attempt and use lookup-only reconciliation. Never manually repeat a side effect merely because a worker stopped before recording its result.
 
-The Compose Temporal service is a persistent local development dependency, not a production topology. Production backup/restore, worker version routing and rollback, dead-letter operations, observability, and restart injection at every provider boundary remain later hardening work.
+The Compose Temporal service is a persistent local development dependency, not a production topology. Production backup/restore, worker version routing and rollback, bulk dead-letter operations, alerting/observability, and restart injection at every provider boundary remain later hardening work.

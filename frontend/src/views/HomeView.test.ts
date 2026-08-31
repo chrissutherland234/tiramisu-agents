@@ -5,6 +5,7 @@ import HomeView from "./HomeView.vue";
 
 const processId = "11111111-1111-4111-8111-111111111111";
 const threadId = "22222222-2222-4222-8222-222222222222";
+const interventionId = "77777777-7777-4777-8777-777777777777";
 const now = "2026-08-30T10:00:00Z";
 
 const summary = {
@@ -48,6 +49,23 @@ const detail = {
   memory_summary_source_event_ids: [],
   current_wake_conditions: [{ type: "human", interaction: "approval" }],
   created_at: now,
+  interventions: [
+    {
+      id: interventionId,
+      agent_turn_id: "88888888-8888-4888-8888-888888888888",
+      kind: "turn_failure",
+      status: "open",
+      error_type: "DecisionRejected",
+      error: "The model produced no valid progress path.",
+      source_event_ids: [],
+      source_review_command_ids: [],
+      source_action_attempt_ids: [],
+      source_timer_ids: [],
+      resolved_by_command_id: null,
+      resolved_at: null,
+      created_at: now,
+    },
+  ],
   timeline: [
     {
       id: "44444444-4444-4444-8444-444444444444",
@@ -111,6 +129,9 @@ describe("operator console", () => {
     expect(wrapper.get('[data-testid="wake-panel"]').text()).toContain("Human · approval");
     expect(wrapper.get('[data-testid="review-queue"]').text()).toContain("Hello there");
     expect(wrapper.get('[data-testid="timeline"]').text()).toContain("Agent decision");
+    expect(wrapper.get('[data-testid="intervention-controls"]').text()).toContain(
+      "DecisionRejected",
+    );
     expect(wrapper.text()).toContain("Tuesday please");
     expect(wrapper.text()).toContain("event · 66666666…6666");
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/processes");
@@ -134,5 +155,25 @@ describe("operator console", () => {
       expected_payload_hash: "a".repeat(64),
     });
     expect(wrapper.text()).toContain("Exact proposal approved");
+
+    await wrapper
+      .get('[data-testid="intervention-controls"] textarea')
+      .setValue("The prompt and process policy have been corrected.");
+    const retry = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Retry failed turn");
+    await retry?.trigger("click");
+    await flushPromises();
+
+    const controlCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith(`/v1/processes/${processId}/controls`),
+    );
+    expect(controlCall).toBeDefined();
+    expect(JSON.parse(String(controlCall?.[1]?.body))).toEqual({
+      command_type: "retry",
+      reason: "The prompt and process policy have been corrected.",
+      intervention_id: interventionId,
+    });
+    expect(wrapper.text()).toContain("Failed turn queued for retry");
   });
 });

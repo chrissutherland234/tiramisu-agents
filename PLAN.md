@@ -851,7 +851,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Add forced PostgreSQL row-level security, composite tenant foreign keys, transaction-scoped tenant context, and separate local admin/runtime roles.
 - [x] Establish initial tenant-aware API authentication with hash-only, scoped, expirable and revocable deployment credentials. Managed external identity-provider/browser sessions and production database role provisioning remain.
 - [x] Add canonical event inbox, transactional outbox, external correlation registry, and quarantine persistence foundations.
-- [x] Add a tenant-allow-listed Temporal outbox delivery worker with recoverable claims and idempotent Signal-With-Start delivery.
+- [x] Add a tenant-allow-listed Temporal outbox delivery worker with recoverable claims, bounded retries, explicit dead letters, attributed/idempotent requeue, recovery history, and idempotent Signal-With-Start delivery.
 - [ ] Add operator-driven quarantine resolution and replay.
 - [x] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations, including exact action-result provenance and immutable evidence-backed operator resolution.
 - [ ] Add autonomy budgets, communication policy, and rate limits. Initial deterministic outbound follow-up count/interval policy and reply resets are enforced, and an audited tenant suspension control gates ingress, dispatch, model calls, and provider side effects; budgets, platform-wide limits, and capability-specific circuit breakers remain.
@@ -911,7 +911,7 @@ Recommended initial journey:
 - [ ] Add safe client-editable settings.
 - [ ] Add process simulation and validation before publication.
 - [x] Add the initial tenant process list/detail API and operator instance timeline, durable wake-condition, sourced-fact/claim, memory, and commitment UI.
-- [ ] Add the full approval, proposal-diff, review-chat, revision-lineage, and manual-intervention UI. The initial exact-payload approve/reject/comment/request-revision queue and API are complete; diffs, complete thread history, expiry, takeover, and richer intervention remain.
+- [ ] Add the full approval, proposal-diff, review-chat, revision-lineage, and manual-intervention UI. Exact-payload approve/reject/comment/request-revision and intervention retry/wake/takeover/resume controls are complete; diffs, complete thread history, expiry management, and richer intervention diagnostics remain.
 - [ ] Add event-quarantine, unknown-action, and reconciliation UI.
 - [ ] Define active-instance migration behavior.
 - [ ] Decide the public distribution name and registry strategy when the extension API is stable; only then publish signed/versioned Python distributions if useful. Container releases may proceed independently.
@@ -919,7 +919,7 @@ Recommended initial journey:
 ### Phase 5 — Production hardening
 
 - [ ] Harden and load-test per-tenant usage limits, budgets, circuit breakers, and back-pressure.
-- [ ] Add mature stuck-workflow, quarantine, reconciliation-backlog, and dead-letter operations.
+- [ ] Add mature stuck-workflow, quarantine, reconciliation-backlog, and dead-letter operations. Explicit tenant-scoped dead-letter inspection, immutable requeue audit, fresh bounded attempt cycles, and permissioned APIs are complete; bulk operations, alerts, retention, and the other operational backlogs remain.
 - [ ] Complete tenant-specific PII retention, deletion, legal-hold, residency, and audit controls.
 - [ ] Add secret management and credential rotation.
 - [ ] Expand agent quality, regression, adversarial, and safety evals.

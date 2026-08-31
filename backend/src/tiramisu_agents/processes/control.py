@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -111,8 +111,15 @@ class ProcessControlService:
         command: ProcessControlInput,
     ) -> ProcessControlCommand:
         await set_tenant_context(session, command.tenant_id)
-        if not command.reason.strip():
-            raise ProcessControlConflict("control command requires a reason")
+        reason = command.reason.strip()
+        if not reason or len(reason) > 10_000:
+            raise ProcessControlConflict(
+                "control command reason must contain 1 to 10000 characters"
+            )
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"process-control:{command.tenant_id}:{command.command_id}"},
+        )
         existing = await session.scalar(
             select(ProcessControlCommand).where(
                 ProcessControlCommand.tenant_id == command.tenant_id,
@@ -124,7 +131,7 @@ class ProcessControlService:
                 existing.process_instance_id != command.process_instance_id
                 or existing.actor_id != command.actor_id
                 or existing.command_type != command.command_type.value
-                or existing.reason != command.reason
+                or existing.reason != reason
                 or existing.intervention_id != command.intervention_id
             ):
                 raise ProcessControlConflict("control command ID was reused")
@@ -189,7 +196,7 @@ class ProcessControlService:
             actor_id=command.actor_id,
             intervention_id=command.intervention_id,
             command_type=command.command_type.value,
-            reason=command.reason,
+            reason=reason,
             payload=payload,
         )
         session.add(stored)

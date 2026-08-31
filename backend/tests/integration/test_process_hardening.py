@@ -191,10 +191,12 @@ async def test_interventions_controls_and_takeover_are_durable_and_idempotent() 
             reason="Corrected prompt is ready",
             intervention_id=intervention_id,
         )
-        async with context.runtime_factory.begin() as session:
-            first = await service.apply_control(session, retry)
-        async with context.runtime_factory.begin() as session:
-            repeated = await service.apply_control(session, retry)
+
+        async def apply_retry() -> ProcessControlCommand:
+            async with context.runtime_factory.begin() as session:
+                return await service.apply_control(session, retry)
+
+        first, repeated = await asyncio.gather(apply_retry(), apply_retry())
         assert first.id == repeated.id == retry.command_id
 
         takeover = ProcessControlInput(

@@ -66,7 +66,7 @@ i.status-completed, .large-status.status-completed { background: #dce8ea; color:
 .wake-panel .eyebrow { color: #d5a98d; }
 .wake-list { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .wake-list span { padding: 7px 10px; border: 1px solid #66534a; border-radius: 7px; color: #e8d7ca; font-size: 11px; }
-.review-section, .timeline-section { margin-top: 26px; padding: 24px; border: 1px solid #d2b4a5; border-radius: 12px; background: #fff9f4; }
+.review-section, .intervention-section, .timeline-section { margin-top: 26px; padding: 24px; border: 1px solid #d2b4a5; border-radius: 12px; background: #fff9f4; }
 .section-heading { align-items: center; }
 .section-heading h3 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 24px; font-weight: 500; }
 .review-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, .8fr); gap: 28px; margin-top: 22px; padding-top: 22px; border-top: 1px solid #e4d6cc; }
@@ -79,6 +79,14 @@ i.status-completed, .large-status.status-completed { background: #dce8ea; color:
 .fact-list dd small { display: block; margin-top: 5px; color: #92735f; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
 .review-controls { display: grid; gap: 12px; }
 .review-buttons { display: flex; flex-wrap: wrap; gap: 7px; }
+.intervention-section { border-color: #d3a69c; background: #fff5f1; }
+.intervention-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, .65fr); gap: 24px; margin-top: 20px; padding: 18px; border: 1px solid #dfbdb5; border-radius: 10px; background: #fffdfa; }
+.intervention-card.resolved { border-color: #d8cec6; opacity: .72; }
+.intervention-card span, .intervention-card small { color: #946353; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.intervention-card h4 { margin: 8px 0; font-size: 16px; }
+.intervention-card p { margin: 0 0 10px; color: #6c5148; font-size: 13px; line-height: 1.5; }
+.intervention-action { display: grid; gap: 10px; align-content: start; }
+.manual-control { display: grid; grid-template-columns: minmax(280px, 1fr) auto; gap: 16px; align-items: end; margin-top: 20px; padding-top: 20px; border-top: 1px solid #dfc5bc; }
 .state-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 26px; }
 .state-card { min-height: 170px; padding: 22px; border: 1px solid #d7ccc1; border-radius: 11px; background: rgba(255,255,255,.38); }
 .memory-card { background: #e8ded2; }
@@ -112,6 +120,7 @@ pre { overflow: auto; padding: 12px; border-radius: 7px; background: #e9e1da; fo
   .workspace { grid-template-columns: 240px minmax(0, 1fr); }
   .process-detail { padding-left: 25px; }
   .review-card { grid-template-columns: 1fr; }
+  .intervention-card, .manual-control { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {
   .operator-shell { width: min(100% - 24px, 1500px); }

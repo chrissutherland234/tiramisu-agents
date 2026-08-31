@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -89,13 +90,19 @@ class OutboxMessage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "outbox_messages"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'publishing', 'published', 'failed')", name="status_valid"
+            "status IN ('pending', 'publishing', 'published', 'dead_letter')",
+            name="status_valid",
         ),
         CheckConstraint("attempt_count >= 0", name="attempt_count_nonnegative"),
         CheckConstraint(
             "(status = 'publishing' AND claimed_at IS NOT NULL AND claim_token IS NOT NULL) "
             "OR (status <> 'publishing' AND claimed_at IS NULL AND claim_token IS NULL)",
             name="claim_state_consistent",
+        ),
+        CheckConstraint(
+            "(status = 'dead_letter' AND dead_lettered_at IS NOT NULL) "
+            "OR (status <> 'dead_letter' AND dead_lettered_at IS NULL)",
+            name="dead_letter_state_consistent",
         ),
         ForeignKeyConstraint(
             ["tenant_id", "process_instance_id"],
@@ -110,6 +117,7 @@ class OutboxMessage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ondelete="RESTRICT",
         ),
         UniqueConstraint("tenant_id", "deduplication_key", name="uq_outbox_messages_dedup"),
+        UniqueConstraint("tenant_id", "id", name="uq_outbox_messages_tenant_id_ref"),
         Index("ix_outbox_messages_dispatch", "status", "available_at"),
     )
 
@@ -131,3 +139,40 @@ class OutboxMessage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     claim_token: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
     last_error: Mapped[str | None] = mapped_column(String(2000))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OutboxRecoveryCommand(UUIDPrimaryKeyMixin, Base):
+    """Immutable, attributed recovery of one dead-lettered delivery cycle."""
+
+    __tablename__ = "outbox_recovery_commands"
+    __table_args__ = (
+        CheckConstraint("command_type IN ('requeue')", name="command_type_valid"),
+        CheckConstraint("previous_attempt_count > 0", name="previous_attempt_count_positive"),
+        ForeignKeyConstraint(
+            ["tenant_id", "outbox_message_id"],
+            ["outbox_messages.tenant_id", "outbox_messages.id"],
+            name="fk_outbox_recovery_commands_message",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_outbox_recovery_commands_message_created",
+            "tenant_id",
+            "outbox_message_id",
+            "created_at",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    outbox_message_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    actor_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    command_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_error: Mapped[str | None] = mapped_column(String(2000))
+    previous_dead_lettered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

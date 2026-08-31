@@ -31,6 +31,22 @@ export interface TimelineItem {
   detail: Record<string, unknown>;
 }
 
+export interface ProcessIntervention {
+  id: string;
+  agent_turn_id: string;
+  kind: string;
+  status: "open" | "resolved";
+  error_type: string;
+  error: string;
+  source_event_ids: string[];
+  source_review_command_ids: string[];
+  source_action_attempt_ids: string[];
+  source_timer_ids: string[];
+  resolved_by_command_id: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
 export interface ProcessDetail {
   id: string;
   process_type: string;
@@ -47,6 +63,7 @@ export interface ProcessDetail {
   current_wake_conditions: WakeCondition[];
   created_at: string;
   updated_at: string;
+  interventions: ProcessIntervention[];
   timeline: TimelineItem[];
 }
 
@@ -66,6 +83,7 @@ export interface PendingReview {
 }
 
 export type ReviewCommandType = "approve" | "reject" | "request_revision" | "comment";
+export type ProcessControlType = "retry" | "wake" | "takeover" | "resume";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/$/, "");
 
@@ -109,6 +127,21 @@ export const operatorApi = {
         command_type: commandType,
         message: message || null,
         expected_payload_hash: commandType === "approve" ? review.payload_hash : null,
+      }),
+    }),
+  submitProcessControl: (
+    credentials: OperatorCredentials,
+    processId: string,
+    commandType: ProcessControlType,
+    reason: string,
+    interventionId?: string,
+  ) =>
+    request(`/v1/processes/${processId}/controls`, credentials, {
+      method: "POST",
+      body: JSON.stringify({
+        command_type: commandType,
+        reason,
+        intervention_id: interventionId ?? null,
       }),
     }),
 };

@@ -5,7 +5,9 @@ import {
   operatorApi,
   type OperatorCredentials,
   type PendingReview,
+  type ProcessControlType,
   type ProcessDetail,
+  type ProcessIntervention,
   type ProcessSummary,
   type ReviewCommandType,
   type WakeCondition,
@@ -16,6 +18,8 @@ const processes = ref<ProcessSummary[]>([]);
 const reviews = ref<PendingReview[]>([]);
 const selected = ref<ProcessDetail | null>(null);
 const reviewNotes = reactive<Record<string, string>>({});
+const interventionReasons = reactive<Record<string, string>>({});
+const processControlReason = ref("");
 const connected = ref(false);
 const loading = ref(false);
 const error = ref("");
@@ -101,6 +105,46 @@ async function submitReview(review: PendingReview, commandType: ReviewCommandTyp
     await refresh(review.process_instance_id);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Could not submit the review.";
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function submitProcessControl(
+  commandType: ProcessControlType,
+  intervention?: ProcessIntervention,
+) {
+  if (!selected.value) return;
+  const reason = (
+    intervention ? interventionReasons[intervention.id] : processControlReason.value
+  )?.trim();
+  if (!reason) {
+    error.value = "Add a reason before issuing a process control.";
+    return;
+  }
+  loading.value = true;
+  error.value = "";
+  try {
+    await operatorApi.submitProcessControl(
+      credentials,
+      selected.value.id,
+      commandType,
+      reason,
+      intervention?.id,
+    );
+    notice.value =
+      commandType === "retry"
+        ? "Failed turn queued for retry with its original sources."
+        : commandType === "takeover"
+          ? "Agent paused for operator takeover."
+          : commandType === "resume"
+            ? "Agent resumed and queued to wake."
+            : "Manual wake queued for the process.";
+    if (intervention) interventionReasons[intervention.id] = "";
+    else processControlReason.value = "";
+    await refresh(selected.value.id);
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Could not control the process.";
   } finally {
     loading.value = false;
   }
@@ -200,6 +244,78 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
           <div class="wake-list">
             <span v-for="(wake, index) in selected.current_wake_conditions" :key="index">{{ wakeLabel(wake) }}</span>
             <span v-if="!selected.current_wake_conditions.length" class="muted">Terminal or active</span>
+          </div>
+        </section>
+
+        <section
+          v-if="selected.interventions.length || !['completed', 'cancelled', 'failed'].includes(selected.status)"
+          class="intervention-section"
+          data-testid="intervention-controls"
+        >
+          <div class="section-heading">
+            <div><p class="eyebrow">Operator control</p><h3>Interventions and manual control</h3></div>
+            <span>{{ selected.interventions.filter((item) => item.status === 'open').length }} open</span>
+          </div>
+          <article
+            v-for="intervention in selected.interventions"
+            :key="intervention.id"
+            class="intervention-card"
+            :class="{ resolved: intervention.status === 'resolved' }"
+          >
+            <div>
+              <span>{{ intervention.kind.replaceAll('_', ' ') }} · {{ formatDate(intervention.created_at) }}</span>
+              <h4>{{ intervention.error_type }}</h4>
+              <p>{{ intervention.error }}</p>
+              <small>{{ intervention.status }} · turn {{ shortId(intervention.agent_turn_id) }}</small>
+            </div>
+            <div v-if="intervention.status === 'open'" class="intervention-action">
+              <label>
+                <span>Why retry?</span>
+                <textarea
+                  v-model="interventionReasons[intervention.id]"
+                  rows="3"
+                  placeholder="Prompt corrected, provider restored, or other reason…"
+                />
+              </label>
+              <button
+                class="button button-primary"
+                :disabled="loading"
+                @click="submitProcessControl('retry', intervention)"
+              >Retry failed turn</button>
+            </div>
+          </article>
+          <div
+            v-if="!['completed', 'cancelled', 'failed'].includes(selected.status)"
+            class="manual-control"
+          >
+            <label>
+              <span>Control reason</span>
+              <textarea
+                v-model="processControlReason"
+                rows="2"
+                placeholder="Required audit reason…"
+              />
+            </label>
+            <div class="review-buttons">
+              <button
+                v-if="selected.status !== 'paused'"
+                class="button"
+                :disabled="loading"
+                @click="submitProcessControl('wake')"
+              >Wake now</button>
+              <button
+                v-if="selected.status !== 'paused'"
+                class="button button-danger"
+                :disabled="loading"
+                @click="submitProcessControl('takeover')"
+              >Pause and take over</button>
+              <button
+                v-else
+                class="button button-primary"
+                :disabled="loading"
+                @click="submitProcessControl('resume')"
+              >Resume agent</button>
+            </div>
           </div>
         </section>
 

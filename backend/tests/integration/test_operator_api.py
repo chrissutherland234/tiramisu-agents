@@ -33,12 +33,14 @@ from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, Ou
 from tiramisu_agents.db.models.processes import (
     ProcessControlCommand,
     ProcessInstance,
+    ProcessIntervention,
     ProcessStateRevision,
 )
 from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, ReviewThread
 from tiramisu_agents.db.models.tenancy import Tenant, TenantCredential
 from tiramisu_agents.db.session import create_engine, create_session_factory, set_tenant_context
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
+from tiramisu_agents.processes.control import InterventionInput, ProcessControlService
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateService
 from tiramisu_agents.security.credential_service import TenantCredentialService
@@ -61,6 +63,7 @@ async def _delete_tenant_data(
         for model in (
             ProcessStateRevision,
             ProcessControlCommand,
+            ProcessIntervention,
             ActionReconciliationDecision,
             ActionAttempt,
             ApprovalDecision,
@@ -215,11 +218,25 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
                 policy=definition.action_policy(),
             )
         assert actions[0].review_thread_id is not None
+        intervention_id = uuid4()
         async with runtime_factory.begin() as session:
             await set_tenant_context(session, tenant_id)
             approval_request = await session.get(ApprovalRequest, actions[0].approval_request_id)
             assert approval_request is not None
             approval_request.required_role = "message_approver"
+            await ProcessControlService().record_intervention(
+                session,
+                InterventionInput(
+                    intervention_id=intervention_id,
+                    tenant_id=tenant_id,
+                    process_instance_id=process_id,
+                    agent_turn_id=uuid4(),
+                    kind="turn_failure",
+                    error_type="DecisionRejected",
+                    error="The model produced no valid progress path.",
+                    event_ids=(event.event_id,),
+                ),
+            )
             await ProcessStateService().apply_decision(
                 session,
                 tenant_id=tenant_id,
@@ -241,6 +258,23 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             assert detail.status_code == 200
             assert detail.json()["current_wake_conditions"] == [
                 {"type": "human", "interaction": "approval"}
+            ]
+            assert detail.json()["interventions"] == [
+                {
+                    "id": str(intervention_id),
+                    "agent_turn_id": detail.json()["interventions"][0]["agent_turn_id"],
+                    "kind": "turn_failure",
+                    "status": "open",
+                    "error_type": "DecisionRejected",
+                    "error": "The model produced no valid progress path.",
+                    "source_event_ids": [str(event.event_id)],
+                    "source_review_command_ids": [],
+                    "source_action_attempt_ids": [],
+                    "source_timer_ids": [],
+                    "resolved_by_command_id": None,
+                    "resolved_at": None,
+                    "created_at": detail.json()["interventions"][0]["created_at"],
+                }
             ]
             assert {item["kind"] for item in detail.json()["timeline"]} >= {
                 "event",
