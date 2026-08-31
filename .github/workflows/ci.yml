@@ -31,7 +31,7 @@ jobs:
       TIRAMISU_RUN_DB_TESTS: "1"
       PGPASSWORD: tiramisu
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -54,7 +54,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -86,7 +86,7 @@ jobs:
       TIRAMISU_MIGRATION_DATABASE_URL: postgresql+asyncpg://tiramisu:tiramisu@localhost:5432/tiramisu_test
       PGPASSWORD: tiramisu
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -111,7 +111,7 @@ jobs:
   compose:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker compose config --quiet
       - run: POSTGRES_DB=tiramisu_override docker compose up -d --wait postgres temporal
       - run: >-
