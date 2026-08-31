@@ -1,6 +1,7 @@
 """Race-safe, idempotent human review commands."""
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -57,7 +58,7 @@ class ReviewService:
         )
         if process is None:
             raise ReviewConflict("review process not found")
-        if command.command_type is not ReviewCommandType.COMMENT and process.status in {
+        if process.status in {
             "paused",
             "completed",
             "cancelled",
@@ -106,6 +107,8 @@ class ReviewService:
             return self._result(command, thread, approval, request)
         if approval.status != ApprovalStatus.PENDING.value or thread.status != "open":
             raise ReviewConflict("review is no longer pending")
+        if approval.expires_at is not None and approval.expires_at <= datetime.now(UTC):
+            raise ReviewConflict("approval has expired")
 
         if command.command_type is ReviewCommandType.APPROVE:
             if command.expected_payload_hash != approval.payload_hash:

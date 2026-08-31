@@ -30,7 +30,11 @@ from tiramisu_agents.db.models.actions import (
     ApprovalRequest,
 )
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
-from tiramisu_agents.db.models.processes import ProcessInstance, ProcessStateRevision
+from tiramisu_agents.db.models.processes import (
+    ProcessControlCommand,
+    ProcessInstance,
+    ProcessStateRevision,
+)
 from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, ReviewThread
 from tiramisu_agents.db.models.tenancy import Tenant, TenantCredential
 from tiramisu_agents.db.session import create_engine, create_session_factory, set_tenant_context
@@ -56,6 +60,7 @@ async def _delete_tenant_data(
     async with admin_factory.begin() as session:
         for model in (
             ProcessStateRevision,
+            ProcessControlCommand,
             ActionReconciliationDecision,
             ActionAttempt,
             ApprovalDecision,
@@ -176,6 +181,16 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
                 name="other tenant reader",
                 scopes=(CredentialScope.PROCESSES_READ,),
             )
+            control_credential = await credential_service.issue(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                name="process controller",
+                scopes=(
+                    CredentialScope.PROCESSES_READ,
+                    CredentialScope.PROCESSES_CONTROL,
+                ),
+            )
         async with runtime_factory.begin() as session:
             ingested = await EventIngestionService().ingest(
                 session,
@@ -291,6 +306,46 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             assert repeated.status_code == 202
             assert repeated.json() == approval.json()
             assert (await client.get("/v1/reviews", headers=headers)).json() == []
+
+            forbidden_control = await client.post(
+                f"/v1/processes/{process_id}/controls",
+                headers=headers,
+                json={"command_type": "takeover", "reason": "Operator takeover"},
+            )
+            assert forbidden_control.status_code == 403
+
+            control_id = uuid4()
+            control_headers = {"Authorization": f"Bearer {control_credential.token}"}
+            takeover = await client.post(
+                f"/v1/processes/{process_id}/controls",
+                headers=control_headers,
+                json={
+                    "command_id": str(control_id),
+                    "command_type": "takeover",
+                    "reason": "Operator takeover",
+                },
+            )
+            assert takeover.status_code == 202
+            assert takeover.json() == {
+                "command_id": str(control_id),
+                "command_type": "takeover",
+            }
+            repeated_takeover = await client.post(
+                f"/v1/processes/{process_id}/controls",
+                headers=control_headers,
+                json={
+                    "command_id": str(control_id),
+                    "command_type": "takeover",
+                    "reason": "Operator takeover",
+                },
+            )
+            assert repeated_takeover.status_code == 202
+            assert repeated_takeover.json() == takeover.json()
+            controlled_detail = await client.get(
+                f"/v1/processes/{process_id}", headers=control_headers
+            )
+            assert controlled_detail.json()["status"] == "paused"
+            assert "control" in {item["kind"] for item in controlled_detail.json()["timeline"]}
     finally:
         await _delete_tenant_data(admin_factory, tenant_id)
         await _delete_tenant_data(admin_factory, other_tenant_id)

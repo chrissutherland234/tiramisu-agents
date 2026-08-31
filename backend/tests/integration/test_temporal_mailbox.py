@@ -15,6 +15,7 @@ from temporalio.worker import Worker
 from tiramisu_agents.temporal.workflows.mailbox import (
     MailboxActionResolution,
     MailboxContinuation,
+    MailboxControl,
     MailboxEvent,
     MailboxInput,
     MailboxReview,
@@ -378,6 +379,101 @@ async def test_tenant_suspension_durably_retries_model_and_action_without_losing
         assert [record.error for record in result.turn_records] == [None, None]
         assert result.turn_records[0].event_ids == (event.event_id,)
         assert result.execution_records[0].result_json is not None
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_enters_intervention_and_operator_retry_replays_same_sources() -> None:
+    task_queue = f"intervention-retry-test-{uuid4()}"
+    model_calls = 0
+    intervention_commands: list[dict[str, Any]] = []
+    intervention_recorded = asyncio.Event()
+
+    @activity.defn(name="run_agent_turn")
+    async def run_agent_turn(command: dict[str, Any]) -> dict[str, str]:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            raise ApplicationError(
+                "invalid model decision",
+                type="DecisionRejected",
+                non_retryable=True,
+            )
+        return {
+            "decision_json": json.dumps(
+                {
+                    "decision_id": str(uuid4()),
+                    "based_on_event_ids": command["event_ids"],
+                    "based_on_review_command_ids": [],
+                    "based_on_action_attempt_ids": [],
+                    "based_on_timer_ids": [],
+                    "status": "completed",
+                    "actions": [],
+                    "wake_conditions": [],
+                    "memory_update": {},
+                }
+            )
+        }
+
+    @activity.defn(name="persist_agent_actions")
+    async def persist_agent_actions(_command: dict[str, Any]) -> dict[str, str]:
+        return {"actions_json": "[]"}
+
+    @activity.defn(name="record_process_intervention")
+    async def record_process_intervention(command: dict[str, Any]) -> None:
+        intervention_commands.append(command)
+        intervention_recorded.set()
+
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as environment,
+        Worker(
+            environment.client,
+            task_queue=task_queue,
+            workflows=[ProcessMailboxWorkflow],
+            activities=[
+                run_agent_turn,
+                persist_agent_actions,
+                persist_process_state,
+                record_process_intervention,
+            ],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            ProcessMailboxWorkflow.run,
+            MailboxInput(
+                tenant_id="tenant-1",
+                process_instance_id="process-1",
+                process_definition_id="example",
+                process_definition_version="1",
+            ),
+            id=f"intervention-retry-mailbox-{uuid4()}",
+            task_queue=task_queue,
+        )
+        event = MailboxEvent(event_id=str(uuid4()), event_type="enquiry.created")
+        await handle.signal(ProcessMailboxWorkflow.receive_event, event)
+        await asyncio.wait_for(intervention_recorded.wait(), timeout=2)
+
+        waiting = await handle.query(ProcessMailboxWorkflow.state)
+        assert waiting.closed is False
+        assert waiting.wake_plan is not None
+        assert waiting.wake_plan.human_interactions == ("operator",)
+        assert len(intervention_commands) == 1
+        assert intervention_commands[0]["error_type"] == "DecisionRejected"
+        assert intervention_commands[0]["event_ids"] == [event.event_id]
+
+        await handle.signal(
+            ProcessMailboxWorkflow.receive_control,
+            MailboxControl(
+                command_id=str(uuid4()),
+                command_type="retry",
+                event_ids=(event.event_id,),
+            ),
+        )
+        result = await handle.result()
+        assert result.closed is True
+        assert model_calls == 2
+        assert result.turn_records[0].error is not None
+        assert result.turn_records[1].event_ids == (event.event_id,)
+        assert result.turn_records[1].error is None
 
 
 @pytest.mark.asyncio

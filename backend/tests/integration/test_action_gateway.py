@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -292,6 +292,26 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         approve = wrong_hash.model_copy(
             update={"command_id": uuid4(), "expected_payload_hash": first[0].payload_hash}
         )
+        assert first[0].approval_request_id is not None
+        async with runtime_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            expiring_approval = await session.get(
+                ApprovalRequest,
+                first[0].approval_request_id,
+            )
+            assert expiring_approval is not None
+            expiring_approval.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        with pytest.raises(ReviewConflict, match="approval has expired"):
+            async with runtime_factory.begin() as session:
+                await review_service.apply(session, approve)
+        async with runtime_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            expiring_approval = await session.get(
+                ApprovalRequest,
+                first[0].approval_request_id,
+            )
+            assert expiring_approval is not None
+            expiring_approval.expires_at = datetime.now(UTC) + timedelta(hours=1)
         async with runtime_factory.begin() as session:
             approved = await review_service.apply(session, approve)
         async with runtime_factory.begin() as session:
@@ -351,6 +371,31 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                 new_status="active",
                 reason="Provider incident resolved",
             )
+
+        async with runtime_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            expiring_approval = await session.get(
+                ApprovalRequest,
+                first[0].approval_request_id,
+            )
+            assert expiring_approval is not None
+            expiring_approval.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        with pytest.raises(ActionExecutionRejected, match="approval has expired"):
+            await executor.execute(
+                tenant_id=tenant_id,
+                process_instance_id=ingested.process_instance_id,
+                action_request_id=first[0].action_request_id,
+                revision=1,
+            )
+        assert messaging_adapter.requests == []
+        async with runtime_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            expiring_approval = await session.get(
+                ApprovalRequest,
+                first[0].approval_request_id,
+            )
+            assert expiring_approval is not None
+            expiring_approval.expires_at = datetime.now(UTC) + timedelta(hours=1)
 
         sent = await executor.execute(
             tenant_id=tenant_id,
@@ -586,6 +631,14 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         assert len(replacement_actions) == 1
         assert replacement_actions[0]["outcome"] == "require_approval"
         assert replacement_actions[0]["review_thread_id"] is not None
+        async with runtime_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            replacement_request = await session.get(
+                ActionRequest,
+                UUID(replacement_actions[0]["action_request_id"]),
+            )
+            assert replacement_request is not None
+            assert replacement_request.supersedes_action_request_id == first[2].action_request_id
 
         async with runtime_factory.begin() as session:
             await set_tenant_context(session, tenant_id)

@@ -854,7 +854,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Add a tenant-allow-listed Temporal outbox delivery worker with recoverable claims and idempotent Signal-With-Start delivery.
 - [ ] Add operator-driven quarantine resolution and replay.
 - [x] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations, including exact action-result provenance and immutable evidence-backed operator resolution.
-- [ ] Add autonomy budgets, communication policy, and rate limits. An audited tenant suspension control now gates ingress, dispatch, model calls, and provider side effects; platform-wide and capability-specific circuit breakers remain.
+- [ ] Add autonomy budgets, communication policy, and rate limits. Initial deterministic outbound follow-up count/interval policy and reply resets are enforced, and an audited tenant suspension control gates ingress, dispatch, model calls, and provider side effects; budgets, platform-wide limits, and capability-specific circuit breakers remain.
 - [ ] Add data classification, log/trace redaction, Temporal payload encryption hooks, and retention configuration.
 - [x] Add formatting, linting, strict static typing, unit tests, dependency lockfiles, and CI.
 - [ ] Add correlated structured logging, tracing, metrics, health checks, and initial stuck-work alerts.
@@ -862,7 +862,7 @@ The following architecture decision records are gates for the durable kernel:
 
 ### Phase 2 — Durable agent kernel
 
-- [ ] Implement `AgentWorkflow`. The process mailbox now sequences bounded event, timer, review, and action-result turns; executes or defers proposals; performs immediate lookup-only reconciliation; rolls history over at safe Continue-As-New boundaries; and exposes turn/pending-action state. Lifecycle transitions, delayed reconciliation schedules, and production failure controls remain.
+- [ ] Implement `AgentWorkflow`. The process mailbox now sequences bounded event, timer, review, control, and action-result turns; executes or defers proposals; persists effective lifecycle/wake outcomes and durable interventions; performs immediate lookup-only reconciliation; rolls history over at safe Continue-As-New boundaries; and exposes turn/pending-action state. Delayed reconciliation schedules and mature production failure operations remain.
 - [x] Implement the initial deterministic process mailbox with event deduplication, replaceable event/timer wake plans, state queries, and time-skipping tests.
 - [x] Implement canonical event ingestion and source-event deduplication.
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
@@ -877,7 +877,7 @@ The following architecture decision records are gates for the durable kernel:
 - [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries. Durable threads, attributed messages, exact approve/reject transitions, row-lock serialization, idempotent commands, supersession requests, transactional outbox Signals, bounded review context, replacement-turn provenance, and automatic workflow turns are complete; operator Updates and richer Queries remain.
 - [ ] Implement action attempts, bounded retries, idempotent execution, ambiguous outcomes, and reconciliation. Durable attempts, stable payload-bound idempotency keys, exact approval revalidation, autonomous/approved stub execution, lookup-only automatic reconciliation, action-result turns, and evidence-backed operator resolution are complete; delayed/background schedules, multi-attempt policy, backoff, backlog operations, and compensation remain.
 - [ ] Implement the tenant integration registry and provider bindings. An explicit in-memory action-type registry and provider-neutral adapter contract are complete; tenant-configured bindings and credential resolution remain.
-- [ ] Implement budget, communication-policy, and safety-boundary enforcement.
+- [ ] Implement budget, communication-policy, and safety-boundary enforcement. Initial follow-up count/interval policy, configured reply resets, deployment-tenant Activity authorization, lifecycle fencing, approval expiry, and tenant suspension are enforced; budgets and platform/capability circuit breakers remain.
 - [ ] Implement Continue-As-New with complete mailbox, wait, version, approval, and budget carry-forward. Versioned rollover now preserves active mailbox buffers, delivery deduplication, recent diagnostics, pending approvals, absolute timers, process-definition identity, and lifetime counters; budget carry-forward awaits the budget model.
 - [x] Add Temporal replay and failure-recovery tests. Committed signal/wait and Activity-backed Continue-As-New histories replay in CI; worker restart, rollover carry-forward, and retry-isolation tests cover the initial recovery surface. The broader failure matrix in the testing strategy remains ongoing.
 - [ ] Run the optional Temporal/OpenAI SDK integration spike and record the decision without blocking the proposal-only path.
@@ -894,10 +894,10 @@ Recommended initial journey:
 - [x] Add provider-neutral payment request/completion primitives with a stateful stub adapter.
 - [x] Add provider-neutral calendar primitives with a stateful stub adapter.
 - [x] Add validated follow-up timers to the process mailbox.
-- [ ] Add manual approval, conversational revision, rejection, expiry, and takeover paths using the test driver and a minimal API surface.
-- [x] Run the complete integration-free journey with stub messaging, booking, payment, and calendar providers. The durable PostgreSQL/Temporal scenario remains a separate recovery test target.
+- [x] Add manual approval, conversational revision, rejection, expiry, and takeover paths using the test driver and a minimal API surface.
+- [x] Run the complete integration-free journey and a full PostgreSQL + Temporal journey with stub messaging, booking, payment, and calendar providers.
 - [ ] Run agent behavior evaluations against the same stubbed journey.
-- [ ] Demonstrate recovery after worker restarts during every wait and side effect. The Temporal suite now proves recovery of a buffered event and active wait across a complete worker stop/start; per-side-effect restart injection remains.
+- [x] Demonstrate recovery after worker restarts during the reference journey's provider/wait boundaries, including fresh reconstructed stub-provider state.
 - [ ] Demonstrate quarantine resolution, ambiguous provider reconciliation, opt-out, message-loop prevention, and budget exhaustion.
 - [ ] Only after the stubbed journey passes, add one real provider integration and run the shared contract and sandbox suites.
 

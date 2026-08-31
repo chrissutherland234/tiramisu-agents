@@ -109,9 +109,7 @@ def upgrade() -> None:
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
-        sa.CheckConstraint(
-            "previous_status IN ('active', 'suspended')", name="previous_valid"
-        ),
+        sa.CheckConstraint("previous_status IN ('active', 'suspended')", name="previous_valid"),
         sa.CheckConstraint("new_status IN ('active', 'suspended')", name="new_valid"),
         sa.CheckConstraint("previous_status <> new_status", name="status_changed"),
         sa.ForeignKeyConstraint(
@@ -147,9 +145,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_tenant_safety_events_tenant_created", table_name="tenant_safety_events"
-    )
+    op.drop_index("ix_tenant_safety_events_tenant_created", table_name="tenant_safety_events")
     op.drop_table("tenant_safety_events")
     op.drop_index("ix_tenant_credentials_tenant_status", table_name="tenant_credentials")
     op.drop_table("tenant_credentials")

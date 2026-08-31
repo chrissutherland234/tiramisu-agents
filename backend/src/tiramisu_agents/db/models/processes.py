@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
@@ -173,6 +174,12 @@ class ProcessIntervention(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "agent_turn_id",
             name="uq_process_intervention_turn",
         ),
+        Index(
+            "ix_process_interventions_open",
+            "tenant_id",
+            "process_instance_id",
+            "status",
+        ),
     )
 
     tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
@@ -204,6 +211,12 @@ class ProcessControlCommand(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ["process_instances.tenant_id", "process_instances.id"],
             name="fk_process_control_commands_process_instance",
             ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_process_control_commands_process_created",
+            "tenant_id",
+            "process_instance_id",
+            "created_at",
         ),
     )
 

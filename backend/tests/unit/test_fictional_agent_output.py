@@ -128,6 +128,55 @@ def test_fictional_output_adds_payment_after_confirmed_booking_result() -> None:
     }
 
 
+def test_deterministic_payment_transition_reopens_a_completed_model_output() -> None:
+    booking_reference = "booking_demo_completed"
+    turn_input = AgentTurnInput(
+        turn_id=uuid4(),
+        process=ProcessSnapshot(
+            tenant_id=uuid4(),
+            process_instance_id=uuid4(),
+            process_type="enquiry_to_booking",
+            process_definition_version="1",
+            status=ProcessStatus.ACTIVE,
+        ),
+        events=(),
+        action_results=(
+            ActionResultContext(
+                attempt_id=uuid4(),
+                action_request_id=uuid4(),
+                revision=1,
+                action_type="propose_booking",
+                parameters={},
+                status=ActionAttemptStatus.SUCCEEDED,
+                adapter_id="stub.booking.v1",
+                idempotency_key="b" * 64,
+                provider_reference=booking_reference,
+                result={"booking_reference": booking_reference},
+                facts=(
+                    FactObservation(
+                        key="booking.reference",
+                        kind=FactKind.AUTHORITATIVE,
+                        value=booking_reference,
+                    ),
+                    FactObservation(
+                        key="booking.status",
+                        kind=FactKind.AUTHORITATIVE,
+                        value="confirmed",
+                    ),
+                ),
+            ),
+        ),
+        instructions="test",
+    )
+
+    decision = FictionalAgentDecisionOutput.model_validate(
+        {"status": "completed"}
+    ).to_agent_decision(turn_input)
+
+    assert decision.status.value == "active"
+    assert [action.action_type for action in decision.actions] == ["request_payment"]
+
+
 def test_fictional_output_drops_memory_summary_with_stale_provenance() -> None:
     turn_input = AgentTurnInput(
         turn_id=uuid4(),
@@ -157,6 +206,41 @@ def test_fictional_output_drops_memory_summary_with_stale_provenance() -> None:
 
     assert decision.memory_update.summary is None
     assert decision.memory_update.open_commitments == ("Continue the process.",)
+
+
+def test_fictional_output_drops_entire_summary_when_any_provenance_is_stale() -> None:
+    event_id = uuid4()
+    turn_input = AgentTurnInput(
+        turn_id=uuid4(),
+        process=ProcessSnapshot(
+            tenant_id=uuid4(),
+            process_instance_id=uuid4(),
+            process_type="enquiry_to_booking",
+            process_definition_version="1",
+            status=ProcessStatus.ACTIVE,
+        ),
+        events=(),
+        timer_ids=("current-timer",),
+        instructions="test",
+    )
+    output = FictionalAgentDecisionOutput.model_validate(
+        {
+            "status": "active",
+            "wake_conditions": [{"type": "event", "event_type": "customer.email_received"}],
+            "memory_update": {
+                "summary": "Mixed current and historical claims",
+                "summary_source_event_ids": [str(event_id)],
+                "summary_source_timer_ids": ["current-timer"],
+                "open_commitments": ["Continue safely."],
+            },
+        }
+    )
+
+    decision = output.to_agent_decision(turn_input)
+
+    assert decision.memory_update.summary is None
+    assert decision.memory_update.summary_source_timer_ids == ()
+    assert decision.memory_update.open_commitments == ("Continue safely.",)
 
 
 @pytest.mark.parametrize(

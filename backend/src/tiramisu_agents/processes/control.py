@@ -97,7 +97,7 @@ class ProcessControlService:
             source_timer_ids=list(value.timer_ids),
         )
         session.add(intervention)
-        if process.status not in {"completed", "cancelled", "failed"}:
+        if process.status not in {"paused", "completed", "cancelled", "failed"}:
             process.status = "review"
             process.current_wake_conditions = [
                 HumanWakeCondition(interaction="operator").model_dump(mode="json")

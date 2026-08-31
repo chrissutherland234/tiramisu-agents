@@ -164,15 +164,20 @@ connects the actual Vue application through Vite's `/api` proxy, and verifies
 the local development identity against PostgreSQL:
 
 ```bash
-set -a
-. ./.env
-set +a
-TIRAMISU_RUN_DB_TESTS=1 uv run pytest backend/tests/integration
+(
+  export TIRAMISU_DATABASE_URL='postgresql+asyncpg://tiramisu_app:tiramisu_app@localhost:5432/tiramisu_test'
+  export TIRAMISU_MIGRATION_DATABASE_URL='postgresql+asyncpg://tiramisu:tiramisu@localhost:5432/tiramisu_test'
+  export TIRAMISU_RUN_DB_TESTS=1
+  export TIRAMISU_ALLOW_UNSAFE_DEVELOPMENT_TENANT_HEADER=false
+  export TIRAMISU_LOAD_FICTIONAL_EXAMPLE_PROCESSES=false
+  uv run pytest backend/tests/integration
+)
 cd frontend
 npx playwright install chromium
 npm run test:operator-smoke
 ```
 
-The smoke command expects the database to have been migrated and the database
-URLs exported from `.env`. It runs `bootstrap-local` itself; the command is safe
-to repeat.
+Use the database URLs for your environment in the subshell above; do not source
+`.env` as shell syntax because structured values such as JSON are not shell-safe.
+The smoke command expects the database to have been migrated. It runs
+`bootstrap-local` itself and is safe to repeat.

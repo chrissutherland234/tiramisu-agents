@@ -138,6 +138,7 @@ class FictionalAgentDecisionOutput(BaseModel):
 
     def to_agent_decision(self, turn_input: AgentTurnInput) -> AgentDecision:
         actions = tuple(action.to_action_proposal() for action in self.actions)
+        status = self.status
         confirmed_booking_reference = self._confirmed_booking_reference(turn_input)
         if confirmed_booking_reference is not None and not any(
             action.action_type == "request_payment" for action in actions
@@ -161,6 +162,8 @@ class FictionalAgentDecisionOutput(BaseModel):
                     ),
                 ),
             )
+            if status is DecisionStatus.COMPLETED:
+                status = DecisionStatus.ACTIVE
         memory_update = self._trusted_memory_update(turn_input)
         return AgentDecision(
             based_on_event_ids=tuple(event.event_id for event in turn_input.events),
@@ -169,7 +172,7 @@ class FictionalAgentDecisionOutput(BaseModel):
                 action_result.attempt_id for action_result in turn_input.action_results
             ),
             based_on_timer_ids=turn_input.timer_ids,
-            status=self.status,
+            status=status,
             actions=actions,
             wake_conditions=self.wake_conditions,
             memory_update=memory_update,
@@ -197,11 +200,21 @@ class FictionalAgentDecisionOutput(BaseModel):
         summary_timer_ids = tuple(
             value for value in self.memory_update.summary_source_timer_ids if value in timer_ids
         )
-        if self.memory_update.summary is not None and not any(
-            (summary_event_ids, summary_review_ids, summary_action_ids, summary_timer_ids)
+        supplied_provenance_was_rewritten = (
+            summary_event_ids != self.memory_update.summary_source_event_ids
+            or summary_review_ids != self.memory_update.summary_source_review_command_ids
+            or summary_action_ids != self.memory_update.summary_source_action_attempt_ids
+            or summary_timer_ids != self.memory_update.summary_source_timer_ids
+        )
+        if self.memory_update.summary is not None and (
+            supplied_provenance_was_rewritten
+            or not any(
+                (summary_event_ids, summary_review_ids, summary_action_ids, summary_timer_ids)
+            )
         ):
-            # An ungrounded model summary is less useful than no summary, and
-            # must never be allowed to smuggle historical provenance forward.
+            # Never retain prose after removing any of the sources the model
+            # claimed grounded it. Partial provenance would misrepresent the
+            # audit basis of the unchanged summary.
             return MemoryUpdate(open_commitments=self.memory_update.open_commitments)
         return MemoryUpdate(
             summary=self.memory_update.summary,

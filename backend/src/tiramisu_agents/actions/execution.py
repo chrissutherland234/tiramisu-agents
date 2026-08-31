@@ -90,7 +90,7 @@ class ActionExecutor:
     ) -> ActionExecutionResult:
         async with self._session_factory.begin() as session:
             await self._require_execution_enabled(session, tenant_id)
-            request, action_revision, _, process = await self._load_authorized_action(
+            request, action_revision, _, _ = await self._load_authorized_action(
                 session,
                 tenant_id=tenant_id,
                 process_instance_id=process_instance_id,
@@ -138,14 +138,6 @@ class ActionExecutor:
                 return self._result(attempt)
             request.status = ActionRequestStatus.EXECUTING.value
             is_new_attempt = inserted_id is not None
-            provider_request = ProviderActionRequest(
-                action_type=request.action_type,
-                parameters=action_revision.parameters,
-                idempotency_key=key,
-                tenant_id=tenant_id,
-                process_instance_id=process_instance_id,
-                authoritative_facts=dict(process.authoritative_facts),
-            )
 
         if not is_new_attempt:
             try:
@@ -167,21 +159,50 @@ class ActionExecutor:
                     "provider cannot safely retry an unresolved execution",
                 )
 
+        provider_result: ProviderActionResult | None = None
+        provider_error: Exception | None = None
         async with self._session_factory.begin() as session:
             await self._require_execution_enabled(session, tenant_id)
-        try:
-            provider_result = await adapter.execute(provider_request)
-        except DefinitiveActionFailure as error:
+            request, action_revision, _, process = await self._load_authorized_action(
+                session,
+                tenant_id=tenant_id,
+                process_instance_id=process_instance_id,
+                action_request_id=action_request_id,
+                revision=revision,
+            )
+            provider_request = ProviderActionRequest(
+                action_type=request.action_type,
+                parameters=action_revision.parameters,
+                idempotency_key=key,
+                tenant_id=tenant_id,
+                process_instance_id=process_instance_id,
+                authoritative_facts=dict(process.authoritative_facts),
+            )
+            # Hold the process/action row locks across the provider boundary. A
+            # concurrent pause or terminal control must serialize before or after
+            # the side effect; it cannot claim to have stopped work while this call
+            # is crossing the final authorization fence.
+            try:
+                provider_result = await adapter.execute(provider_request)
+            except Exception as error:
+                provider_error = error
+
+        if isinstance(provider_error, DefinitiveActionFailure):
+            error = provider_error
             return await self._record_failure(tenant_id, action_request_id, key, str(error))
-        except AmbiguousActionOutcome as error:
+        if isinstance(provider_error, AmbiguousActionOutcome):
+            error = provider_error
             return await self._record_unknown(tenant_id, action_request_id, key, str(error))
-        except Exception as error:
+        if provider_error is not None:
+            error = provider_error
             return await self._record_unknown(
                 tenant_id,
                 action_request_id,
                 key,
                 f"{type(error).__name__}: {error}",
             )
+        if provider_result is None:
+            raise RuntimeError("provider execution returned neither a result nor an error")
         return await self._record_success(tenant_id, action_request_id, key, provider_result)
 
     @staticmethod
@@ -288,7 +309,7 @@ class ActionExecutor:
                     ActionRequest.process_instance_id == process_instance_id,
                     ActionRequest.id == action_request_id,
                 )
-                .with_for_update(of=ActionRequest)
+                .with_for_update(of=(ActionRequest, ProcessInstance))
             )
         ).one_or_none()
         if row is None:
@@ -323,6 +344,8 @@ class ActionExecutor:
             )
             if approval is None or approval.status != ApprovalStatus.APPROVED.value:
                 raise ActionExecutionRejected("exact action payload has not been approved")
+            if approval.expires_at is not None and approval.expires_at <= datetime.now(UTC):
+                raise ActionExecutionRejected("exact action approval has expired")
             decision = await session.scalar(
                 select(ApprovalDecision).where(
                     ApprovalDecision.tenant_id == tenant_id,

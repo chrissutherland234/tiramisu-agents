@@ -88,6 +88,17 @@ def test_policy_accepts_an_allowed_bounded_decision() -> None:
     assert validate_decision(decision, policy, workflow_now=now) is decision
 
 
+def test_policy_rejects_an_active_decision_without_a_progress_path() -> None:
+    decision = AgentDecision(based_on_event_ids=(), status=DecisionStatus.ACTIVE)
+    policy = DecisionPolicy(
+        allowed_action_types=frozenset(),
+        allowed_wake_event_types=frozenset(),
+    )
+
+    with pytest.raises(DecisionRejected, match="requires an action or wake condition"):
+        validate_decision(decision, policy, workflow_now=datetime.now(UTC))
+
+
 def test_policy_rejects_orphaned_human_wake_condition() -> None:
     decision = AgentDecision(
         based_on_event_ids=(),

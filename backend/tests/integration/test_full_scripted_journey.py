@@ -419,7 +419,10 @@ async def test_full_scripted_journey_survives_worker_restarts() -> None:
                     )
 
             workflow_id = f"tenant/{tenant_id}/process/{process_id}"
-            handle = environment.client.get_workflow_handle(workflow_id)
+            handle = environment.client.get_workflow_handle_for(
+                ProcessMailboxWorkflow.run,
+                workflow_id,
+            )
 
             async with restarted_worker() as dispatcher:
                 await _dispatch_all(dispatcher, tenant_id)

@@ -2,6 +2,48 @@
 
 Date: 31 August 2026
 
+## Completion update
+
+The findings and transcript below capture the state at the review commit. The
+subsequent hardening pass resolved the review's P1 release blockers and added
+focused regression coverage:
+
+- rejected turns and action-chain exhaustion now create durable interventions
+  with attributed, idempotent retry, wake, and takeover controls;
+- PostgreSQL and Temporal use the same effective status and wake outcome,
+  including a durable operator wake for escalation;
+- every Activity enforces its deployment tenant boundary;
+- provider state is reconstructed from durable records, and the complete
+  PostgreSQL + Temporal scripted journey passes across fresh worker/provider
+  deployments at the booking, payment, and calendar boundaries;
+- lifecycle state, live policy, exact approval, and approval expiry are checked
+  under a final process/action lock before a provider side effect;
+- injected payment work cannot retain a false `completed` status;
+- terminal late events use the configured record-only policy, replacement
+  actions retain lineage, and memory summaries retain only complete, valid
+  provenance;
+- communication follow-up limits and reply resets are enforced and tested;
+- migration metadata drift, the demo test recipe, and the browser smoke gap are
+  closed. Playwright now ingests an event and displays its real process detail
+  and timeline.
+
+The remaining items are production/extension work rather than blockers for the
+current local reference slice: dead-letter/requeue operations for repeatedly
+failed outbox messages, a stable downstream deployment-composition API, the
+manual-intervention controls in the Vue UI, production browser identity/OIDC,
+and live OpenAI/provider sandbox evaluation. The original readiness conclusion
+below should therefore be read as historical; the hardened reference slice is
+now suitable for continued local development and public review, but is still
+not a production-ready managed-agent platform.
+
+Completion validation: migration 10 passed a downgrade/upgrade round-trip and
+Alembic drift check; Ruff lint/format and Pyright passed repository-wide; the
+full PostgreSQL- and Temporal-enabled backend suite passed 101 tests; Vue unit,
+type, and production-build checks passed; the real-process Playwright smoke
+passed; the editable workspace built both an sdist and wheel; and Compose
+configuration, PostgreSQL runtime-role access, Temporal health, whitespace, and
+basic tracked-secret scans passed.
+
 ## Scope
 
 This is a manual review of the 16 commits in `876997b..fdbd56c`, with particular
