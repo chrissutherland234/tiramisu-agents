@@ -17,6 +17,11 @@ from tiramisu_agents.security.credentials import (
     credential_secret_matches,
     parse_credential,
 )
+from tiramisu_agents.security.tenancy import (
+    TenantNotAuthorized,
+    TenantUnavailable,
+    require_tenant_deployment,
+)
 
 _DUMMY_SECRET_HASH = "0" * 64
 
@@ -48,7 +53,8 @@ async def require_operator_identity(
     actor_header: Annotated[str | None, Header(alias="X-Tiramisu-Actor-ID")] = None,
 ) -> OperatorIdentity:
     if authorization is not None:
-        return await _authenticate_bearer(request, authorization)
+        identity = await _authenticate_bearer(request, authorization)
+        return await _require_deployment_assignment(request, identity)
 
     settings: Settings = request.app.state.settings
     supplied_unsafe_header = tenant_header is not None or actor_header is not None
@@ -66,7 +72,7 @@ async def require_operator_identity(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="operator identity headers must be UUIDs",
             ) from error
-        return OperatorIdentity(
+        identity = OperatorIdentity(
             tenant_id=tenant_id,
             actor_id=actor_id,
             scopes=frozenset({"*"}),
@@ -74,6 +80,7 @@ async def require_operator_identity(
             credential_id=None,
             authentication_method="unsafe_development_headers",
         )
+        return await _require_deployment_assignment(request, identity)
     if supplied_unsafe_header:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -123,7 +130,7 @@ async def require_event_ingress_identity(
             authentication_method="unsafe_development_headers",
         )
     identity.require_scope(CredentialScope.EVENTS_INGEST)
-    return identity
+    return await _require_deployment_assignment(request, identity)
 
 
 async def require_process_reader(
@@ -184,6 +191,35 @@ async def _authenticate_bearer(request: Request, authorization: str) -> Operator
             credential_id=credential.id,
             authentication_method="tenant_bearer",
         )
+
+
+async def _require_deployment_assignment(
+    request: Request,
+    identity: OperatorIdentity,
+) -> OperatorIdentity:
+    release = getattr(request.app.state, "deployment_release", None)
+    if release is None:
+        return identity
+    tenant_ids: frozenset[UUID] = request.app.state.deployment_tenant_ids
+    if identity.tenant_id not in tenant_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="tenant is not in this deployment's allow-list",
+        )
+    session_factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    try:
+        async with session_factory.begin() as session:
+            await require_tenant_deployment(
+                session,
+                identity.tenant_id,
+                release.deployment_id,
+            )
+    except (TenantUnavailable, TenantNotAuthorized) as error:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="tenant is not assigned to this deployment",
+        ) from error
+    return identity
 
 
 def _unauthorized(detail: str) -> HTTPException:

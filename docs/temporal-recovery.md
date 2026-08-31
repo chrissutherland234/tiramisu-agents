@@ -40,7 +40,9 @@ The replay JSON files under `backend/tests/replay/` are compatibility fixtures, 
 
 ## Operator recovery
 
-For a worker outage, restore workers against the same Temporal namespace and task queue with the same deployment-authorized tenant assignments. Temporal resumes outstanding workflow and Activity tasks; the PostgreSQL dispatcher resumes pending messages and reclaims stale publishing claims. Signal-With-Start and workflow-level IDs make uncertain delivery safe to retry.
+For a worker outage, restore the exact immutable release against the same Temporal namespace and its derived task queue, with the same logical deployment and tenant assignments. The release fingerprint and queue are exposed by `/health` and persisted on every process. Temporal resumes outstanding workflow and Activity tasks; the PostgreSQL dispatcher resumes only messages pinned to that release and reclaims stale publishing claims. Signal-With-Start and workflow-level IDs make uncertain delivery safe to retry.
+
+During an upgrade, keep old and new workers running together until each release's pinned processes and outbox deliveries drain. Rolling back new process creation does not migrate processes already created by the newer release, so its worker must remain available for them. Do not edit process fingerprints or queue names manually; active-process migration is not currently supported.
 
 After the configured bounded attempts are exhausted, the message moves to the
 explicit `dead_letter` state and records its last error and dead-letter time. An
@@ -67,4 +69,4 @@ stable IDs and mailbox-level deduplication make delivery at least once.
 
 Before resolving an ambiguous provider action, inspect the durable action attempt and use lookup-only reconciliation. Never manually repeat a side effect merely because a worker stopped before recording its result.
 
-The Compose Temporal service is a persistent local development dependency, not a production topology. Production backup/restore, worker version routing and rollback, bulk dead-letter operations, alerting/observability, and restart injection at every provider boundary remain later hardening work.
+The Compose Temporal service is a persistent local development dependency, not a production topology. Production backup/restore, automated release drain/routing, bulk dead-letter operations, alerting/observability, and restart injection at every provider boundary remain later hardening work.

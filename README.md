@@ -83,12 +83,14 @@ uv run tiramisu-worker --tenant-id 00000000-0000-0000-0000-000000000001
 or as a JSON environment value:
 
 ```dotenv
-TIRAMISU_WORKER_TENANT_IDS=["00000000-0000-0000-0000-000000000001"]
+TIRAMISU_DEPLOYMENT_TENANT_IDS=["00000000-0000-0000-0000-000000000001"]
 ```
 
-To enable model-backed orchestration for the fictional process, also set `TIRAMISU_OPENAI_MODEL` to an explicit model name and `OPENAI_API_KEY` to a nonblank key. Worker startup fails closed before connecting if either is absent. This can make live OpenAI requests; ordinary tests continue using scripted Activities and require no API key.
+Client-pack API and worker processes also require a stable `TIRAMISU_DEPLOYMENT_ID`, an immutable `TIRAMISU_DEPLOYMENT_BUILD_ID`, and a durable matching tenant assignment created by `tiramisu-admin assign-tenant-deployment`. Tiramisu derives the Temporal queue from that release identity; it is not configured separately. See the [configuration guide](docs/configuration.md) for the local command and rollout rules.
 
-The runtime role cannot enumerate tenants. Signed provider-webhook verification, managed tenant provisioning, production browser identity, rate limits, and deployment-managed tenant assignments remain required before exposing ingestion externally.
+To enable model-backed orchestration for the fictional process, set `TIRAMISU_OPENAI_MODEL` to an explicit model name for both API and worker and `OPENAI_API_KEY` to a nonblank key for the worker. Worker startup fails closed before connecting if the key or deployment configuration is absent. This can make live OpenAI requests; ordinary tests continue using scripted Activities and require no API key.
+
+The runtime role cannot enumerate tenants. Signed provider-webhook verification, managed tenant provisioning, production browser identity, and rate limits remain required before exposing ingestion externally.
 
 ## Public and private extensions
 
@@ -101,7 +103,7 @@ uv pip install -e . -e examples/fictional_client_pack
 export TIRAMISU_CLIENT_PACK_FACTORY=tiramisu_fictional_client_pack:create_client_pack
 ```
 
-The factory is imported and validated before API traffic or Temporal worker polling. It is never discovered or imported from workflow code. A pack is trusted executable Python, not a sandbox. Under [ADR-011](docs/decisions/011-client-pack-deployment-topology.md), each pack has its own deployable API/worker composition and Temporal task queue; tenants may share it only when they intentionally share the exact pack and release lifecycle. New processes pin the complete pack and definition fingerprints, and incompatible workers stop before model or provider I/O with an operator-visible intervention. Persisted installation/lifecycle controls, audited active-instance migration, and custom Activity registration remain future work.
+The factory is imported and validated before API traffic or Temporal worker polling. It is never discovered or imported from workflow code. A pack is trusted executable Python, not a sandbox. Under [ADR-011](docs/decisions/011-client-pack-deployment-topology.md), each pack has its own logical deployment and immutable release queues; tenants may share it only when they intentionally share the exact pack and release lifecycle. New processes pin the release, queue, complete pack, and definition fingerprints. Old and new workers can coexist during drain, while incompatible workers stop before model or provider I/O. Persisted installation inventory, active-instance migration, and custom Activity registration remain future work.
 
 ## License
 

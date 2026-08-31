@@ -45,6 +45,14 @@ class ProcessInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "process_definition_fingerprint ~ '^[0-9a-f]{64}$'",
             name="process_definition_fingerprint_sha256",
         ),
+        CheckConstraint(
+            "deployment_id ~ '^[a-z][a-z0-9-]{0,62}$'",
+            name="deployment_id_valid",
+        ),
+        CheckConstraint(
+            "deployment_release_fingerprint ~ '^[0-9a-f]{64}$'",
+            name="deployment_release_fingerprint_sha256",
+        ),
         UniqueConstraint("tenant_id", "id", name="uq_process_instances_tenant_id_id"),
         UniqueConstraint("tenant_id", "workflow_id", name="uq_process_instances_tenant_workflow"),
     )
@@ -57,6 +65,9 @@ class ProcessInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     extension_manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     client_pack_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     process_definition_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    deployment_id: Mapped[str] = mapped_column(String(63), nullable=False)
+    deployment_release_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    temporal_task_queue: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), server_default="active", nullable=False)
     workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
     current_run_id: Mapped[str | None] = mapped_column(String(255))

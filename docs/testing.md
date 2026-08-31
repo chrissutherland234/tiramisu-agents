@@ -8,12 +8,12 @@ Tiramisu's tests must prove durable business invariants across boundaries, not m
 
 The repository currently has:
 
-- 110 backend tests: 77 unit/contract cases, 31 PostgreSQL or Temporal integration cases, and 2 committed-history replay cases.
+- 114 backend tests: 79 unit/contract cases, 33 PostgreSQL or Temporal integration cases, and 2 committed-history replay cases.
 - 2 Vue component tests covering the operator journey/review/intervention/dead-letter surface and permission degradation.
 - 1 Playwright live-stack journey covering real event ingestion, process inspection, takeover, resume, and the delivery-operations shell.
 - CI gates for locked dependency installation, Alembic drift, Ruff, Pyright, backend tests with PostgreSQL, Python package builds, Vue unit/type/build checks, the Playwright smoke, Compose startup, PostgreSQL runtime-role access, and Temporal health.
 
-Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, pinned pack/definition compatibility before model and provider I/O, published-only triggers, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, and a complete scripted enquiry-to-booking journey.
+Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, pinned deployment-release/queue/pack/definition compatibility before model and provider I/O, audited tenant assignment, old/new release dispatch fencing, published-only triggers, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, and a complete scripted enquiry-to-booking journey.
 
 The count is not itself a release signal. Agent evaluation, provider contracts, load behavior, security automation, migration upgrade paths, and several concurrency combinations remain absent or shallow.
 
@@ -42,7 +42,7 @@ Next additions:
 - Cover every credential scope and role against every operator endpoint, including read-only UI degradation.
 - Exercise conflicting correlations, event-ID/source-ID collisions, late reference assignment, quarantine resolution, and replay once that feature exists.
 - Exercise dispatcher backoff timestamps, exhaustion, concurrent requeue/claim, retention boundaries, and bulk backlog pagination.
-- Test migration from the previous released schema, downgrade/upgrade round trips where supported, and data preservation—not only an empty-database upgrade and autogenerate drift check.
+- Test migration from the previous released schema with representative data preservation in CI—not only an empty-database upgrade and autogenerate drift check. CI now round-trips migration 13 down to 12 and back on an empty database; the generalized populated previous-release fixture remains.
 - Add request-size and malformed-JSON limits before production ingress is exposed.
 
 ### 3. Temporal workflow and replay tests
@@ -58,9 +58,9 @@ Priority race matrix:
 | Multiple review comments/revision/approval arrive around a turn | Deterministic order; stale payload never executes |
 | Action result and customer event arrive together | Single-flight turns preserve both source lineages |
 | Continue-As-New with each pending command type | Every buffer, dedupe key, absolute timer, approval, intervention, and counter survives |
-| Worker deploy changes pack/definition compatibility | Incompatible work fails closed before model or provider I/O |
+| Old/new worker releases overlap | Each dispatcher claims only its process-pinned release queue; incompatible work fails closed before model or provider I/O |
 
-Expand replay fixtures beyond the current two happy histories to include approval/revision, action reconciliation, intervention/retry, takeover, tenant suspension, and terminal closure. Add worker-build compatibility and rollback tests once Temporal deployment/versioning is selected.
+Expand replay fixtures beyond the current two happy histories to include approval/revision, action reconciliation, intervention/retry, takeover, tenant suspension, and terminal closure. Release identity, queue derivation, and concurrent old/new dispatch are covered outside workflow history; add deployment rollback and drain tests to a future live deployment harness.
 
 ### 4. End-to-end operator tests
 

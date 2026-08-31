@@ -517,7 +517,7 @@ Do not use one PostgreSQL schema per client initially. Schema-per-client would s
 
 Dedicated databases or deployments can be offered later for clients with regulatory, contractual, residency, or high-volume isolation requirements.
 
-Use one Temporal namespace per environment initially. Tenant IDs should be represented in workflow IDs, search attributes, application records, and logs without exposing customer PII. Dedicated namespaces or task queues can be introduced when operational isolation requires them.
+Use one Temporal namespace per environment initially. Tenant IDs should be represented in workflow IDs, search attributes, application records, and logs without exposing customer PII. Each immutable client-pack release derives its own task queue inside that namespace; dedicated namespaces remain an optional stronger operational boundary.
 
 ## 9. Process configuration
 
@@ -868,7 +868,7 @@ The following architecture decision records are gates for the durable kernel:
 ### Phase 2 — Durable agent kernel
 
 - [ ] Implement `AgentWorkflow`. The process mailbox now sequences bounded event, timer, review, control, and action-result turns; executes or defers proposals; persists effective lifecycle/wake outcomes and durable interventions; performs immediate lookup-only reconciliation; rolls history over at safe Continue-As-New boundaries; and exposes turn/pending-action state. Delayed reconciliation schedules and mature production failure operations remain.
-- [x] Enforce process-pinned client-pack/manifest and definition compatibility before model or provider I/O. Process creation now pins a canonical complete-pack fingerprint, manifest hash, and definition fingerprint; mismatches stop before external I/O and create an operator-visible intervention. Historical rows are marked unverified and fail closed pending an audited migration.
+- [x] Enforce process-pinned deployment-release, task-queue, client-pack/manifest, and definition compatibility before model or provider I/O. Process creation now pins the logical deployment, immutable release and derived queue plus the canonical complete-pack fingerprint, manifest hash, and definition fingerprint; mismatches stop before external I/O and create an operator-visible intervention. Historical rows are marked unverified and fail closed pending an audited migration.
 - [x] Implement the initial deterministic process mailbox with event deduplication, replaceable event/timer wake plans, state queries, and time-skipping tests.
 - [x] Implement canonical event ingestion and source-event deduplication.
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
@@ -912,7 +912,7 @@ Recommended initial journey:
 
 - [x] Add immutable YAML process-definition contracts, validation, fingerprinting, trigger resolution, and deterministic policy/instruction compilation for the fictional process. Persistence and the authoring/publication lifecycle remain outstanding.
 - [ ] Add the process-definition draft, validation, evaluation, approval, publication, and retirement lifecycle.
-- [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition. Explicit `module:attribute` loading from an installed/editable package, the validated public `ClientPack` contract, a downstream editable-package example, and shared API/worker composition are complete. Persisted installation audit, runtime enable/disable, deployment-to-tenant assignment, provider credential resolution, and lifecycle controls remain.
+- [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition. Explicit `module:attribute` loading from an installed/editable package, the validated public `ClientPack` contract, a downstream editable-package example, shared API/worker composition, deterministic release identity/queues, and durable audited tenant assignment are complete. Persisted installation inventory, runtime enable/disable, provider credential resolution, ingress routing, and richer lifecycle controls remain.
 - [x] Enforce published-only production process triggers and fingerprint-bound definition identities. Draft/retired definitions cannot install real triggers, and same-version behavior drift fails closed for active instances. An explicit draft simulation mode and audited active-instance migration remain separate work.
 - [ ] Add tenant prompt and policy configuration.
 - [ ] Add the tool and integration registry.
@@ -921,7 +921,7 @@ Recommended initial journey:
 - [x] Add the initial tenant process list/detail API and operator instance timeline, durable wake-condition, sourced-fact/claim, memory, and commitment UI.
 - [ ] Add the full approval, proposal-diff, review-chat, revision-lineage, and manual-intervention UI. Exact-payload approve/reject/comment/request-revision and intervention retry/wake/takeover/resume controls are complete; diffs, complete thread history, expiry management, and richer intervention diagnostics remain.
 - [ ] Add event-quarantine, unknown-action, and reconciliation UI.
-- [ ] Define active-instance migration behavior.
+- [x] Define active-instance migration behavior. Existing processes remain pinned to their immutable release while old/new workers coexist; tenant moves require terminal processes and published deliveries. Active-process pin migration is deliberately unsupported until an audited, replay-safe migration command is designed and implemented.
 - [ ] Decide the public distribution name and registry strategy when the extension API is stable; only then publish signed/versioned Python distributions if useful. Container releases may proceed independently.
 
 ### Phase 5 — Production hardening
@@ -1096,11 +1096,11 @@ MIT is an intentional permissive choice: downstream users may use, modify, priva
 
 ### D-014: Client-pack deployment topology
 
-Recommended near-term default: one immutable API/worker deployment and Temporal task queue per client pack, or per group of tenants intentionally sharing the exact same pack, adapter routing, model configuration, and release cadence. Keep shared-schema PostgreSQL RLS, but treat the deployment allow-list as an additional authorization boundary. A future control plane may route tenants to deployments without dynamically importing tenant-selected Python in a running worker.
+Recommended near-term default: one stable logical API/worker deployment per client pack, or per group of tenants intentionally sharing the exact same pack, adapter routing, model configuration, and release cadence. Every immutable build/pack/model/Tiramisu release derives a separate Temporal task queue. Keep shared-schema PostgreSQL RLS, but require both an explicit service allow-list and a durable audited tenant assignment. A future control plane may route tenants to deployments without dynamically importing tenant-selected Python in a running worker.
 
 Why: the current process registry, strict output type, and action bindings are process-wide. Supporting different client packs inside one worker would require tenant-aware definition, model, adapter, credential, task-queue, compatibility, and rollout routing across every Activity. That complexity should be justified by operational evidence rather than assumed early.
 
-Status: Accepted. Recorded in ADR-011 on 2026-08-31.
+Status: Accepted and implemented. Recorded in ADR-011 on 2026-08-31; release identity, tenant assignment, process pins, release-fenced dispatch, and rollout/rollback rules landed on 2026-09-01. Active-process migration remains intentionally unsupported.
 
 ## 17. Explicit non-goals for the first release
 
@@ -1126,15 +1126,14 @@ Status: Accepted. Recorded in ADR-011 on 2026-08-31.
 
 ## 18. Immediate next step
 
-The initial executable milestone—fictional enquiry through booking, payment, calendar, and completion—is working through both an integration-free demonstration and the real PostgreSQL/Temporal path. The next milestone is to make that foundation safe to evolve and credible for a second client pack:
+The initial executable milestone—fictional enquiry through booking, payment, calendar, and completion—is working through both an integration-free demonstration and the real PostgreSQL/Temporal path. ADR-011's release boundary now makes that foundation safe to evolve across rolling pack releases. The next milestone is:
 
-1. Implement ADR-011's deployment identity and document tenant assignment, pack upgrade/rollback, and active-instance migration rules.
-2. Add ingress/context bounds and the missing communication safety envelope: opt-out, quiet hours, auto-responder/loop detection, rate, cost, token, and process-lifetime budgets.
-3. Implement quarantine resolution and replay with operator visibility.
-4. Refactor the scenario kit to drive production kernel services and complete the ordered gaps in [`docs/testing.md`](docs/testing.md), beginning with RLS/migration audits and Temporal races.
-5. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
+1. Add ingress/context bounds and the missing communication safety envelope: opt-out, quiet hours, auto-responder/loop detection, rate, cost, token, and process-lifetime budgets.
+2. Implement quarantine resolution and replay with operator visibility.
+3. Refactor the scenario kit to drive production kernel services and complete the ordered gaps in [`docs/testing.md`](docs/testing.md), beginning with RLS/migration audits and Temporal races.
+4. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
 
-D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), and D-012 (data/compliance requirements) remain explicit gates before production integrations. D-014 is now accepted as ADR-011. A GitHub-issue triage/Codex handoff pack is a useful later validation of that boundary, after version fencing is enforced.
+D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), and D-012 (data/compliance requirements) remain explicit gates before production integrations. D-014 is implemented as ADR-011. A GitHub-issue triage/Codex handoff pack is a useful later validation of that boundary once the communication safety envelope is in place.
 
 ## 19. Design references
 

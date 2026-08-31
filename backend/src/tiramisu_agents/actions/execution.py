@@ -33,11 +33,14 @@ from tiramisu_agents.db.models.actions import (
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.reviews import ApprovalDecision
 from tiramisu_agents.db.session import set_tenant_context
+from tiramisu_agents.extensions.runtime import DeploymentRelease
 from tiramisu_agents.processes.compatibility import DeploymentCompatibility
 from tiramisu_agents.security.tenancy import (
+    TenantNotAuthorized,
     TenantSuspended,
     TenantUnavailable,
     require_active_tenant,
+    require_tenant_deployment,
 )
 
 
@@ -78,10 +81,12 @@ class ActionExecutor:
         session_factory: async_sessionmaker[AsyncSession],
         adapters: ActionAdapterRegistry,
         compatibility: DeploymentCompatibility,
+        deployment_release: DeploymentRelease,
     ) -> None:
         self._session_factory = session_factory
         self._adapters = adapters
         self._compatibility = compatibility
+        self._deployment_release = deployment_release
 
     async def execute(
         self,
@@ -210,16 +215,23 @@ class ActionExecutor:
             raise RuntimeError("provider execution returned neither a result nor an error")
         return await self._record_success(tenant_id, action_request_id, key, provider_result)
 
-    @staticmethod
-    async def _require_execution_enabled(session: AsyncSession, tenant_id: UUID) -> None:
+    async def _require_execution_enabled(self, session: AsyncSession, tenant_id: UUID) -> None:
         try:
-            await require_active_tenant(session, tenant_id)
+            await require_active_tenant(
+                session,
+                tenant_id,
+                deployment_id=self._deployment_release.deployment_id,
+            )
         except TenantSuspended as error:
             raise ActionExecutionSuspended(
                 "tenant safety control blocks action execution"
             ) from error
         except TenantUnavailable as error:
             raise ActionExecutionRejected("action execution tenant is unavailable") from error
+        except TenantNotAuthorized as error:
+            raise ActionExecutionRejected(
+                "tenant is not assigned to this action-execution deployment"
+            ) from error
 
     async def reconcile(
         self,
@@ -232,7 +244,7 @@ class ActionExecutor:
         """Use provider lookup only; reconciliation never repeats the side effect."""
 
         async with self._session_factory.begin() as session:
-            await set_tenant_context(session, tenant_id)
+            await self._require_reconciliation_enabled(session, tenant_id)
             request, action_revision, _, process = await self._load_authorized_action(
                 session,
                 tenant_id=tenant_id,
@@ -283,6 +295,20 @@ class ActionExecutor:
             )
         return await self._record_success(tenant_id, action_request_id, key, recovered)
 
+    async def _require_reconciliation_enabled(self, session: AsyncSession, tenant_id: UUID) -> None:
+        try:
+            await require_tenant_deployment(
+                session,
+                tenant_id,
+                self._deployment_release.deployment_id,
+            )
+        except TenantUnavailable as error:
+            raise ActionExecutionRejected("reconciliation tenant is unavailable") from error
+        except TenantNotAuthorized as error:
+            raise ActionExecutionRejected(
+                "tenant is not assigned to this reconciliation deployment"
+            ) from error
+
     def _require_compatible_process(self, process: ProcessInstance) -> None:
         self._compatibility.require_process(
             process_type=process.process_type,
@@ -290,6 +316,11 @@ class ActionExecutor:
             client_pack_fingerprint=process.client_pack_fingerprint,
             extension_manifest_hash=process.extension_manifest_hash,
             process_definition_fingerprint=process.process_definition_fingerprint,
+        )
+        self._deployment_release.require_process(
+            deployment_id=process.deployment_id,
+            deployment_release_fingerprint=process.deployment_release_fingerprint,
+            temporal_task_queue=process.temporal_task_queue,
         )
 
     async def _load_authorized_action(

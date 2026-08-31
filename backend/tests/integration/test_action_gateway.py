@@ -59,6 +59,7 @@ from tiramisu_agents.temporal.activities.action_gateway import (
 )
 from tiramisu_agents.temporal.activities.agent_turn import AgentTurnActivities, AgentTurnCommand
 from tiramisu_agents.temporal.dispatcher import DispatchStatus, TemporalOutboxDispatcher
+from tiramisu_agents.testkit.deployment import TEST_DEPLOYMENT_RELEASE
 from tiramisu_agents.testkit.scripted_agent import ScriptedAgent
 
 pytestmark = pytest.mark.skipif(
@@ -181,11 +182,17 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         async with admin_factory.begin() as session:
             session.add_all(
                 [
-                    Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="Gateway Tenant"),
+                    Tenant(
+                        id=tenant_id,
+                        slug=f"tenant-{tenant_id}",
+                        name="Gateway Tenant",
+                        deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                    ),
                     Tenant(
                         id=other_tenant_id,
                         slug=f"tenant-{other_tenant_id}",
                         name="Other Tenant",
+                        deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
                     ),
                 ]
             )
@@ -199,6 +206,9 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                     extension_manifest_hash="a" * 64,
                     client_pack_fingerprint="b" * 64,
                     process_definition_fingerprint=definition.fingerprint(),
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                    deployment_release_fingerprint=TEST_DEPLOYMENT_RELEASE.release_fingerprint,
+                    temporal_task_queue=TEST_DEPLOYMENT_RELEASE.temporal_task_queue,
                 ),
             )
         assert ingested.process_instance_id is not None
@@ -244,6 +254,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         activity_result = await ActionGatewayActivities(
             runtime_factory,
             ProcessDefinitionRegistry([definition]),
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
         ).persist_agent_actions(
             PersistActionsCommand(
                 tenant_id=str(tenant_id),
@@ -360,6 +371,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                 }
             ),
             compatibility,
+            TEST_DEPLOYMENT_RELEASE,
         )
         async with admin_factory.begin() as session:
             process = await session.get(ProcessInstance, ingested.process_instance_id)
@@ -532,6 +544,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
             ProcessDefinitionRegistry([definition]),
             result_agent,
             compatibility=compatibility,
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
         ).run_agent_turn(
             AgentTurnCommand(
                 tenant_id=str(tenant_id),
@@ -548,6 +561,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         await ActionGatewayActivities(
             runtime_factory,
             ProcessDefinitionRegistry([definition]),
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
         ).persist_agent_actions(
             PersistActionsCommand(
                 tenant_id=str(tenant_id),
@@ -630,6 +644,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
             ProcessDefinitionRegistry([definition]),
             scripted_agent,
             compatibility=compatibility,
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
         ).run_agent_turn(
             AgentTurnCommand(
                 tenant_id=str(tenant_id),
@@ -651,6 +666,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         replacement_result = await ActionGatewayActivities(
             runtime_factory,
             ProcessDefinitionRegistry([definition]),
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
         ).persist_agent_actions(
             PersistActionsCommand(
                 tenant_id=str(tenant_id),
@@ -687,7 +703,8 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         dispatcher = TemporalOutboxDispatcher(
             runtime_factory,
             cast(Client, temporal_client),
-            task_queue="review-delivery-test",
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
+            authorized_tenant_ids=frozenset({tenant_id}),
         )
         dispatches = [await dispatcher.dispatch_one(tenant_id) for _ in range(5)]
         assert all(item.status is DispatchStatus.PUBLISHED for item in dispatches)
@@ -719,6 +736,31 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                     decision=changed,
                     policy=definition.action_policy(),
                 )
+
+        async with admin_factory.begin() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            assert tenant is not None
+            tenant.deployment_id = "different-deployment"
+        with pytest.raises(ApplicationError) as assignment_error:
+            await ActionGatewayActivities(
+                runtime_factory,
+                ProcessDefinitionRegistry([definition]),
+                deployment_release=TEST_DEPLOYMENT_RELEASE,
+                authorized_tenant_ids=frozenset({tenant_id}),
+            ).persist_agent_actions(
+                PersistActionsCommand(
+                    tenant_id=str(tenant_id),
+                    process_instance_id=str(ingested.process_instance_id),
+                    process_definition_id=definition.id,
+                    process_definition_version=definition.version,
+                    agent_turn_id=str(uuid4()),
+                    event_ids=(str(event.event_id),),
+                    workflow_now=datetime.now(UTC),
+                    decision_json=changed.model_dump_json(),
+                )
+            )
+        assert assignment_error.value.type == "TenantNotAuthorized"
+        assert assignment_error.value.non_retryable is True
     finally:
         await _delete_tenant_data(admin_factory, tenant_id)
         await _delete_tenant_data(admin_factory, other_tenant_id)

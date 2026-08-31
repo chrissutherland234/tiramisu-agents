@@ -32,6 +32,10 @@ from tiramisu_agents.events.ingestion import (
 from tiramisu_agents.security.tenancy import TenantSafetyService
 from tiramisu_agents.temporal.dispatcher import DispatchStatus, TemporalOutboxDispatcher
 from tiramisu_agents.temporal.workflows.mailbox import ProcessMailboxWorkflow
+from tiramisu_agents.testkit.deployment import (
+    TEST_DEPLOYMENT_RELEASE,
+    make_test_deployment_release,
+)
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TIRAMISU_RUN_DB_TESTS") != "1",
@@ -53,6 +57,14 @@ class _BlockingFailingTemporalClient:
 class _SuccessfulTemporalClient:
     async def start_workflow(self, *_: Any, **__: Any) -> None:
         return None
+
+
+class _CapturingTemporalClient:
+    def __init__(self) -> None:
+        self.task_queues: list[str] = []
+
+    async def start_workflow(self, *_: Any, **kwargs: Any) -> None:
+        self.task_queues.append(cast(str, kwargs["task_queue"]))
 
 
 def _database_urls() -> tuple[str, str]:
@@ -108,7 +120,14 @@ async def test_ingestion_deduplicates_and_quarantines_unmatched_events() -> None
 
     try:
         async with admin_factory.begin() as session:
-            session.add(Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="Test Tenant"))
+            session.add(
+                Tenant(
+                    id=tenant_id,
+                    slug=f"tenant-{tenant_id}",
+                    name="Test Tenant",
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                )
+            )
 
         async with runtime_factory.begin() as session:
             created = await service.ingest(
@@ -120,6 +139,9 @@ async def test_ingestion_deduplicates_and_quarantines_unmatched_events() -> None
                     extension_manifest_hash="a" * 64,
                     client_pack_fingerprint="b" * 64,
                     process_definition_fingerprint="c" * 64,
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                    deployment_release_fingerprint=TEST_DEPLOYMENT_RELEASE.release_fingerprint,
+                    temporal_task_queue=TEST_DEPLOYMENT_RELEASE.temporal_task_queue,
                 ),
             )
         assert created.created is True
@@ -210,13 +232,24 @@ async def test_development_api_can_start_a_configured_process() -> None:
             migration_database_url=migration_url,
             allow_unsafe_development_tenant_header=True,
             load_fictional_example_processes=True,
+            openai_model="test-model",
+            deployment_id="fictional-test",
+            deployment_build_id="api-test",
+            deployment_tenant_ids=(tenant_id,),
         ),
         session_factory=runtime_factory,
     )
 
     try:
         async with admin_factory.begin() as session:
-            session.add(Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="Test Tenant"))
+            session.add(
+                Tenant(
+                    id=tenant_id,
+                    slug=f"tenant-{tenant_id}",
+                    name="Test Tenant",
+                    deployment_id="fictional-test",
+                )
+            )
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -248,6 +281,23 @@ async def test_development_api_can_start_a_configured_process() -> None:
                     "occurred_at": datetime.now(UTC).isoformat(),
                 },
             )
+            allow_list_response = await client.post(
+                "/v1/events",
+                headers={"X-Tiramisu-Tenant-ID": str(uuid4())},
+                json={
+                    "event_type": "enquiry.created",
+                    "source": "stub.website",
+                    "source_event_id": f"source-{uuid4()}",
+                    "occurred_at": datetime.now(UTC).isoformat(),
+                    "external_references": [
+                        {
+                            "provider": "stub.website",
+                            "resource_type": "enquiry",
+                            "external_id": f"enquiry-{uuid4()}",
+                        }
+                    ],
+                },
+            )
 
         assert response.status_code == 202
         body = response.json()
@@ -256,6 +306,35 @@ async def test_development_api_can_start_a_configured_process() -> None:
         assert body["delivery_scheduled"] is True
         assert body["process_instance_id"] is not None
         assert missing_reference_response.status_code == 422
+        assert allow_list_response.status_code == 403
+        assert allow_list_response.json()["detail"] == (
+            "tenant is not in this deployment's allow-list"
+        )
+
+        async with admin_factory.begin() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            assert tenant is not None
+            tenant.deployment_id = "different-deployment"
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            assignment_response = await client.post(
+                "/v1/events",
+                headers={"X-Tiramisu-Tenant-ID": str(tenant_id)},
+                json={
+                    "event_type": "enquiry.created",
+                    "source": "stub.website",
+                    "source_event_id": f"source-{uuid4()}",
+                    "occurred_at": datetime.now(UTC).isoformat(),
+                    "external_references": [
+                        {
+                            "provider": "stub.website",
+                            "resource_type": "enquiry",
+                            "external_id": f"enquiry-{uuid4()}",
+                        }
+                    ],
+                },
+            )
+        assert assignment_response.status_code == 403
+        assert assignment_response.json()["detail"] == ("tenant is not assigned to this deployment")
     finally:
         await _delete_tenant_data(admin_factory, tenant_id)
         await runtime_engine.dispose()
@@ -291,6 +370,9 @@ async def test_concurrent_trigger_delivery_creates_one_process() -> None:
         extension_manifest_hash="a" * 64,
         client_pack_fingerprint="b" * 64,
         process_definition_fingerprint="c" * 64,
+        deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+        deployment_release_fingerprint=TEST_DEPLOYMENT_RELEASE.release_fingerprint,
+        temporal_task_queue=TEST_DEPLOYMENT_RELEASE.temporal_task_queue,
     )
 
     async def ingest(event: CanonicalEvent) -> IngestionResult:
@@ -299,7 +381,14 @@ async def test_concurrent_trigger_delivery_creates_one_process() -> None:
 
     try:
         async with admin_factory.begin() as session:
-            session.add(Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="Test Tenant"))
+            session.add(
+                Tenant(
+                    id=tenant_id,
+                    slug=f"tenant-{tenant_id}",
+                    name="Test Tenant",
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                )
+            )
 
         first, second = await asyncio.gather(
             ingest(base_event),
@@ -339,7 +428,14 @@ async def test_expired_dispatcher_cannot_overwrite_newer_publish() -> None:
 
     try:
         async with admin_factory.begin() as session:
-            session.add(Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="Test Tenant"))
+            session.add(
+                Tenant(
+                    id=tenant_id,
+                    slug=f"tenant-{tenant_id}",
+                    name="Test Tenant",
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                )
+            )
         async with runtime_factory.begin() as session:
             await EventIngestionService().ingest(
                 session,
@@ -363,13 +459,17 @@ async def test_expired_dispatcher_cannot_overwrite_newer_publish() -> None:
                     extension_manifest_hash="a" * 64,
                     client_pack_fingerprint="b" * 64,
                     process_definition_fingerprint="c" * 64,
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                    deployment_release_fingerprint=TEST_DEPLOYMENT_RELEASE.release_fingerprint,
+                    temporal_task_queue=TEST_DEPLOYMENT_RELEASE.temporal_task_queue,
                 ),
             )
 
         old_dispatcher = TemporalOutboxDispatcher(
             runtime_factory,
             cast(Client, blocking_client),
-            task_queue="claim-race-test",
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
+            authorized_tenant_ids=frozenset({tenant_id}),
             stale_claim_after=timedelta(0),
         )
         old_attempt = asyncio.create_task(old_dispatcher.dispatch_one(tenant_id))
@@ -378,7 +478,8 @@ async def test_expired_dispatcher_cannot_overwrite_newer_publish() -> None:
         new_dispatcher = TemporalOutboxDispatcher(
             runtime_factory,
             cast(Client, _SuccessfulTemporalClient()),
-            task_queue="claim-race-test",
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
+            authorized_tenant_ids=frozenset({tenant_id}),
             stale_claim_after=timedelta(0),
         )
         new_result = await new_dispatcher.dispatch_one(tenant_id)
@@ -399,6 +500,105 @@ async def test_expired_dispatcher_cannot_overwrite_newer_publish() -> None:
             assert stored.attempt_count == 2
     finally:
         blocking_client.release.set()
+        await _delete_tenant_data(admin_factory, tenant_id)
+        await runtime_engine.dispose()
+        await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dispatchers_only_claim_processes_pinned_to_their_release() -> None:
+    runtime_url, migration_url = _database_urls()
+    runtime_engine = create_engine(runtime_url)
+    admin_engine = create_engine(migration_url)
+    runtime_factory = create_session_factory(runtime_engine)
+    admin_factory = create_session_factory(admin_engine)
+    tenant_id = uuid4()
+    old_release = TEST_DEPLOYMENT_RELEASE
+    new_release = make_test_deployment_release(build_id="next-build")
+    old_client = _CapturingTemporalClient()
+    new_client = _CapturingTemporalClient()
+
+    async def create_process(release: Any, suffix: str) -> None:
+        async with runtime_factory.begin() as session:
+            await EventIngestionService().ingest(
+                session,
+                CanonicalEvent(
+                    tenant_id=tenant_id,
+                    event_type="enquiry.created",
+                    source="release.test",
+                    source_event_id=f"{suffix}-{uuid4()}",
+                    occurred_at=datetime.now(UTC),
+                    external_references=(
+                        ExternalReference(
+                            provider="release.test",
+                            resource_type="enquiry",
+                            external_id=f"{suffix}-{uuid4()}",
+                        ),
+                    ),
+                ),
+                bootstrap=ProcessBootstrap(
+                    process_type="enquiry_to_booking",
+                    definition_version="1",
+                    extension_manifest_hash="a" * 64,
+                    client_pack_fingerprint=release.client_pack_fingerprint,
+                    process_definition_fingerprint="c" * 64,
+                    deployment_id=release.deployment_id,
+                    deployment_release_fingerprint=release.release_fingerprint,
+                    temporal_task_queue=release.temporal_task_queue,
+                ),
+            )
+
+    try:
+        async with admin_factory.begin() as session:
+            session.add(
+                Tenant(
+                    id=tenant_id,
+                    slug=f"tenant-{tenant_id}",
+                    name="Release fencing tenant",
+                    deployment_id=old_release.deployment_id,
+                )
+            )
+        await create_process(old_release, "old")
+        await create_process(new_release, "new")
+
+        unauthorized_result = await TemporalOutboxDispatcher(
+            runtime_factory,
+            cast(Client, old_client),
+            deployment_release=old_release,
+            authorized_tenant_ids=frozenset(),
+        ).dispatch_one(tenant_id)
+        assert unauthorized_result.status is DispatchStatus.EMPTY
+        assert old_client.task_queues == []
+
+        old_result = await TemporalOutboxDispatcher(
+            runtime_factory,
+            cast(Client, old_client),
+            deployment_release=old_release,
+            authorized_tenant_ids=frozenset({tenant_id}),
+        ).dispatch_one(tenant_id)
+        assert old_result.status is DispatchStatus.PUBLISHED
+        assert old_client.task_queues == [old_release.temporal_task_queue]
+        assert new_client.task_queues == []
+
+        async with runtime_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            statuses = list(
+                await session.scalars(
+                    select(OutboxMessage.status).order_by(OutboxMessage.created_at)
+                )
+            )
+        assert sorted(statuses) == ["pending", "published"]
+
+        new_result = await TemporalOutboxDispatcher(
+            runtime_factory,
+            cast(Client, new_client),
+            deployment_release=new_release,
+            authorized_tenant_ids=frozenset({tenant_id}),
+        ).dispatch_one(tenant_id)
+        assert new_result.status is DispatchStatus.PUBLISHED
+        assert new_client.task_queues == [new_release.temporal_task_queue]
+        assert new_release.temporal_task_queue != old_release.temporal_task_queue
+    finally:
         await _delete_tenant_data(admin_factory, tenant_id)
         await runtime_engine.dispose()
         await admin_engine.dispose()
@@ -430,7 +630,14 @@ async def test_outbox_signal_with_start_is_safe_to_redeliver() -> None:
 
     try:
         async with admin_factory.begin() as session:
-            session.add(Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="Test Tenant"))
+            session.add(
+                Tenant(
+                    id=tenant_id,
+                    slug=f"tenant-{tenant_id}",
+                    name="Test Tenant",
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                )
+            )
         async with runtime_factory.begin() as session:
             ingested = await EventIngestionService().ingest(
                 session,
@@ -441,6 +648,9 @@ async def test_outbox_signal_with_start_is_safe_to_redeliver() -> None:
                     extension_manifest_hash="a" * 64,
                     client_pack_fingerprint="b" * 64,
                     process_definition_fingerprint="c" * 64,
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                    deployment_release_fingerprint=TEST_DEPLOYMENT_RELEASE.release_fingerprint,
+                    temporal_task_queue=TEST_DEPLOYMENT_RELEASE.temporal_task_queue,
                 ),
             )
             workflow_id = await session.scalar(
@@ -461,7 +671,8 @@ async def test_outbox_signal_with_start_is_safe_to_redeliver() -> None:
         suspended_dispatcher = TemporalOutboxDispatcher(
             runtime_factory,
             cast(Client, _SuccessfulTemporalClient()),
-            task_queue="suspended-tenant-test",
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
+            authorized_tenant_ids=frozenset({tenant_id}),
         )
         assert (await suspended_dispatcher.dispatch_one(tenant_id)).status is DispatchStatus.EMPTY
         async with runtime_factory.begin() as session:
@@ -481,7 +692,7 @@ async def test_outbox_signal_with_start_is_safe_to_redeliver() -> None:
                 reason="Workflow delivery may resume",
             )
 
-        task_queue = f"delivery-test-{uuid4()}"
+        task_queue = TEST_DEPLOYMENT_RELEASE.temporal_task_queue
         async with (
             await WorkflowEnvironment.start_time_skipping() as environment,
             Worker(
@@ -491,7 +702,10 @@ async def test_outbox_signal_with_start_is_safe_to_redeliver() -> None:
             ),
         ):
             dispatcher = TemporalOutboxDispatcher(
-                runtime_factory, environment.client, task_queue=task_queue
+                runtime_factory,
+                environment.client,
+                deployment_release=TEST_DEPLOYMENT_RELEASE,
+                authorized_tenant_ids=frozenset({tenant_id}),
             )
             first = await dispatcher.dispatch_one(tenant_id)
             assert first.status is DispatchStatus.PUBLISHED

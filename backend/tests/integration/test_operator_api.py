@@ -45,6 +45,7 @@ from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateService
 from tiramisu_agents.security.credential_service import TenantCredentialService
 from tiramisu_agents.security.credentials import CredentialScope
+from tiramisu_agents.testkit.deployment import TEST_DEPLOYMENT_RELEASE
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TIRAMISU_RUN_DB_TESTS") != "1",
@@ -204,6 +205,9 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
                     extension_manifest_hash="a" * 64,
                     client_pack_fingerprint="b" * 64,
                     process_definition_fingerprint=definition.fingerprint(),
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                    deployment_release_fingerprint=TEST_DEPLOYMENT_RELEASE.release_fingerprint,
+                    temporal_task_queue=TEST_DEPLOYMENT_RELEASE.temporal_task_queue,
                 ),
             )
         assert ingested.process_instance_id is not None

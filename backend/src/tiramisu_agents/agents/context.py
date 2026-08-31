@@ -27,6 +27,7 @@ from tiramisu_agents.db.models.events import EventInbox
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.reviews import ReviewMessage, ReviewThread
 from tiramisu_agents.db.session import set_tenant_context
+from tiramisu_agents.extensions.runtime import DeploymentRelease
 from tiramisu_agents.processes.compatibility import (
     DeploymentCompatibility,
     DeploymentCompatibilityError,
@@ -71,6 +72,7 @@ class PostgresAgentContextLoader:
         timer_ids: tuple[str, ...] = (),
         definition: ProcessDefinition,
         compatibility: DeploymentCompatibility,
+        deployment_release: DeploymentRelease,
     ) -> AgentTurnInput:
         if not event_ids and not review_command_ids and not action_attempt_ids and not timer_ids:
             raise AgentContextError("an agent turn requires at least one wake source")
@@ -108,6 +110,11 @@ class PostgresAgentContextLoader:
             client_pack_fingerprint=process.client_pack_fingerprint,
             extension_manifest_hash=process.extension_manifest_hash,
             process_definition_fingerprint=process.process_definition_fingerprint,
+        )
+        deployment_release.require_process(
+            deployment_id=process.deployment_id,
+            deployment_release_fingerprint=process.deployment_release_fingerprint,
+            temporal_task_queue=process.temporal_task_queue,
         )
 
         stored_events = (

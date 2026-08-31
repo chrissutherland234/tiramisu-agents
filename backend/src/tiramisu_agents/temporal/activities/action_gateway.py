@@ -16,8 +16,15 @@ from tiramisu_agents.actions.gateway import (
 )
 from tiramisu_agents.core.contracts.decisions import AgentDecision
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
+from tiramisu_agents.extensions.runtime import DeploymentRelease
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
-from tiramisu_agents.security.tenancy import TenantNotAuthorized, require_authorized_tenant
+from tiramisu_agents.security.tenancy import (
+    TenantNotAuthorized,
+    TenantSuspended,
+    TenantUnavailable,
+    require_active_tenant,
+    require_authorized_tenant,
+)
 
 
 @dataclass(frozen=True)
@@ -47,11 +54,13 @@ class ActionGatewayActivities:
         registry: ProcessDefinitionRegistry,
         *,
         gateway: ActionGateway | None = None,
+        deployment_release: DeploymentRelease | None = None,
         authorized_tenant_ids: frozenset[UUID] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._registry = registry
         self._gateway = gateway or ActionGateway()
+        self._deployment_release = deployment_release
         self._authorized_tenant_ids = authorized_tenant_ids
 
     @activity.defn(name="persist_agent_actions")
@@ -84,6 +93,12 @@ class ActionGatewayActivities:
                 expected_timer_ids=frozenset(command.timer_ids),
             )
             async with self._session_factory.begin() as session:
+                if self._deployment_release is not None:
+                    await require_active_tenant(
+                        session,
+                        tenant_id,
+                        deployment_id=self._deployment_release.deployment_id,
+                    )
                 persisted = await self._gateway.persist_decision(
                     session,
                     tenant_id=tenant_id,
@@ -106,7 +121,13 @@ class ActionGatewayActivities:
                     ),
                     workflow_now=command.workflow_now,
                 )
-        except (ActionPersistenceConflict, DecisionRejected) as error:
+        except (
+            ActionPersistenceConflict,
+            DecisionRejected,
+            TenantNotAuthorized,
+            TenantSuspended,
+            TenantUnavailable,
+        ) as error:
             raise ApplicationError(
                 str(error), type=type(error).__name__, non_retryable=True
             ) from error

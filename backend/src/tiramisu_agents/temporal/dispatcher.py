@@ -16,6 +16,7 @@ from tiramisu_agents.db.models.events import OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.tenancy import Tenant
 from tiramisu_agents.db.session import set_tenant_context
+from tiramisu_agents.extensions.runtime import DeploymentRelease
 from tiramisu_agents.temporal.workflows.mailbox import (
     MailboxActionResolution,
     MailboxControl,
@@ -61,7 +62,8 @@ class TemporalOutboxDispatcher:
         session_factory: async_sessionmaker[AsyncSession],
         temporal_client: Client,
         *,
-        task_queue: str,
+        deployment_release: DeploymentRelease,
+        authorized_tenant_ids: frozenset[UUID],
         max_attempts: int = 5,
         stale_claim_after: timedelta = timedelta(minutes=5),
         retry_base_delay: timedelta = timedelta(seconds=5),
@@ -69,13 +71,17 @@ class TemporalOutboxDispatcher:
     ) -> None:
         self._session_factory = session_factory
         self._temporal_client = temporal_client
-        self._task_queue = task_queue
+        self._deployment_release = deployment_release
+        self._authorized_tenant_ids = authorized_tenant_ids
+        self._task_queue = deployment_release.temporal_task_queue
         self._max_attempts = max_attempts
         self._stale_claim_after = stale_claim_after
         self._retry_base_delay = retry_base_delay
         self._orchestrate_agent_turns = orchestrate_agent_turns
 
     async def dispatch_one(self, tenant_id: UUID) -> DispatchResult:
+        if tenant_id not in self._authorized_tenant_ids:
+            return DispatchResult(status=DispatchStatus.EMPTY)
         now = datetime.now(UTC)
         async with self._session_factory.begin() as session:
             message = await self._claim(session, tenant_id, now=now)
@@ -178,13 +184,34 @@ class TemporalOutboxDispatcher:
         self, session: AsyncSession, tenant_id: UUID, *, now: datetime
     ) -> ClaimedMessage | None:
         await set_tenant_context(session, tenant_id)
-        tenant_status = await session.scalar(select(Tenant.status).where(Tenant.id == tenant_id))
-        if tenant_status != "active":
+        tenant_row = (
+            await session.execute(
+                select(Tenant.status, Tenant.deployment_id).where(Tenant.id == tenant_id)
+            )
+        ).one_or_none()
+        if tenant_row is None:
+            return None
+        tenant_status, tenant_deployment_id = tenant_row
+        if (
+            tenant_status != "active"
+            or tenant_deployment_id != self._deployment_release.deployment_id
+        ):
             return None
         stale_before = now - self._stale_claim_after
         stored = await session.scalar(
             select(OutboxMessage)
+            .join(
+                ProcessInstance,
+                and_(
+                    ProcessInstance.tenant_id == OutboxMessage.tenant_id,
+                    ProcessInstance.id == OutboxMessage.process_instance_id,
+                ),
+            )
             .where(
+                ProcessInstance.deployment_id == self._deployment_release.deployment_id,
+                ProcessInstance.deployment_release_fingerprint
+                == self._deployment_release.release_fingerprint,
+                ProcessInstance.temporal_task_queue == self._deployment_release.temporal_task_queue,
                 OutboxMessage.message_type.in_(
                     (
                         "temporal.process_event",
@@ -218,6 +245,11 @@ class TemporalOutboxDispatcher:
             )
             if process is None:
                 raise RuntimeError("Temporal outbox process instance is unavailable")
+            self._deployment_release.require_process(
+                deployment_id=process.deployment_id,
+                deployment_release_fingerprint=process.deployment_release_fingerprint,
+                temporal_task_queue=process.temporal_task_queue,
+            )
             definition_id = process.process_type
             definition_version = process.definition_version
         stored.status = "publishing"

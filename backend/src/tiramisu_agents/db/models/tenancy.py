@@ -25,11 +25,56 @@ from tiramisu_agents.db.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "tenants"
-    __table_args__ = (CheckConstraint("status IN ('active', 'suspended')", name="status_valid"),)
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'suspended')", name="status_valid"),
+        CheckConstraint(
+            "deployment_id ~ '^[a-z][a-z0-9-]{0,62}$'",
+            name="deployment_id_valid",
+        ),
+    )
 
     slug: Mapped[str] = mapped_column(String(63), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), server_default="active", nullable=False)
+    deployment_id: Mapped[str] = mapped_column(
+        String(63), server_default="unassigned", nullable=False
+    )
+
+
+class TenantDeploymentEvent(UUIDPrimaryKeyMixin, Base):
+    """Immutable audit record for a tenant's logical deployment assignment."""
+
+    __tablename__ = "tenant_deployment_events"
+    __table_args__ = (
+        CheckConstraint(
+            "previous_deployment_id ~ '^[a-z][a-z0-9-]{0,62}$'",
+            name="previous_deployment_id_valid",
+        ),
+        CheckConstraint(
+            "new_deployment_id ~ '^[a-z][a-z0-9-]{0,62}$'",
+            name="new_deployment_id_valid",
+        ),
+        CheckConstraint(
+            "previous_deployment_id <> new_deployment_id",
+            name="deployment_changed",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["tenants.id"],
+            name="fk_tenant_deployment_events_tenant",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_tenant_deployment_events_tenant_created", "tenant_id", "created_at"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    actor_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    previous_deployment_id: Mapped[str] = mapped_column(String(63), nullable=False)
+    new_deployment_id: Mapped[str] = mapped_column(String(63), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class TenantCredential(UUIDPrimaryKeyMixin, TimestampMixin, Base):

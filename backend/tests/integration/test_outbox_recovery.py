@@ -27,6 +27,7 @@ from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBoots
 from tiramisu_agents.security.credential_service import TenantCredentialService
 from tiramisu_agents.security.credentials import CredentialScope
 from tiramisu_agents.temporal.dispatcher import DispatchStatus, TemporalOutboxDispatcher
+from tiramisu_agents.testkit.deployment import TEST_DEPLOYMENT_RELEASE
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TIRAMISU_RUN_DB_TESTS") != "1",
@@ -100,11 +101,17 @@ async def test_dead_letter_can_be_inspected_and_idempotently_requeued() -> None:
         async with admin_factory.begin() as session:
             session.add_all(
                 [
-                    Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="Recovery"),
+                    Tenant(
+                        id=tenant_id,
+                        slug=f"tenant-{tenant_id}",
+                        name="Recovery",
+                        deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                    ),
                     Tenant(
                         id=other_tenant_id,
                         slug=f"tenant-{other_tenant_id}",
                         name="Other recovery tenant",
+                        deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
                     ),
                 ]
             )
@@ -154,6 +161,9 @@ async def test_dead_letter_can_be_inspected_and_idempotently_requeued() -> None:
                     extension_manifest_hash="a" * 64,
                     client_pack_fingerprint="b" * 64,
                     process_definition_fingerprint="c" * 64,
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                    deployment_release_fingerprint=TEST_DEPLOYMENT_RELEASE.release_fingerprint,
+                    temporal_task_queue=TEST_DEPLOYMENT_RELEASE.temporal_task_queue,
                 ),
             )
         assert ingested.outbox_message_id is not None
@@ -161,7 +171,8 @@ async def test_dead_letter_can_be_inspected_and_idempotently_requeued() -> None:
         failing = TemporalOutboxDispatcher(
             runtime_factory,
             cast(Client, _FailingTemporalClient()),
-            task_queue="outbox-recovery-test",
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
+            authorized_tenant_ids=frozenset({tenant_id}),
             max_attempts=2,
             retry_base_delay=timedelta(0),
         )
@@ -258,7 +269,8 @@ async def test_dead_letter_can_be_inspected_and_idempotently_requeued() -> None:
         delivered = await TemporalOutboxDispatcher(
             runtime_factory,
             cast(Client, _SuccessfulTemporalClient()),
-            task_queue="outbox-recovery-test",
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
+            authorized_tenant_ids=frozenset({tenant_id}),
         ).dispatch_one(tenant_id)
         assert delivered.status is DispatchStatus.PUBLISHED
 

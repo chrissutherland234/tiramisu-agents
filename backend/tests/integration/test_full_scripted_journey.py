@@ -59,7 +59,7 @@ from tiramisu_agents.temporal.activities.agent_turn import AgentTurnActivities
 from tiramisu_agents.temporal.activities.process_state import ProcessStateActivities
 from tiramisu_agents.temporal.dispatcher import DispatchStatus, TemporalOutboxDispatcher
 from tiramisu_agents.temporal.workflows.mailbox import MailboxState, ProcessMailboxWorkflow
-from tiramisu_agents.testkit import ScriptedAgent
+from tiramisu_agents.testkit import ScriptedAgent, make_test_deployment_release
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TIRAMISU_RUN_DB_TESTS") != "1",
@@ -329,14 +329,26 @@ async def test_full_scripted_journey_survives_worker_restarts() -> None:
     admin_factory = create_session_factory(admin_engine)
     tenant_id = uuid4()
     actor_id = uuid4()
-    task_queue = f"full-scripted-journey-{uuid4()}"
     runner = ScriptedAgent([_decision_for] * 8)
     fixed_now = datetime(2026, 9, 1, 9, tzinfo=UTC)
+    deployment = load_fictional_deployment(state=StubBusinessState(now=fixed_now))
+    release = make_test_deployment_release(
+        client_pack_fingerprint=deployment.fingerprint(),
+        deployment_id="journey-deployment",
+        build_id="journey-build",
+    )
+    task_queue = release.temporal_task_queue
 
     try:
         async with admin_factory.begin() as session:
-            session.add(Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="Journey Tenant"))
-        deployment = load_fictional_deployment(state=StubBusinessState(now=fixed_now))
+            session.add(
+                Tenant(
+                    id=tenant_id,
+                    slug=f"tenant-{tenant_id}",
+                    name="Journey Tenant",
+                    deployment_id=release.deployment_id,
+                )
+            )
         enquiry = CanonicalEvent(
             tenant_id=tenant_id,
             event_type="enquiry.created",
@@ -362,7 +374,7 @@ async def test_full_scripted_journey_survives_worker_restarts() -> None:
             ingested = await EventIngestionService().ingest(
                 session,
                 enquiry,
-                bootstrap=deployment.trigger_rules()["enquiry.created"],
+                bootstrap=deployment.trigger_rules(release)["enquiry.created"],
             )
         assert ingested.process_instance_id is not None
         process_id = ingested.process_instance_id
@@ -378,17 +390,20 @@ async def test_full_scripted_journey_survives_worker_restarts() -> None:
                     fresh_deployment.registry,
                     runner,
                     compatibility=fresh_deployment.compatibility,
+                    deployment_release=release,
                     context_loader=PostgresAgentContextLoader(),
                     authorized_tenant_ids=authorized,
                 )
                 gateway = ActionGatewayActivities(
                     runtime_factory,
                     fresh_deployment.registry,
+                    deployment_release=release,
                     authorized_tenant_ids=authorized,
                 )
                 state = ProcessStateActivities(
                     runtime_factory,
                     fresh_deployment.registry,
+                    deployment_release=release,
                     authorized_tenant_ids=authorized,
                 )
                 execution = ActionExecutionActivities(
@@ -396,6 +411,7 @@ async def test_full_scripted_journey_survives_worker_restarts() -> None:
                         runtime_factory,
                         ActionAdapterRegistry(fresh_deployment.bindings),
                         fresh_deployment.compatibility,
+                        release,
                     ),
                     authorized_tenant_ids=authorized,
                 )
@@ -416,7 +432,8 @@ async def test_full_scripted_journey_survives_worker_restarts() -> None:
                     yield TemporalOutboxDispatcher(
                         runtime_factory,
                         environment.client,
-                        task_queue=task_queue,
+                        deployment_release=release,
+                        authorized_tenant_ids=authorized,
                         orchestrate_agent_turns=True,
                     )
 

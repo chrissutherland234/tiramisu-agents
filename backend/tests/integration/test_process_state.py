@@ -26,6 +26,7 @@ from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBoots
 from tiramisu_agents.processes.compatibility import DeploymentCompatibility
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateConflict, ProcessStateService
+from tiramisu_agents.testkit.deployment import TEST_DEPLOYMENT_RELEASE
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TIRAMISU_RUN_DB_TESTS") != "1",
@@ -97,7 +98,14 @@ async def test_process_state_projects_sourced_knowledge_and_versioned_memory() -
 
     try:
         async with admin_factory.begin() as session:
-            session.add(Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="Test Tenant"))
+            session.add(
+                Tenant(
+                    id=tenant_id,
+                    slug=f"tenant-{tenant_id}",
+                    name="Test Tenant",
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                )
+            )
         async with runtime_factory.begin() as session:
             ingested = await EventIngestionService().ingest(
                 session,
@@ -108,6 +116,9 @@ async def test_process_state_projects_sourced_knowledge_and_versioned_memory() -
                     extension_manifest_hash="a" * 64,
                     client_pack_fingerprint="b" * 64,
                     process_definition_fingerprint=definition.fingerprint(),
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                    deployment_release_fingerprint=TEST_DEPLOYMENT_RELEASE.release_fingerprint,
+                    temporal_task_queue=TEST_DEPLOYMENT_RELEASE.temporal_task_queue,
                 ),
             )
         assert ingested.process_instance_id is not None
@@ -192,6 +203,7 @@ async def test_process_state_projects_sourced_knowledge_and_versioned_memory() -
                         (definition.id, definition.version): definition.fingerprint()
                     },
                 ),
+                deployment_release=TEST_DEPLOYMENT_RELEASE,
             )
             revisions = (
                 await session.scalars(

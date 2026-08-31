@@ -14,6 +14,7 @@ from tiramisu_agents import __version__
 from tiramisu_agents.core.ports.actions import ActionAdapter
 from tiramisu_agents.events.ingestion import ProcessBootstrap
 from tiramisu_agents.extensions.manifest import ExtensionManifest
+from tiramisu_agents.extensions.runtime import DeploymentRelease
 from tiramisu_agents.processes.compatibility import DeploymentCompatibility
 from tiramisu_agents.processes.definitions import DefinitionStatus, ProcessDefinition
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
@@ -131,9 +132,15 @@ class ClientPack:
             ),
         )
         registry = ProcessDefinitionRegistry(definitions)
-        # Resolve every trigger now so ambiguous configuration fails before API
-        # traffic or worker polling begins.
-        for event_type in self.trigger_rules():
+        # Resolve every published trigger now so ambiguous configuration fails
+        # before API traffic or worker polling begins.
+        published_events = {
+            event_type
+            for definition in definitions
+            if definition.status is DefinitionStatus.PUBLISHED
+            for event_type in definition.trigger_events
+        }
+        for event_type in published_events:
             registry.resolve_trigger(event_type)
         object.__setattr__(self, "registry", registry)
 
@@ -149,7 +156,8 @@ class ClientPack:
 
         return self._fingerprint
 
-    def trigger_rules(self) -> dict[str, ProcessBootstrap]:
+    def trigger_rules(self, release: DeploymentRelease) -> dict[str, ProcessBootstrap]:
+        release.require_client_pack(self.fingerprint())
         rules: dict[str, ProcessBootstrap] = {}
         for definition in self.definitions:
             if definition.status is not DefinitionStatus.PUBLISHED:
@@ -160,6 +168,9 @@ class ClientPack:
                 extension_manifest_hash=self.manifest.fingerprint(),
                 client_pack_fingerprint=self.fingerprint(),
                 process_definition_fingerprint=definition.fingerprint(),
+                deployment_id=release.deployment_id,
+                deployment_release_fingerprint=release.release_fingerprint,
+                temporal_task_queue=release.temporal_task_queue,
             )
             for event_type in definition.trigger_events:
                 if event_type in rules:

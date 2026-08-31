@@ -54,10 +54,14 @@ def test_api_and_worker_load_the_same_editable_client_pack_contract(
         [str(repository_root / "examples" / "fictional_client_pack" / "src"), *sys.path],
     )
     factory_path = "tiramisu_fictional_client_pack:create_client_pack"
+    tenant_id = "5dc839ab-b42e-42e8-a8d9-afc240ce1d94"
     settings = _settings(
         client_pack_factory=factory_path,
         openai_model="test-model",
         openai_api_key="test-key-not-used",
+        deployment_id="fictional-test",
+        deployment_build_id="unit-test",
+        deployment_tenant_ids=(tenant_id,),
     )
 
     app = create_app(settings=settings)
@@ -66,7 +70,7 @@ def test_api_and_worker_load_the_same_editable_client_pack_contract(
     assert app.state.client_pack is not None
     assert worker_pack is not None
     assert app.state.client_pack.manifest == worker_pack.manifest
-    assert app.state.trigger_rules == worker_pack.trigger_rules()
+    assert app.state.trigger_rules == worker_pack.trigger_rules(app.state.deployment_release)
     assert app.state.process_registry.get("enquiry_to_booking", "1") == (
         worker_pack.registry.get("enquiry_to_booking", "1")
     )

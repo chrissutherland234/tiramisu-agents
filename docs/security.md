@@ -41,6 +41,20 @@ uv run tiramisu-admin revoke-credential \
 
 Use bearer credentials only over TLS. Keep them out of URLs, logs, source control, Temporal payloads, browser local storage, and model context. Restrict the administrative database URL and `tiramisu-admin` executable to the deployment control plane. This CLI is deliberately not exposed as an HTTP administration API.
 
+## Deployment assignment
+
+Client-pack services authorize a tenant through two independent controls: the
+deployment's explicit UUID allow-list and the tenant's durable logical
+deployment assignment. API requests, worker startup, Activities, action
+execution, and outbox delivery fail closed if they disagree.
+
+Use the attributed `tiramisu-admin assign-tenant-deployment` command shown in
+[configuration.md](configuration.md); never update assignment or process release
+columns directly. Assignment is serialized against event ingestion. Moving a
+tenant between logical deployments is rejected until all processes are terminal
+and every delivery from the old deployment is published. Active-process
+migration is intentionally unsupported.
+
 ## Tenant suspension
 
 Suspend all new autonomous work for a tenant with an attributed reason:

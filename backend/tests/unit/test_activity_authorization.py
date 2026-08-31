@@ -26,6 +26,7 @@ from tiramisu_agents.temporal.activities.process_state import (
     ProcessStateActivities,
     RecordProcessInterventionCommand,
 )
+from tiramisu_agents.testkit.deployment import TEST_DEPLOYMENT_RELEASE
 from tiramisu_agents.testkit.scripted_agent import ScriptedAgent
 
 
@@ -61,20 +62,28 @@ async def test_all_tenant_bearing_activities_reject_unassigned_tenant_before_io(
         registry,
         ScriptedAgent([]),
         compatibility=compatibility,
+        deployment_release=TEST_DEPLOYMENT_RELEASE,
         authorized_tenant_ids=authorized,
     )
     gateway = ActionGatewayActivities(
         session_factory,
         registry,
+        deployment_release=TEST_DEPLOYMENT_RELEASE,
         authorized_tenant_ids=authorized,
     )
     state = ProcessStateActivities(
         session_factory,
         registry,
+        deployment_release=TEST_DEPLOYMENT_RELEASE,
         authorized_tenant_ids=authorized,
     )
     execution = ActionExecutionActivities(
-        ActionExecutor(session_factory, ActionAdapterRegistry({}), compatibility),
+        ActionExecutor(
+            session_factory,
+            ActionAdapterRegistry({}),
+            compatibility,
+            TEST_DEPLOYMENT_RELEASE,
+        ),
         authorized_tenant_ids=authorized,
     )
 

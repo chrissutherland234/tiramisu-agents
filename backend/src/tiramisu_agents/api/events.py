@@ -21,7 +21,8 @@ from tiramisu_agents.events.ingestion import (
     TenantNotFound,
     TriggerReferenceRequired,
 )
-from tiramisu_agents.security.tenancy import TenantSuspended
+from tiramisu_agents.extensions import DeploymentRelease
+from tiramisu_agents.security.tenancy import TenantNotAuthorized, TenantSuspended
 
 router = APIRouter(prefix="/v1/events", tags=["events"])
 
@@ -59,7 +60,14 @@ class IngestEventResponse(BaseModel):
 
 
 def fictional_trigger_rules() -> dict[str, ProcessBootstrap]:
-    return load_fictional_deployment().trigger_rules()
+    client_pack = load_fictional_deployment()
+    release = DeploymentRelease(
+        deployment_id="fictional-local",
+        build_id="test-helper",
+        client_pack_fingerprint=client_pack.fingerprint(),
+        model_id="test-model",
+    )
+    return client_pack.trigger_rules(release)
 
 
 @router.post("", response_model=IngestEventResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -90,6 +98,11 @@ async def ingest_event(
                 session,
                 event,
                 bootstrap=trigger_rules.get(event.event_type),
+                deployment_id=(
+                    request.app.state.deployment_release.deployment_id
+                    if request.app.state.deployment_release is not None
+                    else None
+                ),
             )
     except TenantNotFound as error:
         raise HTTPException(
@@ -99,6 +112,11 @@ async def ingest_event(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="tenant is suspended",
+        ) from error
+    except TenantNotAuthorized as error:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="tenant is not assigned to this deployment",
         ) from error
     except TriggerReferenceRequired as error:
         raise HTTPException(

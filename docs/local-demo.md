@@ -54,11 +54,16 @@ TIRAMISU_TEMPORAL_TARGET=localhost:7233
 TIRAMISU_TEMPORAL_NAMESPACE=default
 TIRAMISU_ALLOW_UNSAFE_DEVELOPMENT_TENANT_HEADER=true
 TIRAMISU_LOAD_FICTIONAL_EXAMPLE_PROCESSES=true
-TIRAMISU_WORKER_TENANT_IDS=["00000000-0000-0000-0000-000000000001"]
+TIRAMISU_DEPLOYMENT_ID=local-fictional
+TIRAMISU_DEPLOYMENT_BUILD_ID=local-demo-1
+TIRAMISU_DEPLOYMENT_TENANT_IDS=["00000000-0000-0000-0000-000000000001"]
+TIRAMISU_OPENAI_MODEL=your-supported-model
 ```
 
 `TIRAMISU_ALLOW_UNSAFE_DEVELOPMENT_TENANT_HEADER` is strictly for this local
-demo. It must remain false in every deployed environment.
+demo. It must remain false in every deployed environment. The API does not call
+OpenAI, but the model identity is still required because it is part of the
+immutable deployment release shared with the worker.
 
 ## 3. Install, migrate, and create the local tenant
 
@@ -68,17 +73,18 @@ uv run alembic upgrade head
 uv run tiramisu-admin bootstrap-local
 ```
 
-Migration `20260901_12` intentionally marks processes created by older builds as
-having an unverified client-pack composition. Those existing processes will wait
-for operator intervention instead of making model or provider calls. For the
-fictional demo, ingest a new enquiry after upgrading; do not manually copy the
-new fingerprints onto historical rows.
+Migrations `20260901_12` and `20260901_13` intentionally mark historical pack and
+deployment identities as unverified. Those existing processes will wait for
+operator intervention instead of making model or provider calls. For the
+fictional demo, ingest a new enquiry after upgrading; do not manually copy new
+fingerprints or task queues onto historical rows.
 
 The final command is repeatable and prints the identity used by the Vue console:
 
 ```json
 {
   "actor_id": "00000000-0000-0000-0000-000000000002",
+  "deployment_id": "local-fictional",
   "tenant_id": "00000000-0000-0000-0000-000000000001"
 }
 ```
@@ -87,6 +93,17 @@ For a non-demo tenant, use the trusted control-plane command instead:
 
 ```bash
 uv run tiramisu-admin create-tenant --slug acme-demo --name "Acme Demo"
+```
+
+Then assign the returned tenant ID to a logical deployment with an attributed
+control-plane command:
+
+```bash
+uv run tiramisu-admin assign-tenant-deployment \
+  --tenant-id <tenant-uuid> \
+  --deployment-id acme-demo \
+  --actor-id <operator-uuid> \
+  --reason "Install the Acme demo deployment"
 ```
 
 ## 4. Start the API and operator console
@@ -147,11 +164,11 @@ creates its durable process and queues Temporal delivery transactionally.
 
 ## 6. Run the fictional worker (requires an OpenAI key)
 
-To execute agent turns and advance the complete fictional workflow, add an
-explicit model and a nonblank key to `.env`, then start the worker:
+To execute agent turns and advance the complete fictional workflow, add a
+nonblank key to `.env` (and replace the placeholder model if needed), then start
+the worker:
 
 ```dotenv
-TIRAMISU_OPENAI_MODEL=your-supported-model
 OPENAI_API_KEY=your-key
 ```
 
@@ -159,8 +176,9 @@ OPENAI_API_KEY=your-key
 uv run tiramisu-worker --tenant-id 00000000-0000-0000-0000-000000000001
 ```
 
-The worker refuses to start without both values. This is intentional: it avoids
-silently claiming that a live agent journey ran when no model was configured.
+The worker refuses to start without a model, key, release identity, explicit
+allow-list, and matching durable tenant assignment. This avoids silently running
+a journey under the wrong client-pack release.
 
 ## Smoke checks
 

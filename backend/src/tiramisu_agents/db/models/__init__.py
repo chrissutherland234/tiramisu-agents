@@ -24,7 +24,12 @@ from tiramisu_agents.db.models.processes import (
     ProcessStateRevision,
 )
 from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, ReviewThread
-from tiramisu_agents.db.models.tenancy import Tenant, TenantCredential, TenantSafetyEvent
+from tiramisu_agents.db.models.tenancy import (
+    Tenant,
+    TenantCredential,
+    TenantDeploymentEvent,
+    TenantSafetyEvent,
+)
 
 __all__ = [
     "ActionAttempt",
@@ -46,5 +51,6 @@ __all__ = [
     "ReviewThread",
     "Tenant",
     "TenantCredential",
+    "TenantDeploymentEvent",
     "TenantSafetyEvent",
 ]

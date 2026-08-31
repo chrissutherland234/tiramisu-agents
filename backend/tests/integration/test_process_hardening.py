@@ -54,6 +54,7 @@ from tiramisu_agents.processes.control import (
 )
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateService
+from tiramisu_agents.testkit.deployment import TEST_DEPLOYMENT_RELEASE
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TIRAMISU_RUN_DB_TESTS") != "1",
@@ -139,7 +140,14 @@ async def _process_context() -> AsyncGenerator[_TestContext]:
     )
     try:
         async with admin_factory.begin() as session:
-            session.add(Tenant(id=tenant_id, slug=f"tenant-{tenant_id}", name="Hardening"))
+            session.add(
+                Tenant(
+                    id=tenant_id,
+                    slug=f"tenant-{tenant_id}",
+                    name="Hardening",
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                )
+            )
         async with runtime_factory.begin() as session:
             result = await EventIngestionService().ingest(
                 session,
@@ -150,6 +158,9 @@ async def _process_context() -> AsyncGenerator[_TestContext]:
                     extension_manifest_hash="a" * 64,
                     client_pack_fingerprint="b" * 64,
                     process_definition_fingerprint=definition.fingerprint(),
+                    deployment_id=TEST_DEPLOYMENT_RELEASE.deployment_id,
+                    deployment_release_fingerprint=TEST_DEPLOYMENT_RELEASE.release_fingerprint,
+                    temporal_task_queue=TEST_DEPLOYMENT_RELEASE.temporal_task_queue,
                 ),
             )
         assert result.process_instance_id is not None
@@ -356,6 +367,7 @@ async def test_takeover_serializes_with_the_final_provider_execution_fence() -> 
             context.runtime_factory,
             ActionAdapterRegistry({"find_available_slots": adapter}),
             context.compatibility,
+            TEST_DEPLOYMENT_RELEASE,
         )
         execution = asyncio.create_task(
             executor.execute(

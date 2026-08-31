@@ -27,11 +27,38 @@ class SafetyControlConflict(ValueError):
     """Raised when a requested safety transition does not change current state."""
 
 
-async def require_active_tenant(session: AsyncSession, tenant_id: UUID) -> None:
+async def require_tenant_deployment(
+    session: AsyncSession,
+    tenant_id: UUID,
+    deployment_id: str,
+) -> None:
     await set_tenant_context(session, tenant_id)
-    tenant_status = await session.scalar(select(Tenant.status).where(Tenant.id == tenant_id))
-    if tenant_status is None:
+    assigned_deployment = await session.scalar(
+        select(Tenant.deployment_id).where(Tenant.id == tenant_id)
+    )
+    if assigned_deployment is None:
         raise TenantUnavailable(str(tenant_id))
+    if assigned_deployment != deployment_id:
+        raise TenantNotAuthorized(str(tenant_id))
+
+
+async def require_active_tenant(
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    deployment_id: str | None = None,
+) -> None:
+    await set_tenant_context(session, tenant_id)
+    row = (
+        await session.execute(
+            select(Tenant.status, Tenant.deployment_id).where(Tenant.id == tenant_id)
+        )
+    ).one_or_none()
+    if row is None:
+        raise TenantUnavailable(str(tenant_id))
+    tenant_status, assigned_deployment = row
+    if deployment_id is not None and assigned_deployment != deployment_id:
+        raise TenantNotAuthorized(str(tenant_id))
     if tenant_status != "active":
         raise TenantSuspended(str(tenant_id))
 

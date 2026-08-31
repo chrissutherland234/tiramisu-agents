@@ -16,6 +16,7 @@ from tiramisu_agents.agents.runner import AgentTurnRunner
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
 from tiramisu_agents.db.models.processes import ProcessInstance
+from tiramisu_agents.extensions.runtime import DeploymentRelease
 from tiramisu_agents.processes.compatibility import (
     DeploymentCompatibility,
     DeploymentCompatibilityError,
@@ -57,6 +58,7 @@ class AgentTurnActivities:
         runner: AgentTurnRunner,
         *,
         compatibility: DeploymentCompatibility,
+        deployment_release: DeploymentRelease,
         context_loader: PostgresAgentContextLoader | None = None,
         event_observer: Callable[[CanonicalEvent, dict[str, Any]], None] | None = None,
         authorized_tenant_ids: frozenset[UUID] | None = None,
@@ -65,6 +67,7 @@ class AgentTurnActivities:
         self._registry = registry
         self._runner = runner
         self._compatibility = compatibility
+        self._deployment_release = deployment_release
         self._context_loader = context_loader or PostgresAgentContextLoader()
         self._event_observer = event_observer
         self._authorized_tenant_ids = authorized_tenant_ids
@@ -92,7 +95,11 @@ class AgentTurnActivities:
             ) from error
         try:
             async with self._session_factory.begin() as session:
-                await require_active_tenant(session, tenant_id)
+                await require_active_tenant(
+                    session,
+                    tenant_id,
+                    deployment_id=self._deployment_release.deployment_id,
+                )
                 turn_input = await self._context_loader.load(
                     session,
                     tenant_id=tenant_id,
@@ -108,10 +115,15 @@ class AgentTurnActivities:
                     timer_ids=command.timer_ids,
                     definition=definition,
                     compatibility=self._compatibility,
+                    deployment_release=self._deployment_release,
                 )
             # Recheck as close as possible to the nondeterministic model call.
             async with self._session_factory.begin() as session:
-                await require_active_tenant(session, tenant_id)
+                await require_active_tenant(
+                    session,
+                    tenant_id,
+                    deployment_id=self._deployment_release.deployment_id,
+                )
                 process = await session.scalar(
                     select(ProcessInstance).where(
                         ProcessInstance.id == UUID(command.process_instance_id)
@@ -126,6 +138,11 @@ class AgentTurnActivities:
                     extension_manifest_hash=process.extension_manifest_hash,
                     process_definition_fingerprint=process.process_definition_fingerprint,
                 )
+                self._deployment_release.require_process(
+                    deployment_id=process.deployment_id,
+                    deployment_release_fingerprint=process.deployment_release_fingerprint,
+                    temporal_task_queue=process.temporal_task_queue,
+                )
             if self._event_observer is not None:
                 for event in turn_input.events:
                     self._event_observer(event, turn_input.process.authoritative_facts)
@@ -135,7 +152,7 @@ class AgentTurnActivities:
                 type="DeploymentCompatibilityError",
                 non_retryable=True,
             ) from error
-        except (TenantUnavailable, TenantSuspended) as error:
+        except (TenantNotAuthorized, TenantUnavailable, TenantSuspended) as error:
             raise ApplicationError(
                 "tenant safety control blocks agent execution",
                 type=type(error).__name__,

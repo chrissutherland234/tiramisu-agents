@@ -42,6 +42,9 @@ jobs:
           -c "CREATE ROLE tiramisu_app LOGIN PASSWORD 'tiramisu_app' NOSUPERUSER NOCREATEDB NOCREATEROLE"
       - run: uv run alembic upgrade head
       - run: uv run alembic check
+      - run: uv run alembic downgrade 20260901_12
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pyright

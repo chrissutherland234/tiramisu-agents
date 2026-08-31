@@ -10,6 +10,7 @@ from tiramisu_agents.api.settings import get_settings
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.security.credential_service import TenantCredentialService
 from tiramisu_agents.security.credentials import CredentialScope
+from tiramisu_agents.security.deployment_assignment import TenantDeploymentService
 from tiramisu_agents.security.tenancy import TenantSafetyService
 from tiramisu_agents.security.tenant_provisioning import (
     LOCAL_DEVELOPMENT_ACTOR_ID,
@@ -67,6 +68,15 @@ def build_parser() -> argparse.ArgumentParser:
     tenant_status.add_argument("--actor-id", type=UUID, required=True)
     tenant_status.add_argument("--status", choices=("active", "suspended"), required=True)
     tenant_status.add_argument("--reason", required=True)
+
+    assignment = commands.add_parser(
+        "assign-tenant-deployment",
+        help="assign a tenant to one logical client-pack deployment",
+    )
+    assignment.add_argument("--tenant-id", type=UUID, required=True)
+    assignment.add_argument("--deployment-id", required=True)
+    assignment.add_argument("--actor-id", type=UUID, required=True)
+    assignment.add_argument("--reason", required=True)
     return parser
 
 
@@ -91,6 +101,15 @@ async def _execute(arguments: argparse.Namespace) -> dict[str, object]:
                 }
             if arguments.command == "bootstrap-local":
                 tenant = await TenantProvisioningService().ensure_local_development_tenant(session)
+                assignment = None
+                if settings.deployment_id is not None:
+                    assignment = await TenantDeploymentService().assign(
+                        session,
+                        tenant_id=tenant.tenant_id,
+                        deployment_id=settings.deployment_id,
+                        actor_id=LOCAL_DEVELOPMENT_ACTOR_ID,
+                        reason="Assign the documented local fictional deployment",
+                    )
                 return {
                     "tenant_id": str(tenant.tenant_id),
                     "actor_id": str(LOCAL_DEVELOPMENT_ACTOR_ID),
@@ -98,6 +117,9 @@ async def _execute(arguments: argparse.Namespace) -> dict[str, object]:
                     "name": tenant.name,
                     "created": tenant.created,
                     "authentication_method": "unsafe_development_headers",
+                    "deployment_id": (
+                        assignment.deployment_id if assignment is not None else "unassigned"
+                    ),
                 }
             if arguments.command == "issue-credential":
                 issued = await TenantCredentialService().issue(
@@ -125,6 +147,21 @@ async def _execute(arguments: argparse.Namespace) -> dict[str, object]:
                 return {
                     "credential_id": str(revoked.credential_id),
                     "revoked_at": revoked.revoked_at.isoformat(),
+                }
+            if arguments.command == "assign-tenant-deployment":
+                assignment = await TenantDeploymentService().assign(
+                    session,
+                    tenant_id=arguments.tenant_id,
+                    deployment_id=arguments.deployment_id,
+                    actor_id=arguments.actor_id,
+                    reason=arguments.reason,
+                )
+                return {
+                    "tenant_id": str(assignment.tenant_id),
+                    "previous_deployment_id": assignment.previous_deployment_id,
+                    "deployment_id": assignment.deployment_id,
+                    "changed": assignment.changed,
+                    "event_id": str(assignment.event_id) if assignment.event_id else None,
                 }
             transition = await TenantSafetyService().set_status(
                 session,

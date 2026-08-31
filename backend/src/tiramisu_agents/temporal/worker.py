@@ -7,16 +7,19 @@ from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.client import Client
 from temporalio.worker import Worker
 
 from tiramisu_agents.actions.execution import ActionExecutor
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
 from tiramisu_agents.agents.openai_runner import OpenAIAgentsTurnRunner
+from tiramisu_agents.api.deployment import compose_deployment_release
 from tiramisu_agents.api.settings import Settings, get_settings
 from tiramisu_agents.builtin import FictionalDeployment, load_fictional_deployment
 from tiramisu_agents.db.session import create_engine, create_session_factory
-from tiramisu_agents.extensions import ClientPack, load_configured_client_pack
+from tiramisu_agents.extensions import ClientPack, DeploymentRelease, load_configured_client_pack
+from tiramisu_agents.security.tenancy import require_tenant_deployment
 from tiramisu_agents.temporal.activities.action_execution import ActionExecutionActivities
 from tiramisu_agents.temporal.activities.action_gateway import ActionGatewayActivities
 from tiramisu_agents.temporal.activities.agent_turn import AgentTurnActivities
@@ -31,27 +34,34 @@ def resolve_worker_tenants(
     settings: Settings, cli_tenant_ids: tuple[UUID, ...] = ()
 ) -> tuple[UUID, ...]:
     """CLI assignments replace environment assignments to avoid accidental scope expansion."""
-    tenant_ids = cli_tenant_ids or settings.worker_tenant_ids
+    tenant_ids = cli_tenant_ids or settings.deployment_tenant_ids
     if not tenant_ids:
         raise ValueError("at least one deployment-authorized worker tenant ID is required")
     if len(tenant_ids) != len(set(tenant_ids)):
-        raise ValueError("worker tenant assignments must be unique")
+        raise ValueError("deployment tenant assignments must be unique")
     return tenant_ids
 
 
 def compose_fictional_worker(settings: Settings) -> FictionalDeployment:
     """Compatibility helper for the bundled local example."""
     _require_agent_model_configuration(settings)
-    return load_fictional_deployment()
+    deployment = load_fictional_deployment()
+    compose_deployment_release(settings, deployment)
+    return deployment
 
 
-def compose_worker_client_pack(settings: Settings) -> ClientPack | None:
+def compose_worker_client_pack(
+    settings: Settings,
+    *,
+    tenant_ids: tuple[UUID, ...] | None = None,
+) -> ClientPack | None:
     deployment = load_configured_client_pack(
         settings.client_pack_factory,
         load_fictional_example=settings.load_fictional_example_processes,
     )
     if deployment is not None:
         _require_agent_model_configuration(settings)
+        compose_deployment_release(settings, deployment, tenant_ids=tenant_ids)
     return deployment
 
 
@@ -73,22 +83,27 @@ async def serve(
     settings = settings or get_settings()
     tenant_ids = resolve_worker_tenants(settings, tenant_ids)
     deployment = (
-        compose_worker_client_pack(settings) if client_pack is _CLIENT_PACK_UNSET else client_pack
+        compose_worker_client_pack(settings, tenant_ids=tenant_ids)
+        if client_pack is _CLIENT_PACK_UNSET
+        else client_pack
     )
     if deployment is not None and not isinstance(deployment, ClientPack):
         raise TypeError("client_pack must be a ClientPack or None")
+    if deployment is None:
+        raise ValueError("a configured client pack is required to run the Temporal worker")
+    _require_agent_model_configuration(settings)
+    release = compose_deployment_release(settings, deployment, tenant_ids=tenant_ids)
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
-    client = await Client.connect(
-        settings.temporal_target,
-        namespace=settings.temporal_namespace,
-    )
-    activities: list[Callable[..., Any]] = []
-    authorized_tenant_ids = frozenset(tenant_ids)
-    orchestrate_agent_turns = False
-    if deployment is not None:
+    try:
+        await _validate_tenant_assignments(session_factory, release, tenant_ids)
+        client = await Client.connect(
+            settings.temporal_target,
+            namespace=settings.temporal_namespace,
+        )
         assert settings.openai_model is not None
         assert settings.openai_api_key is not None
+        authorized_tenant_ids = frozenset(tenant_ids)
         registry = deployment.registry
         agent_activities = AgentTurnActivities(
             session_factory,
@@ -99,16 +114,19 @@ async def serve(
                 output_type=deployment.agent_decision_output_type,
             ),
             compatibility=deployment.compatibility,
+            deployment_release=release,
             authorized_tenant_ids=authorized_tenant_ids,
         )
         gateway_activities = ActionGatewayActivities(
             session_factory,
             registry,
+            deployment_release=release,
             authorized_tenant_ids=authorized_tenant_ids,
         )
         state_activities = ProcessStateActivities(
             session_factory,
             registry,
+            deployment_release=release,
             authorized_tenant_ids=authorized_tenant_ids,
         )
         execution_activities = ActionExecutionActivities(
@@ -116,10 +134,11 @@ async def serve(
                 session_factory,
                 ActionAdapterRegistry(deployment.bindings),
                 deployment.compatibility,
+                release,
             ),
             authorized_tenant_ids=authorized_tenant_ids,
         )
-        activities = [
+        activities: list[Callable[..., Any]] = [
             agent_activities.run_agent_turn,
             gateway_activities.persist_agent_actions,
             state_activities.persist_process_state,
@@ -127,18 +146,17 @@ async def serve(
             execution_activities.execute_action,
             execution_activities.reconcile_action,
         ]
-        orchestrate_agent_turns = True
-    dispatcher = TemporalOutboxDispatcher(
-        session_factory,
-        client,
-        task_queue=settings.temporal_task_queue,
-        orchestrate_agent_turns=orchestrate_agent_turns,
-    )
-    try:
+        dispatcher = TemporalOutboxDispatcher(
+            session_factory,
+            client,
+            deployment_release=release,
+            authorized_tenant_ids=authorized_tenant_ids,
+            orchestrate_agent_turns=True,
+        )
         async with (
             Worker(
                 client,
-                task_queue=settings.temporal_task_queue,
+                task_queue=release.temporal_task_queue,
                 workflows=[ProcessMailboxWorkflow],
                 activities=activities,
             ),
@@ -153,6 +171,16 @@ async def serve(
         await engine.dispose()
 
 
+async def _validate_tenant_assignments(
+    session_factory: async_sessionmaker[AsyncSession],
+    release: DeploymentRelease,
+    tenant_ids: tuple[UUID, ...],
+) -> None:
+    for tenant_id in tenant_ids:
+        async with session_factory.begin() as session:
+            await require_tenant_deployment(session, tenant_id, release.deployment_id)
+
+
 def run() -> None:
     parser = argparse.ArgumentParser(description="Run the Tiramisu Temporal worker")
     parser.add_argument(
@@ -162,7 +190,7 @@ def run() -> None:
         default=[],
         help=(
             "deployment-authorized tenant UUID; repeat for multiple tenants; "
-            "when supplied, replaces TIRAMISU_WORKER_TENANT_IDS"
+            "when supplied, replaces TIRAMISU_DEPLOYMENT_TENANT_IDS"
         ),
     )
     arguments = parser.parse_args()
@@ -170,7 +198,9 @@ def run() -> None:
     logging.basicConfig(level=settings.log_level)
     try:
         tenant_ids = resolve_worker_tenants(settings, tuple(arguments.tenant_id))
-        client_pack = compose_worker_client_pack(settings)
+        client_pack = compose_worker_client_pack(settings, tenant_ids=tenant_ids)
+        if client_pack is None:
+            raise ValueError("a configured client pack is required to run the Temporal worker")
     except ValueError as error:
         parser.error(str(error))
     asyncio.run(serve(tenant_ids, settings=settings, client_pack=client_pack))

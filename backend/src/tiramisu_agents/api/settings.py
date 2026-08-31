@@ -1,6 +1,5 @@
 """Environment-backed application settings."""
 
-import re
 from functools import lru_cache
 from typing import Literal, Self
 from uuid import UUID
@@ -9,7 +8,6 @@ from pydantic import AliasChoices, Field, SecretStr, field_validator, model_vali
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-_TASK_QUEUE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 
 
 class Settings(BaseSettings):
@@ -26,13 +24,20 @@ class Settings(BaseSettings):
     migration_database_url: str = "postgresql+asyncpg://tiramisu:tiramisu@localhost:5432/tiramisu"
     temporal_target: str = "localhost:7233"
     temporal_namespace: str = "default"
-    temporal_task_queue: str = "tiramisu-agent"
+    deployment_id: str | None = None
+    deployment_build_id: str | None = None
+    deployment_tenant_ids: tuple[UUID, ...] = Field(
+        default=(),
+        validation_alias=AliasChoices(
+            "TIRAMISU_DEPLOYMENT_TENANT_IDS",
+            "TIRAMISU_WORKER_TENANT_IDS",
+        ),
+    )
     openai_model: str | None = Field(default=None)
     openai_api_key: SecretStr | None = Field(
         default=None,
         validation_alias=AliasChoices("OPENAI_API_KEY", "TIRAMISU_OPENAI_API_KEY"),
     )
-    worker_tenant_ids: tuple[UUID, ...] = ()
     api_host: str = "127.0.0.1"
     api_port: int = Field(default=8000, ge=1, le=65535)
     allow_unsafe_development_tenant_header: bool = False
@@ -47,7 +52,7 @@ class Settings(BaseSettings):
             return stripped or None
         return value
 
-    @field_validator("client_pack_factory", mode="before")
+    @field_validator("client_pack_factory", "deployment_id", "deployment_build_id", mode="before")
     @classmethod
     def normalize_optional_client_pack_factory(cls, value: object) -> object:
         if isinstance(value, str):
@@ -85,19 +90,11 @@ class Settings(BaseSettings):
             raise ValueError("runtime configuration values cannot be blank")
         return stripped
 
-    @field_validator("temporal_task_queue")
+    @field_validator("deployment_tenant_ids")
     @classmethod
-    def validate_task_queue(cls, value: str) -> str:
-        stripped = value.strip()
-        if not _TASK_QUEUE_PATTERN.fullmatch(stripped):
-            raise ValueError("Temporal task queue has invalid characters or length")
-        return stripped
-
-    @field_validator("worker_tenant_ids")
-    @classmethod
-    def require_unique_worker_tenants(cls, value: tuple[UUID, ...]) -> tuple[UUID, ...]:
+    def require_unique_deployment_tenants(cls, value: tuple[UUID, ...]) -> tuple[UUID, ...]:
         if len(value) != len(set(value)):
-            raise ValueError("worker tenant assignments must be unique")
+            raise ValueError("deployment tenant assignments must be unique")
         return value
 
     @model_validator(mode="after")

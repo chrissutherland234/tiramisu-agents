@@ -12,7 +12,8 @@ from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, Ou
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.tenancy import Tenant
 from tiramisu_agents.db.session import set_tenant_context
-from tiramisu_agents.security.tenancy import TenantSuspended
+from tiramisu_agents.security.deployment_lock import lock_tenant_deployment_for_ingress
+from tiramisu_agents.security.tenancy import TenantNotAuthorized, TenantSuspended
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,9 @@ class ProcessBootstrap:
     extension_manifest_hash: str
     client_pack_fingerprint: str
     process_definition_fingerprint: str
+    deployment_id: str
+    deployment_release_fingerprint: str
+    temporal_task_queue: str
     late_event_policy: str = "record_only"
 
 
@@ -54,13 +58,20 @@ class EventIngestionService:
         event: CanonicalEvent,
         *,
         bootstrap: ProcessBootstrap | None = None,
+        deployment_id: str | None = None,
     ) -> IngestionResult:
+        await lock_tenant_deployment_for_ingress(session, event.tenant_id)
         await set_tenant_context(session, event.tenant_id)
-        tenant_status = await session.scalar(
-            select(Tenant.status).where(Tenant.id == event.tenant_id)
-        )
-        if tenant_status is None:
+        tenant_row = (
+            await session.execute(
+                select(Tenant.status, Tenant.deployment_id).where(Tenant.id == event.tenant_id)
+            )
+        ).one_or_none()
+        if tenant_row is None:
             raise TenantNotFound(str(event.tenant_id))
+        tenant_status, assigned_deployment = tenant_row
+        if deployment_id is not None and assigned_deployment != deployment_id:
+            raise TenantNotAuthorized(str(event.tenant_id))
         if tenant_status != "active":
             raise TenantSuspended(str(event.tenant_id))
 
@@ -244,6 +255,9 @@ class EventIngestionService:
                 extension_manifest_hash=bootstrap.extension_manifest_hash,
                 client_pack_fingerprint=bootstrap.client_pack_fingerprint,
                 process_definition_fingerprint=bootstrap.process_definition_fingerprint,
+                deployment_id=bootstrap.deployment_id,
+                deployment_release_fingerprint=bootstrap.deployment_release_fingerprint,
+                temporal_task_queue=bootstrap.temporal_task_queue,
                 status="active",
                 workflow_id=f"tenant/{tenant_id}/process/{process_id}",
                 late_event_policy=bootstrap.late_event_policy,

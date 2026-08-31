@@ -73,6 +73,11 @@ class ProcessDetail(BaseModel):
     status: str
     state_version: int
     workflow_id: str
+    deployment_id: str
+    deployment_release_fingerprint: str
+    temporal_task_queue: str
+    client_pack_fingerprint: str
+    process_definition_fingerprint: str
     authoritative_facts: dict[str, Any]
     customer_claims: dict[str, Any]
     fact_provenance: dict[str, dict[str, Any]]
@@ -251,6 +256,11 @@ async def get_process(
             status=process.status,
             state_version=process.state_version,
             workflow_id=process.workflow_id,
+            deployment_id=process.deployment_id,
+            deployment_release_fingerprint=process.deployment_release_fingerprint,
+            temporal_task_queue=process.temporal_task_queue,
+            client_pack_fingerprint=process.client_pack_fingerprint,
+            process_definition_fingerprint=process.process_definition_fingerprint,
             authoritative_facts=process.authoritative_facts,
             customer_claims=process.customer_claims,
             fact_provenance=process.fact_provenance,

@@ -11,6 +11,7 @@ from temporalio.exceptions import ApplicationError
 
 from tiramisu_agents.core.contracts.decisions import AgentDecision
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
+from tiramisu_agents.extensions.runtime import DeploymentRelease
 from tiramisu_agents.processes.control import (
     InterventionInput,
     ProcessControlConflict,
@@ -18,7 +19,14 @@ from tiramisu_agents.processes.control import (
 )
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateConflict, ProcessStateService
-from tiramisu_agents.security.tenancy import TenantNotAuthorized, require_authorized_tenant
+from tiramisu_agents.security.tenancy import (
+    TenantNotAuthorized,
+    TenantSuspended,
+    TenantUnavailable,
+    require_active_tenant,
+    require_authorized_tenant,
+    require_tenant_deployment,
+)
 
 
 @dataclass(frozen=True)
@@ -67,11 +75,13 @@ class ProcessStateActivities:
         registry: ProcessDefinitionRegistry,
         *,
         service: ProcessStateService | None = None,
+        deployment_release: DeploymentRelease | None = None,
         authorized_tenant_ids: frozenset[UUID] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._registry = registry
         self._service = service or ProcessStateService()
+        self._deployment_release = deployment_release
         self._authorized_tenant_ids = authorized_tenant_ids
 
     @activity.defn(name="record_process_intervention")
@@ -80,6 +90,12 @@ class ProcessStateActivities:
         try:
             require_authorized_tenant(tenant_id, self._authorized_tenant_ids)
             async with self._session_factory.begin() as session:
+                if self._deployment_release is not None:
+                    await require_tenant_deployment(
+                        session,
+                        tenant_id,
+                        self._deployment_release.deployment_id,
+                    )
                 await ProcessControlService().record_intervention(
                     session,
                     InterventionInput(
@@ -100,7 +116,7 @@ class ProcessStateActivities:
                         timer_ids=command.timer_ids,
                     ),
                 )
-        except (TenantNotAuthorized, ProcessControlConflict) as error:
+        except (TenantNotAuthorized, TenantUnavailable, ProcessControlConflict) as error:
             raise ApplicationError(
                 str(error), type=type(error).__name__, non_retryable=True
             ) from error
@@ -137,6 +153,12 @@ class ProcessStateActivities:
                 expected_timer_ids=frozenset(command.timer_ids),
             )
             async with self._session_factory.begin() as session:
+                if self._deployment_release is not None:
+                    await require_active_tenant(
+                        session,
+                        tenant_id,
+                        deployment_id=self._deployment_release.deployment_id,
+                    )
                 applied = await self._service.apply_decision(
                     session,
                     tenant_id=tenant_id,
@@ -145,7 +167,13 @@ class ProcessStateActivities:
                     decision=decision,
                     terminal_states=frozenset(definition.terminal_states),
                 )
-        except (DecisionRejected, ProcessStateConflict) as error:
+        except (
+            DecisionRejected,
+            ProcessStateConflict,
+            TenantNotAuthorized,
+            TenantSuspended,
+            TenantUnavailable,
+        ) as error:
             raise ApplicationError(
                 str(error), type=type(error).__name__, non_retryable=True
             ) from error
