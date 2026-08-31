@@ -20,3 +20,5 @@ Begin with one editable package using the `tiramisu_agents` import namespace. De
 ## Consequences
 
 Public CI has no private dependency. Local client development uses sibling editable packages; CI and deployments use immutable revisions or artifacts. MIT permits commercial private forks and hosted derivatives. Client-pack compatibility is a runtime and release concern; Python protocols alone do not establish isolation.
+
+The mapping between a client pack and its running services is decided separately in ADR-011.

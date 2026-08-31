@@ -825,7 +825,7 @@ The exact packaging boundary remains intentionally simple until the first vertic
 - [x] Define the initial provider-neutral action port and explicit adapter registry contracts.
 - [ ] Threat-model tenant isolation, webhooks, prompts, tools, and credentials.
 - [ ] Define minimum autonomy, communication, cost, and process-lifetime budgets.
-- [ ] Decide how client packs, tenants, API deployments, worker task queues, provider credentials, upgrades, and rollbacks map to one another. The recommended near-term topology is one immutable deployment per client pack or identical-pack tenant group.
+- [x] Decide how client packs, tenants, API deployments, worker task queues, provider credentials, upgrades, and rollbacks map to one another: one immutable deployment and Temporal task queue per client pack, or per intentional identical-pack tenant group (ADR-011).
 - [x] Confirm MIT licensing, public contribution policy, and the public/private client-pack boundary.
 
 The following architecture decision records are gates for the durable kernel:
@@ -840,6 +840,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] **ADR-008:** Mailbox ordering, concurrency, late events, cancellation, and timer/event ties.
 - [x] **ADR-009:** Autonomy budgets, communication policy, circuit breakers, and operator takeover.
 - [x] **ADR-010:** Public MIT monorepo, private client-pack boundary, packaging, extension manifest, compatibility, and release policy.
+- [x] **ADR-011:** One independently deployable API/worker composition and Temporal task queue per client pack or identical-pack tenant group.
 
 ### Phase 1 — Project foundation
 
@@ -1099,7 +1100,7 @@ Recommended near-term default: one immutable API/worker deployment and Temporal 
 
 Why: the current process registry, strict output type, and action bindings are process-wide. Supporting different client packs inside one worker would require tenant-aware definition, model, adapter, credential, task-queue, compatibility, and rollout routing across every Activity. That complexity should be justified by operational evidence rather than assumed early.
 
-Status: Recommended by the 2026-08-31 stocktake; confirm before implementing a second independently authored client pack.
+Status: Accepted. Recorded in ADR-011 on 2026-08-31.
 
 ## 17. Explicit non-goals for the first release
 
@@ -1128,13 +1129,13 @@ Status: Recommended by the 2026-08-31 stocktake; confirm before implementing a s
 The initial executable milestone—fictional enquiry through booking, payment, calendar, and completion—is working through both an integration-free demonstration and the real PostgreSQL/Temporal path. The next milestone is to make that foundation safe to evolve and credible for a second client pack:
 
 1. Enforce pinned manifest/definition compatibility and published-only production triggers.
-2. Confirm D-014 and document task-queue, tenant assignment, pack upgrade/rollback, and active-instance migration rules.
+2. Implement ADR-011's deployment identity and document tenant assignment, pack upgrade/rollback, and active-instance migration rules.
 3. Add ingress/context bounds and the missing communication safety envelope: opt-out, quiet hours, auto-responder/loop detection, rate, cost, token, and process-lifetime budgets.
 4. Implement quarantine resolution and replay with operator visibility.
 5. Refactor the scenario kit to drive production kernel services and complete the ordered gaps in [`docs/testing.md`](docs/testing.md), beginning with RLS/migration audits and Temporal races.
 6. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
 
-D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), D-012 (data/compliance requirements), and D-014 (client-pack deployment topology) remain explicit gates before production integrations. A GitHub-issue triage/Codex handoff pack is a useful later second-pack validation, after the deployment boundary is decided and version fencing is enforced.
+D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), and D-012 (data/compliance requirements) remain explicit gates before production integrations. D-014 is now accepted as ADR-011. A GitHub-issue triage/Codex handoff pack is a useful later validation of that boundary, after version fencing is enforced.
 
 ## 19. Design references
 

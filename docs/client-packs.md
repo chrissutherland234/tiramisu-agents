@@ -32,7 +32,7 @@ API startup installs trigger rules and the definition registry. Worker startup i
 
 ## Current boundary
 
-- One configured composition is loaded per API or worker process. A pack may contain multiple non-conflicting definitions, but they currently share one strict decision-output type and one action-binding namespace.
+- One client pack is one independently deployable API/worker composition with its own Temporal task queue. It may serve multiple tenants only when they intentionally share the exact pack, adapter routing, model/policy configuration, and release lifecycle. See [ADR-011](decisions/011-client-pack-deployment-topology.md).
 - The deployment, not a request or tenant-controlled field, chooses the import path. Treat the package as executable production code and pin its immutable build.
 - Custom Temporal Activity registration, dynamic lifecycle controls, persisted installation audit, and per-tenant adapter routing within one worker are not yet supported.
 - The supported contract cannot register replacement workflows or bypass the stock action gateway, tenant checks, approval integrity, or audit path. The pack itself is trusted executable Python; malicious or careless code can still perform hidden I/O. Use reviewed immutable builds, and use a separate process/service boundary where code-level isolation is required.

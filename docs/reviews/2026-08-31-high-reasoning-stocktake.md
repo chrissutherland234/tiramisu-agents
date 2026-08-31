@@ -19,11 +19,13 @@ It is not yet a production multi-client platform. The most important remaining w
 
 This violates the plan's immutable-version invariant and ADR-007. Before client-pack evolution is relied upon, every turn and action must fail closed unless the process's pinned composition is available and compatible. Definition publication must make identities immutable; changes require a new version or an explicit, audited active-instance migration.
 
-### P0 — Multi-client deployment topology is unresolved
+### P0 — Multi-client deployment topology required a decision
 
 The database and credentials are tenant-scoped, but `TIRAMISU_CLIENT_PACK_FACTORY`, process registry, strict output type, and action bindings are process-wide. Every tenant assigned to one API/worker deployment therefore receives the same composition and action-type namespace. This cannot currently host two clients with different processes or provider credentials in one service deployment.
 
-The recommended near-term answer is a deployment unit per client pack (or per group of tenants sharing an identical pack), with its own task queue and immutable build. A thin control plane or ingress router may map tenants to deployments later. Building a dynamic tenant-aware adapter/model registry now would add substantial complexity to every safety boundary. This choice should be made explicitly before a second real client pack is implemented.
+The recommended near-term answer is a deployment unit per client pack (or per group of tenants sharing an identical pack), with its own task queue and immutable build. A thin control plane or ingress router may map tenants to deployments later. Building a dynamic tenant-aware adapter/model registry now would add substantial complexity to every safety boundary.
+
+Decision update: this topology was accepted after the review and recorded in ADR-011. Deployment identity, routing inventory, and rollout controls still need implementation.
 
 ### P1 — The Python extension boundary is trusted code, not a sandbox
 
@@ -68,7 +70,7 @@ The actionable gap plan is maintained in [`docs/testing.md`](../testing.md).
 ## Recommended next sequence
 
 1. Enforce pinned manifest/definition compatibility and published-only production triggers, with regression and replay tests.
-2. Decide and document the deployment-per-client-pack topology, task-queue identity, tenant assignment, upgrade, rollback, and active-instance migration rules.
+2. Implement ADR-011's deployment identity, task-queue boundary, tenant assignment, upgrade, rollback, and active-instance migration rules.
 3. Add input/context ceilings plus communication safety: opt-out, quiet hours, auto-responder/loop detection, rate and lifetime/token/cost budgets.
 4. Implement operator quarantine resolution and replay; it is the largest missing recovery loop in the current event path.
 5. Refactor the scenario test kit to drive production kernel services, then fill the Temporal race, RLS, migration, and browser matrices.

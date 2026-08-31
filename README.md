@@ -101,7 +101,7 @@ uv pip install -e . -e examples/fictional_client_pack
 export TIRAMISU_CLIENT_PACK_FACTORY=tiramisu_fictional_client_pack:create_client_pack
 ```
 
-The factory is imported and validated before API traffic or Temporal worker polling. It is never discovered or imported from workflow code. A pack is trusted executable Python, not a sandbox. The first contract intentionally supports one deployment composition per service process and no custom Temporal Activities; dynamic per-tenant pack selection, lifecycle controls, pinned active-process compatibility enforcement, and custom Activity registration remain future work.
+The factory is imported and validated before API traffic or Temporal worker polling. It is never discovered or imported from workflow code. A pack is trusted executable Python, not a sandbox. Under [ADR-011](docs/decisions/011-client-pack-deployment-topology.md), each pack has its own deployable API/worker composition and Temporal task queue; tenants may share it only when they intentionally share the exact pack and release lifecycle. Lifecycle controls, pinned active-process compatibility enforcement, and custom Activity registration remain future work.
 
 ## License
 
