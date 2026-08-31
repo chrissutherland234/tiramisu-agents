@@ -123,7 +123,7 @@ The public repository must build, test, document, and run its fictional referenc
 
 Worker startup composes a deployment through an explicit, versioned extension manifest. It registers allowed process definitions, adapters, policies, Activities, and capabilities before workers begin polling. Temporal workflow code refers only to stable registered identifiers and versioned contracts; it never performs filesystem scanning, network-based plugin discovery, or nondeterministic imports during workflow execution.
 
-Client extensions may narrow capabilities and policy, but cannot bypass tenant isolation, the action gateway, audit, approval integrity, budget enforcement, or platform safety restrictions. Client-specific database tables and migrations are deferred in the first release; client packs should use the public extension model and authoritative external systems unless a reviewed schema-extension mechanism is introduced later.
+Client extensions may narrow capabilities and policy. The supported registration path cannot replace the workflow or action gateway, but an installed Python pack is trusted executable deployment code, not a sandbox. It requires source review, immutable builds, dependency controls, and deployment isolation; protection from malicious pack code requires a process or service boundary. Client-specific database tables and migrations are deferred in the first release; client packs should use the public extension model and authoritative external systems unless a reviewed schema-extension mechanism is introduced later.
 
 A gitignored local directory may hold disposable `.env` files, generated artifacts, and developer-only overrides. It is never the canonical home of client source, prompts, policies, process definitions, evaluations, or deployment configuration. Canonical private work requires a private repository, history, review, and CI.
 
@@ -631,6 +631,8 @@ Avoid a generic JSON/EAV `business_objects` store unless a concrete client requi
 
 Testing is designed around an integration-free kernel, provider contracts, deterministic Temporal orchestration, and a separate layer of probabilistic agent evaluation.
 
+Current baseline: 106 backend tests (74 unit/contract, 30 PostgreSQL or Temporal integration, and 2 committed-history replay cases), 2 Vue component tests, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exact approval/action fencing, tenant Activity authorization, workflow restart/rollover, interventions, and the scripted reference journey. Configuration evolution, cross-layer scenario reuse, the broader race matrix, agent behavior, adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
+
 ### Layer 1 — Pure kernel tests
 
 Run without Temporal, PostgreSQL, OpenAI, network access, or provider SDKs. Provide process state, canonical events, scripted agent decisions, policy configuration, budgets, communication rules, operator review messages, and a fake clock. Assert state transitions, action decisions, approval requirements, proposal revision lineage, wake conditions, memory provenance, ordering, limits, and terminal outcomes.
@@ -663,7 +665,7 @@ Every real and stub implementation of a port must pass the same provider-neutral
 
 This prevents stubs from behaving more conveniently than production providers.
 
-The same public suite validates private client packs without requiring them in public CI. It checks extension-manifest compatibility, process-definition publication, capability registration, policy monotonicity, adapter behavior, replay fixtures, migration compatibility, and the absence of attempts to bypass core safety boundaries. The public repository also includes a fictional example pack that exercises the identical packaging and registration path.
+The same public suite validates private client packs without requiring them in public CI. It checks extension-manifest compatibility, process-definition publication, capability registration, policy monotonicity, adapter behavior, replay fixtures, migration compatibility, and that supported registrations do not replace core safety boundaries. It detects accidental contract violations; it does not sandbox deliberately malicious Python. The public repository also includes a fictional example pack that exercises the identical packaging and registration path.
 
 ### Layer 5 — Provider sandbox tests
 
@@ -823,6 +825,7 @@ The exact packaging boundary remains intentionally simple until the first vertic
 - [x] Define the initial provider-neutral action port and explicit adapter registry contracts.
 - [ ] Threat-model tenant isolation, webhooks, prompts, tools, and credentials.
 - [ ] Define minimum autonomy, communication, cost, and process-lifetime budgets.
+- [ ] Decide how client packs, tenants, API deployments, worker task queues, provider credentials, upgrades, and rollbacks map to one another. The recommended near-term topology is one immutable deployment per client pack or identical-pack tenant group.
 - [x] Confirm MIT licensing, public contribution policy, and the public/private client-pack boundary.
 
 The following architecture decision records are gates for the durable kernel:
@@ -856,6 +859,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations, including exact action-result provenance and immutable evidence-backed operator resolution.
 - [ ] Add autonomy budgets, communication policy, and rate limits. Initial deterministic outbound follow-up count/interval policy and reply resets are enforced, and an audited tenant suspension control gates ingress, dispatch, model calls, and provider side effects; budgets, platform-wide limits, and capability-specific circuit breakers remain.
 - [ ] Add data classification, log/trace redaction, Temporal payload encryption hooks, and retention configuration.
+- [ ] Add explicit byte/count/token ceilings for ingress events, facts, action parameters, review context, commitments, and rendered model context.
 - [x] Add formatting, linting, strict static typing, unit tests, dependency lockfiles, and CI.
 - [ ] Add correlated structured logging, tracing, metrics, health checks, and initial stuck-work alerts.
 - [x] Add the reusable stub providers and scenario test kit.
@@ -863,6 +867,7 @@ The following architecture decision records are gates for the durable kernel:
 ### Phase 2 — Durable agent kernel
 
 - [ ] Implement `AgentWorkflow`. The process mailbox now sequences bounded event, timer, review, control, and action-result turns; executes or defers proposals; persists effective lifecycle/wake outcomes and durable interventions; performs immediate lookup-only reconciliation; rolls history over at safe Continue-As-New boundaries; and exposes turn/pending-action state. Delayed reconciliation schedules and mature production failure operations remain.
+- [ ] Enforce process-pinned client-pack/manifest and definition compatibility before model or provider I/O. The manifest hash is persisted today but is not checked by worker execution; silent same-version behavior changes must fail closed.
 - [x] Implement the initial deterministic process mailbox with event deduplication, replaceable event/timer wake plans, state queries, and time-skipping tests.
 - [x] Implement canonical event ingestion and source-event deduplication.
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
@@ -880,6 +885,7 @@ The following architecture decision records are gates for the durable kernel:
 - [ ] Implement budget, communication-policy, and safety-boundary enforcement. Initial follow-up count/interval policy, configured reply resets, deployment-tenant Activity authorization, lifecycle fencing, approval expiry, and tenant suspension are enforced; budgets and platform/capability circuit breakers remain.
 - [ ] Implement Continue-As-New with complete mailbox, wait, version, approval, and budget carry-forward. Versioned rollover now preserves active mailbox buffers, delivery deduplication, recent diagnostics, pending approvals, absolute timers, process-definition identity, and lifetime counters; budget carry-forward awaits the budget model.
 - [x] Add Temporal replay and failure-recovery tests. Committed signal/wait and Activity-backed Continue-As-New histories replay in CI; worker restart, rollover carry-forward, and retry-isolation tests cover the initial recovery surface. The broader failure matrix in the testing strategy remains ongoing.
+- [ ] Add committed replay histories for approval/revision, reconciliation, intervention/retry, takeover, suspension, and terminal closure, plus the timer/event, control/turn, review/turn, and event/action-result race matrix.
 - [ ] Run the optional Temporal/OpenAI SDK integration spike and record the decision without blocking the proposal-only path.
 
 ### Phase 3 — Reference journey
@@ -905,7 +911,8 @@ Recommended initial journey:
 
 - [x] Add immutable YAML process-definition contracts, validation, fingerprinting, trigger resolution, and deterministic policy/instruction compilation for the fictional process. Persistence and the authoring/publication lifecycle remain outstanding.
 - [ ] Add the process-definition draft, validation, evaluation, approval, publication, and retirement lifecycle.
-- [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition. Explicit `module:attribute` loading from an installed/editable package, the validated public `ClientPack` contract, a downstream editable-package example, and shared API/worker composition are complete. Persisted installation audit, runtime enable/disable, tenant-specific adapter routing, and lifecycle controls remain.
+- [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition. Explicit `module:attribute` loading from an installed/editable package, the validated public `ClientPack` contract, a downstream editable-package example, and shared API/worker composition are complete. Persisted installation audit, runtime enable/disable, deployment-to-tenant assignment, provider credential resolution, and lifecycle controls remain.
+- [ ] Enforce published-only production process triggers and immutable definition identities. Draft execution belongs in an explicit simulation/test mode; active-instance upgrades require a separate audited migration path.
 - [ ] Add tenant prompt and policy configuration.
 - [ ] Add the tool and integration registry.
 - [ ] Add safe client-editable settings.
@@ -925,6 +932,8 @@ Recommended initial journey:
 - [ ] Expand agent quality, regression, adversarial, and safety evals.
 - [ ] Add failure injection and load testing.
 - [ ] Add shared adapter contract suites and provider sandbox tests.
+- [ ] Add migration-from-previous-release, supported downgrade/upgrade, data-preservation, and full tenant-table RLS/grant audit gates.
+- [ ] Expand Playwright beyond the single smoke to live review revision, stale proposal, dead-letter recovery, intervention, and partial-scope credential journeys.
 - [ ] Add token and cost reporting per tenant and process.
 - [ ] Add backup, disaster recovery, and audit export procedures.
 - [ ] Document deployment and operational runbooks.
@@ -959,8 +968,8 @@ The first vertical slice is complete when:
 24. Revision feedback supersedes the original proposal; a late approval of the old revision cannot execute it.
 25. The operator can compare proposal revisions and approve only the exact final action payload.
 26. The public repository builds, tests, and runs the fictional reference journey without any private client package.
-27. A separately packaged fictional client extension registers through the same manifest and passes the same contracts required of private client packs.
-28. A client extension cannot bypass the action gateway, tenant isolation, audit, approval integrity, budgets, or platform safety restrictions.
+27. A separately authored and packaged fictional client extension owns its definitions and adapters, registers through the public manifest/factory path, and passes the same contracts required of private client packs. The current editable wrapper proves packaging/loading but still delegates to the bundled example.
+28. The supported client-pack registration path cannot replace the workflow, action gateway, tenant checks, approval integrity, budgets, or audit path. Client-pack code is nevertheless a trusted executable artifact; isolation from malicious code is a deployment boundary, not a type-contract guarantee.
 29. Repository and release checks detect committed secrets, unsafe fixtures, generated credentials, and prohibited client/customer content.
 
 ## 16. Open decisions
@@ -1084,6 +1093,14 @@ Status: Recommended working default. The unqualified `tiramisu` PyPI distributio
 
 MIT is an intentional permissive choice: downstream users may use, modify, privately fork, redistribute, and commercially host the public code without publishing their changes, provided they retain the required license notice. The expected differentiation is managed operation, implementation expertise, support, client packs, and proprietary client integrations rather than preventing third-party hosted forks. If that tradeoff is not acceptable, the license must be reconsidered before the first public release rather than changed casually after outside contributions begin.
 
+### D-014: Client-pack deployment topology
+
+Recommended near-term default: one immutable API/worker deployment and Temporal task queue per client pack, or per group of tenants intentionally sharing the exact same pack, adapter routing, model configuration, and release cadence. Keep shared-schema PostgreSQL RLS, but treat the deployment allow-list as an additional authorization boundary. A future control plane may route tenants to deployments without dynamically importing tenant-selected Python in a running worker.
+
+Why: the current process registry, strict output type, and action bindings are process-wide. Supporting different client packs inside one worker would require tenant-aware definition, model, adapter, credential, task-queue, compatibility, and rollout routing across every Activity. That complexity should be justified by operational evidence rather than assumed early.
+
+Status: Recommended by the 2026-08-31 stocktake; confirm before implementing a second independently authored client pack.
+
 ## 17. Explicit non-goals for the first release
 
 - A fully general no-code workflow builder
@@ -1104,16 +1121,20 @@ MIT is an intentional permissive choice: downstream users may use, modify, priva
 - Maintaining a separate fork of the Tiramisu core for each client
 - Performing dynamic extension discovery or imports from inside Temporal workflow execution
 - Allowing private extensions to introduce client-specific database migrations or bypass public safety contracts in the first release
+- Treating trusted in-process Python extensions as sandboxed from the host application
 
 ## 18. Immediate next step
 
-Use the recommended working defaults to write ADR-001 through ADR-010 and define the reference journey and client-extension contracts before producing the Phase 1 scaffold. D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), and D-012 (data/compliance requirements) must be confirmed before production integrations, but they do not block a local stub-first kernel. D-013 is the working repository and packaging model.
+The initial executable milestone—fictional enquiry through booking, payment, calendar, and completion—is working through both an integration-free demonstration and the real PostgreSQL/Temporal path. The next milestone is to make that foundation safe to evolve and credible for a second client pack:
 
-The first executable milestone is intentionally narrow:
+1. Enforce pinned manifest/definition compatibility and published-only production triggers.
+2. Confirm D-014 and document task-queue, tenant assignment, pack upgrade/rollback, and active-instance migration rules.
+3. Add ingress/context bounds and the missing communication safety envelope: opt-out, quiet hours, auto-responder/loop detection, rate, cost, token, and process-lifetime budgets.
+4. Implement quarantine resolution and replay with operator visibility.
+5. Refactor the scenario kit to drive production kernel services and complete the ordered gaps in [`docs/testing.md`](docs/testing.md), beginning with RLS/migration audits and Temporal races.
+6. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
 
-> Fake website enquiry → stable journey/workflow → stub email → simulated reply or timeout → optional approval → stub booking/payment/calendar → completion
-
-Only after that scenario passes pure-kernel, Temporal, replay, failure-injection, and agent-evaluation suites should the project connect one real provider.
+D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), D-012 (data/compliance requirements), and D-014 (client-pack deployment topology) remain explicit gates before production integrations. A GitHub-issue triage/Codex handoff pack is a useful later second-pack validation, after the deployment boundary is decided and version fencing is enforced.
 
 ## 19. Design references
 

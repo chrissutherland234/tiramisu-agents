@@ -35,6 +35,7 @@ API startup installs trigger rules and the definition registry. Worker startup i
 - One configured composition is loaded per API or worker process. A pack may contain multiple non-conflicting definitions, but they currently share one strict decision-output type and one action-binding namespace.
 - The deployment, not a request or tenant-controlled field, chooses the import path. Treat the package as executable production code and pin its immutable build.
 - Custom Temporal Activity registration, dynamic lifecycle controls, persisted installation audit, and per-tenant adapter routing within one worker are not yet supported.
-- A pack cannot add database migrations or bypass the action gateway, tenant checks, approval integrity, or core audit path through this contract.
+- The supported contract cannot register replacement workflows or bypass the stock action gateway, tenant checks, approval integrity, or audit path. The pack itself is trusted executable Python; malicious or careless code can still perform hidden I/O. Use reviewed immutable builds, and use a separate process/service boundary where code-level isolation is required.
+- Process instances persist the extension manifest hash, but worker execution does not yet enforce that pin. Until the compatibility fence is implemented, changing a pack without changing definition identity is unsafe for active long-running processes.
 
 See [`examples/fictional_client_pack`](../examples/fictional_client_pack/README.md) for the buildable editable-package example.

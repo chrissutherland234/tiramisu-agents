@@ -2,7 +2,7 @@
 
 Tiramisu is an open-source foundation for durable, long-running business agents. One logical agent follows a customer journey or case, performs bounded reasoning turns, and sleeps durably in Temporal until an approved event, timer, or human interaction wakes it.
 
-The project is in its foundation phase. See [PLAN.md](PLAN.md), the [local fictional demo guide](docs/local-demo.md), the [runtime configuration guide](docs/configuration.md), the [client-pack composition guide](docs/client-packs.md), the [security operations guide](docs/security.md), the [Temporal recovery guide](docs/temporal-recovery.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
+The project is in its foundation phase. See [PLAN.md](PLAN.md), the [testing strategy](docs/testing.md), the [local fictional demo guide](docs/local-demo.md), the [runtime configuration guide](docs/configuration.md), the [client-pack composition guide](docs/client-packs.md), the [security operations guide](docs/security.md), the [Temporal recovery guide](docs/temporal-recovery.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
 
 ## Current shape
 
@@ -101,7 +101,7 @@ uv pip install -e . -e examples/fictional_client_pack
 export TIRAMISU_CLIENT_PACK_FACTORY=tiramisu_fictional_client_pack:create_client_pack
 ```
 
-The factory is imported and validated before API traffic or Temporal worker polling. It is never discovered or imported from workflow code. The first contract intentionally supports one deployment composition per service process and no custom Temporal Activities; dynamic per-tenant pack selection, lifecycle controls, and custom Activity registration remain future work.
+The factory is imported and validated before API traffic or Temporal worker polling. It is never discovered or imported from workflow code. A pack is trusted executable Python, not a sandbox. The first contract intentionally supports one deployment composition per service process and no custom Temporal Activities; dynamic per-tenant pack selection, lifecycle controls, pinned active-process compatibility enforcement, and custom Activity registration remain future work.
 
 ## License
 
