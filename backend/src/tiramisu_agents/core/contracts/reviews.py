@@ -3,7 +3,9 @@
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from tiramisu_agents.core.limits import DEFAULT_PLATFORM_SAFETY_LIMITS, require_utf8_bytes
 
 
 class ReviewCommandType(StrEnum):
@@ -28,6 +30,17 @@ class ReviewCommand(BaseModel):
     actor_id: UUID
     message: str | None = Field(default=None, max_length=10_000)
     expected_payload_hash: str | None = Field(default=None, min_length=32, max_length=128)
+
+    @field_validator("message")
+    @classmethod
+    def require_bounded_message(cls, value: str | None) -> str | None:
+        if value is not None:
+            require_utf8_bytes(
+                value,
+                label="review message",
+                max_bytes=DEFAULT_PLATFORM_SAFETY_LIMITS.max_review_message_bytes,
+            )
+        return value
 
     @model_validator(mode="after")
     def require_command_specific_fields(self) -> "ReviewCommand":

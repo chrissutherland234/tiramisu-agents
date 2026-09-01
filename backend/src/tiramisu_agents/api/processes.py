@@ -5,7 +5,7 @@ from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -17,6 +17,7 @@ from tiramisu_agents.api.operator_auth import (
 )
 from tiramisu_agents.core.contracts.decisions import WakeCondition
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
+from tiramisu_agents.core.limits import DEFAULT_PLATFORM_SAFETY_LIMITS, require_utf8_bytes
 from tiramisu_agents.db.models.actions import (
     ActionAttempt,
     ActionRequest,
@@ -130,6 +131,17 @@ class ReviewCommandRequest(BaseModel):
     message: str | None = Field(default=None, max_length=10_000)
     expected_payload_hash: str | None = Field(default=None, min_length=32, max_length=128)
 
+    @field_validator("message")
+    @classmethod
+    def require_bounded_message(cls, value: str | None) -> str | None:
+        if value is not None:
+            require_utf8_bytes(
+                value,
+                label="review message",
+                max_bytes=DEFAULT_PLATFORM_SAFETY_LIMITS.max_review_message_bytes,
+            )
+        return value
+
     @model_validator(mode="after")
     def require_command_fields(self) -> "ReviewCommandRequest":
         if self.command_type is ReviewCommandType.APPROVE and not self.expected_payload_hash:
@@ -168,6 +180,16 @@ class ProcessControlRequest(BaseModel):
     command_type: ProcessControlType
     reason: str = Field(min_length=1, max_length=10_000)
     intervention_id: UUID | None = None
+
+    @field_validator("reason")
+    @classmethod
+    def require_bounded_reason(cls, value: str) -> str:
+        require_utf8_bytes(
+            value,
+            label="operator guidance",
+            max_bytes=DEFAULT_PLATFORM_SAFETY_LIMITS.max_operator_guidance_bytes,
+        )
+        return value
 
     @model_validator(mode="after")
     def require_intervention_for_retry(self) -> "ProcessControlRequest":

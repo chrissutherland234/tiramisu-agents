@@ -5,9 +5,14 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from tiramisu_agents.core.contracts.knowledge import FactObservation
+from tiramisu_agents.core.limits import (
+    DEFAULT_PLATFORM_SAFETY_LIMITS,
+    require_event_content,
+    require_json_bytes,
+)
 
 
 class Sensitivity(StrEnum):
@@ -33,7 +38,10 @@ class CanonicalEvent(BaseModel):
     event_id: UUID = Field(default_factory=uuid4)
     tenant_id: UUID
     process_instance_id: UUID | None = None
-    event_type: str = Field(pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+    event_type: str = Field(
+        pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$",
+        max_length=150,
+    )
     source: str = Field(min_length=1, max_length=100)
     source_event_id: str = Field(min_length=1, max_length=500)
     occurred_at: datetime
@@ -50,3 +58,19 @@ class CanonicalEvent(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("event timestamps must be timezone-aware")
         return value
+
+    @model_validator(mode="after")
+    def require_bounded_content(self) -> "CanonicalEvent":
+        limits = DEFAULT_PLATFORM_SAFETY_LIMITS
+        require_event_content(
+            payload=self.payload,
+            external_references=self.external_references,
+            facts=self.facts,
+            limits=limits,
+        )
+        require_json_bytes(
+            self.model_dump(mode="json"),
+            label="canonical event",
+            max_bytes=limits.max_canonical_event_bytes,
+        )
+        return self

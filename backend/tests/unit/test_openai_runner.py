@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from agents import Agent
 from agents.agent_output import AgentOutputSchema
+from tiramisu_agents.agents.context import AgentContextLimitExceeded
 from tiramisu_agents.agents.openai_runner import (
     ActionProposalOutput,
     AgentDecisionOutput,
@@ -300,3 +301,37 @@ def test_agent_output_uses_only_the_trusted_review_turn_provenance() -> None:
     assert decision.based_on_review_command_ids == (review_command_id,)
     assert decision.based_on_action_attempt_ids == ()
     assert decision.based_on_timer_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_prompt_limit_fails_before_provider_io() -> None:
+    provider_called = False
+
+    async def execute(agent: Any, prompt: str, max_turns: int, run_config: Any) -> Any:
+        nonlocal provider_called
+        del agent, prompt, max_turns, run_config
+        provider_called = True
+        raise AssertionError("provider must not be called for an oversized prompt")
+
+    runner = OpenAIAgentsTurnRunner(
+        model="test-model",
+        executor=cast(AgentsSDKExecutor, execute),
+        max_prompt_bytes=1,
+    )
+    turn_input = AgentTurnInput(
+        turn_id=uuid4(),
+        process=ProcessSnapshot(
+            tenant_id=uuid4(),
+            process_instance_id=uuid4(),
+            process_type="test_process",
+            process_definition_version="1",
+            status=ProcessStatus.ACTIVE,
+        ),
+        events=(),
+        timer_ids=("follow-up",),
+        instructions="Wait for the follow-up timer.",
+    )
+
+    with pytest.raises(AgentContextLimitExceeded, match="rendered model input"):
+        await runner.run_turn(turn_input)
+    assert provider_called is False

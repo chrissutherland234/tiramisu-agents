@@ -79,6 +79,15 @@ Each suspend/resume transition creates an immutable reasoned safety event. Repea
 
 A suspension cannot cancel a provider request that has already crossed the final check and begun executing. Provider idempotency, durable action attempts, lookup-only reconciliation, and the incident procedure remain necessary for that race. Resume with the same command and `--status active` only after the cause is understood.
 
+## Input and model-context safety
+
+Untrusted event content, fact values, review messages, operator guidance, model-proposed action
+parameters, persistent memory, fact projections, assembled turn snapshots, and rendered prompts
+have deterministic platform byte/count ceilings. API excess is rejected before persistence.
+Unsafe turn construction stops before model/provider I/O and follows the workflow's durable
+operator-intervention path. See [platform safety limits](safety-limits.md) for the exact envelope,
+measurement rules, failure behavior, and remaining production ingress work.
+
 ## Current boundary
 
-The unsafe UUID headers are accepted only when the application is explicitly in `development` and `TIRAMISU_ALLOW_UNSAFE_DEVELOPMENT_TENANT_HEADER=true`; they grant local wildcard authority and must never be enabled in a deployment. The Vue console currently uses this development path. Production human access still needs short-lived browser sessions backed by an external identity provider rather than placing deployment bearer credentials in frontend storage.
+The unsafe UUID headers are accepted only when the application is explicitly in `development` and `TIRAMISU_ALLOW_UNSAFE_DEVELOPMENT_TENANT_HEADER=true`; they grant local wildcard authority and must never be enabled in a deployment. The Vue console currently uses this development path. Production human access still needs short-lived browser sessions backed by an external identity provider rather than placing deployment bearer credentials in frontend storage. Semantic event limits do not replace a raw HTTP request-body limit at the ASGI server or ingress proxy; add that before exposing production event ingress publicly.

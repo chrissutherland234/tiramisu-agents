@@ -11,6 +11,12 @@ from tiramisu_agents.core.contracts.decisions import (
     HumanWakeCondition,
     TimerWakeCondition,
 )
+from tiramisu_agents.core.limits import (
+    DEFAULT_PLATFORM_SAFETY_LIMITS,
+    require_item_count,
+    require_json_bytes,
+    require_utf8_bytes,
+)
 
 
 class DecisionRejected(ValueError):
@@ -24,12 +30,32 @@ class DecisionPolicy:
     human_wake_action_types: frozenset[str] = frozenset()
     max_actions_per_turn: int = 5
     max_timer_horizon: timedelta = timedelta(days=30)
+    max_action_parameter_fields: int = DEFAULT_PLATFORM_SAFETY_LIMITS.max_action_parameter_fields
+    max_action_parameters_bytes: int = DEFAULT_PLATFORM_SAFETY_LIMITS.max_action_parameters_bytes
+    max_open_commitments: int = DEFAULT_PLATFORM_SAFETY_LIMITS.max_open_commitments
+    max_commitment_bytes: int = DEFAULT_PLATFORM_SAFETY_LIMITS.max_commitment_bytes
+    max_open_commitments_bytes: int = DEFAULT_PLATFORM_SAFETY_LIMITS.max_open_commitments_bytes
+    max_memory_summary_bytes: int = DEFAULT_PLATFORM_SAFETY_LIMITS.max_memory_summary_bytes
 
     def __post_init__(self) -> None:
         if self.max_actions_per_turn < 0:
             raise ValueError("max_actions_per_turn cannot be negative")
         if self.max_timer_horizon <= timedelta(0):
             raise ValueError("max_timer_horizon must be positive")
+        byte_and_count_limits = {
+            "max_action_parameter_fields": self.max_action_parameter_fields,
+            "max_action_parameters_bytes": self.max_action_parameters_bytes,
+            "max_open_commitments": self.max_open_commitments,
+            "max_commitment_bytes": self.max_commitment_bytes,
+            "max_open_commitments_bytes": self.max_open_commitments_bytes,
+            "max_memory_summary_bytes": self.max_memory_summary_bytes,
+        }
+        for name, value in byte_and_count_limits.items():
+            if isinstance(value, bool) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+            platform_maximum = getattr(DEFAULT_PLATFORM_SAFETY_LIMITS, name)
+            if value > platform_maximum:
+                raise ValueError(f"{name} cannot exceed the platform maximum")
         if not self.human_wake_action_types.issubset(self.allowed_action_types):
             raise ValueError("human wake action types must be allowed action types")
 
@@ -71,6 +97,43 @@ def validate_decision(
         raise DecisionRejected("decision must be based on exactly the timers in this turn")
 
     memory = decision.memory_update
+    try:
+        if memory.summary is not None:
+            require_utf8_bytes(
+                memory.summary,
+                label="memory summary",
+                max_bytes=policy.max_memory_summary_bytes,
+            )
+        require_item_count(
+            memory.open_commitments,
+            label="open commitments",
+            max_items=policy.max_open_commitments,
+        )
+        for commitment in memory.open_commitments:
+            require_utf8_bytes(
+                commitment,
+                label="open commitment",
+                max_bytes=policy.max_commitment_bytes,
+            )
+        require_json_bytes(
+            memory.open_commitments,
+            label="open commitments",
+            max_bytes=policy.max_open_commitments_bytes,
+        )
+        for action in decision.actions:
+            require_item_count(
+                action.parameters,
+                label=f"action parameters for {action.logical_action_key}",
+                max_items=policy.max_action_parameter_fields,
+            )
+            require_json_bytes(
+                action.parameters,
+                label=f"action parameters for {action.logical_action_key}",
+                max_bytes=policy.max_action_parameters_bytes,
+            )
+    except ValueError as error:
+        raise DecisionRejected(str(error)) from error
+
     if not set(memory.summary_source_event_ids).issubset(decision.based_on_event_ids):
         raise DecisionRejected("memory summary cites an event outside this turn")
     if not set(memory.summary_source_review_command_ids).issubset(

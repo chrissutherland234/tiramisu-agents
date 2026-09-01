@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.exceptions import ApplicationError
+from tiramisu_agents.agents.context import PostgresAgentContextLoader
 from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.decisions import (
     ActionProposal,
@@ -16,6 +17,7 @@ from tiramisu_agents.core.contracts.decisions import (
     EventWakeCondition,
 )
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
+from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.tenancy import Tenant, TenantSafetyEvent
@@ -83,6 +85,13 @@ async def test_activity_repairs_then_rejects_out_of_policy_decisions_with_one_sn
                 provider="stub.website",
                 resource_type="enquiry",
                 external_id=f"enquiry-{uuid4()}",
+            ),
+        ),
+        facts=(
+            FactObservation(
+                key="enquiry.received",
+                kind=FactKind.AUTHORITATIVE,
+                value=True,
             ),
         ),
     )
@@ -199,6 +208,44 @@ async def test_activity_repairs_then_rejects_out_of_policy_decisions_with_one_sn
             item.correction_attempt if item is not None else None
             for item in scripted_agent.corrections[4:]
         ] == [None, 1, 2]
+
+        blocked_agent = ScriptedAgent([valid_decision])
+        context_limited_activities = AgentTurnActivities(
+            runtime_factory,
+            registry,
+            blocked_agent,
+            compatibility=compatibility,
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
+            context_loader=PostgresAgentContextLoader(max_agent_context_bytes=1),
+        )
+        with pytest.raises(ApplicationError) as context_limited:
+            await context_limited_activities.run_agent_turn(command)
+        assert context_limited.value.non_retryable is True
+        assert context_limited.value.type == "AgentContextLimitExceeded"
+        assert blocked_agent.turn_inputs == []
+
+        async with admin_factory.begin() as session:
+            process = await session.get(ProcessInstance, ingested.process_instance_id)
+            assert process is not None
+            process.authoritative_facts = {f"existing.fact_{index}": index for index in range(500)}
+        projection_blocked_agent = ScriptedAgent([valid_decision])
+        projection_limited_activities = AgentTurnActivities(
+            runtime_factory,
+            registry,
+            projection_blocked_agent,
+            compatibility=compatibility,
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
+        )
+        with pytest.raises(ApplicationError) as projection_limited:
+            await projection_limited_activities.run_agent_turn(command)
+        assert projection_limited.value.non_retryable is True
+        assert projection_limited.value.type == "AgentContextLimitExceeded"
+        assert "process fact projection" in str(projection_limited.value)
+        assert projection_blocked_agent.turn_inputs == []
+        async with admin_factory.begin() as session:
+            process = await session.get(ProcessInstance, ingested.process_instance_id)
+            assert process is not None
+            process.authoritative_facts = {}
 
         async with admin_factory.begin() as session:
             process = await session.get(ProcessInstance, ingested.process_instance_id)

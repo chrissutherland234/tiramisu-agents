@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tiramisu_agents.core.contracts.decisions import HumanWakeCondition
+from tiramisu_agents.core.limits import DEFAULT_PLATFORM_SAFETY_LIMITS, require_utf8_bytes
 from tiramisu_agents.core.reserved_events import OPERATOR_MANUAL_WAKE_EVENT_TYPE
 from tiramisu_agents.db.models.events import EventInbox, OutboxMessage
 from tiramisu_agents.db.models.processes import (
@@ -117,6 +118,14 @@ class ProcessControlService:
             raise ProcessControlConflict(
                 "control command reason must contain 1 to 10000 characters"
             )
+        try:
+            require_utf8_bytes(
+                reason,
+                label="operator guidance",
+                max_bytes=DEFAULT_PLATFORM_SAFETY_LIMITS.max_operator_guidance_bytes,
+            )
+        except ValueError as error:
+            raise ProcessControlConflict(str(error)) from error
         await session.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
             {"key": f"process-control:{command.tenant_id}:{command.command_id}"},

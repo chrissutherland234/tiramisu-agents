@@ -8,13 +8,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tiramisu_agents.core.contracts.decisions import WakeCondition
 from tiramisu_agents.core.contracts.events import CanonicalEvent
-from tiramisu_agents.core.contracts.knowledge import FactObservation
+from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.core.contracts.processes import (
     ActionResultContext,
     AgentTurnInput,
     ProcessSnapshot,
     ProcessStatus,
     ReviewTurnContext,
+)
+from tiramisu_agents.core.limits import (
+    DEFAULT_PLATFORM_SAFETY_LIMITS,
+    PlatformSafetyLimits,
+    SafetyLimitExceeded,
+    require_action_parameters,
+    require_json_bytes,
+    require_memory_content,
+    require_process_fact_projection,
+    require_utf8_bytes,
 )
 from tiramisu_agents.db.models.actions import (
     ActionAttempt,
@@ -41,23 +51,57 @@ class AgentContextError(ValueError):
     """Raised when persisted state cannot form the requested bounded turn."""
 
 
+class AgentContextLimitExceeded(AgentContextError):
+    """Raised when a turn exceeds a hard platform safety ceiling."""
+
+
 class PostgresAgentContextLoader:
     def __init__(
         self,
         *,
-        max_events_per_turn: int = 50,
-        max_reviews_per_turn: int = 20,
-        max_action_results_per_turn: int = 20,
+        limits: PlatformSafetyLimits = DEFAULT_PLATFORM_SAFETY_LIMITS,
+        max_events_per_turn: int | None = None,
+        max_reviews_per_turn: int | None = None,
+        max_action_results_per_turn: int | None = None,
+        max_timers_per_turn: int | None = None,
+        max_agent_context_bytes: int | None = None,
     ) -> None:
-        if max_events_per_turn < 1:
+        if max_events_per_turn is None:
+            max_events_per_turn = limits.max_events_per_turn
+        if max_reviews_per_turn is None:
+            max_reviews_per_turn = limits.max_reviews_per_turn
+        if max_action_results_per_turn is None:
+            max_action_results_per_turn = limits.max_action_results_per_turn
+        if max_timers_per_turn is None:
+            max_timers_per_turn = limits.max_timers_per_turn
+        if max_agent_context_bytes is None:
+            max_agent_context_bytes = limits.max_agent_context_bytes
+        if isinstance(max_events_per_turn, bool) or max_events_per_turn < 1:
             raise ValueError("max_events_per_turn must be positive")
+        if max_events_per_turn > limits.max_events_per_turn:
+            raise ValueError("max_events_per_turn cannot exceed the platform maximum")
         self._max_events_per_turn = max_events_per_turn
-        if max_reviews_per_turn < 1:
+        if isinstance(max_reviews_per_turn, bool) or max_reviews_per_turn < 1:
             raise ValueError("max_reviews_per_turn must be positive")
+        if max_reviews_per_turn > limits.max_reviews_per_turn:
+            raise ValueError("max_reviews_per_turn cannot exceed the platform maximum")
         self._max_reviews_per_turn = max_reviews_per_turn
-        if max_action_results_per_turn < 1:
+        if isinstance(max_action_results_per_turn, bool) or max_action_results_per_turn < 1:
             raise ValueError("max_action_results_per_turn must be positive")
+        if max_action_results_per_turn > limits.max_action_results_per_turn:
+            raise ValueError("max_action_results_per_turn cannot exceed the platform maximum")
         self._max_action_results_per_turn = max_action_results_per_turn
+        if isinstance(max_timers_per_turn, bool) or max_timers_per_turn < 1:
+            raise ValueError("max_timers_per_turn must be positive")
+        if max_timers_per_turn > limits.max_timers_per_turn:
+            raise ValueError("max_timers_per_turn cannot exceed the platform maximum")
+        self._max_timers_per_turn = max_timers_per_turn
+        if isinstance(max_agent_context_bytes, bool) or max_agent_context_bytes < 1:
+            raise ValueError("max_agent_context_bytes must be positive")
+        if max_agent_context_bytes > limits.max_agent_context_bytes:
+            raise ValueError("max_agent_context_bytes cannot exceed the platform maximum")
+        self._max_agent_context_bytes = max_agent_context_bytes
+        self._limits = limits
 
     async def load(
         self,
@@ -77,17 +121,19 @@ class PostgresAgentContextLoader:
         if not event_ids and not review_command_ids and not action_attempt_ids and not timer_ids:
             raise AgentContextError("an agent turn requires at least one wake source")
         if len(event_ids) > self._max_events_per_turn:
-            raise AgentContextError("agent turn exceeds the event context limit")
+            raise AgentContextLimitExceeded("agent turn exceeds the event context limit")
         if len(event_ids) != len(set(event_ids)):
             raise AgentContextError("agent turn event IDs must be unique")
         if len(review_command_ids) > self._max_reviews_per_turn:
-            raise AgentContextError("agent turn exceeds the review context limit")
+            raise AgentContextLimitExceeded("agent turn exceeds the review context limit")
         if len(review_command_ids) != len(set(review_command_ids)):
             raise AgentContextError("agent turn review command IDs must be unique")
         if len(action_attempt_ids) > self._max_action_results_per_turn:
-            raise AgentContextError("agent turn exceeds the action result context limit")
+            raise AgentContextLimitExceeded("agent turn exceeds the action result context limit")
         if len(action_attempt_ids) != len(set(action_attempt_ids)):
             raise AgentContextError("agent turn action attempt IDs must be unique")
+        if len(timer_ids) > self._max_timers_per_turn:
+            raise AgentContextLimitExceeded("agent turn exceeds the timer context limit")
         if any(not value.strip() for value in timer_ids) or len(timer_ids) != len(set(timer_ids)):
             raise AgentContextError("agent turn timer IDs must be nonblank and unique")
 
@@ -252,7 +298,38 @@ class PostgresAgentContextLoader:
             for attempt_id in action_attempt_ids
             for row in (actions_by_id[attempt_id],)
         )
-        return AgentTurnInput(
+        try:
+            require_memory_content(
+                summary=process.memory_summary,
+                open_commitments=process.open_commitments,
+                limits=self._limits,
+            )
+            for review in reviews:
+                if review.message is not None:
+                    require_utf8_bytes(
+                        review.message,
+                        label="review message",
+                        max_bytes=self._limits.max_review_message_bytes,
+                    )
+                require_action_parameters(
+                    review.proposal_parameters,
+                    label="review proposal parameters",
+                    limits=self._limits,
+                )
+            for result in action_results:
+                require_action_parameters(
+                    result.parameters,
+                    label="action result parameters",
+                    limits=self._limits,
+                )
+        except ValueError as error:
+            raise AgentContextLimitExceeded(str(error)) from error
+        self._require_safe_fact_projection(
+            process=process,
+            events=events,
+            action_results=action_results,
+        )
+        turn_input = AgentTurnInput(
             turn_id=turn_id,
             process=ProcessSnapshot(
                 tenant_id=tenant_id,
@@ -287,3 +364,48 @@ class PostgresAgentContextLoader:
             timer_ids=timer_ids,
             instructions=definition.compile_instructions(),
         )
+        try:
+            require_json_bytes(
+                turn_input.model_dump(mode="json"),
+                label="agent turn context",
+                max_bytes=self._max_agent_context_bytes,
+            )
+        except SafetyLimitExceeded as error:
+            raise AgentContextLimitExceeded(str(error)) from error
+        except ValueError as error:
+            raise AgentContextError(str(error)) from error
+        return turn_input
+
+    def _require_safe_fact_projection(
+        self,
+        *,
+        process: ProcessInstance,
+        events: tuple[CanonicalEvent, ...],
+        action_results: tuple[ActionResultContext, ...],
+    ) -> None:
+        authoritative = dict(process.authoritative_facts)
+        claims = dict(process.customer_claims)
+        provenance = dict(process.fact_provenance)
+        for source_type, source_id, observations in (
+            *(("event", event.event_id, event.facts) for event in events),
+            *(("action_attempt", result.attempt_id, result.facts) for result in action_results),
+        ):
+            for observation in observations:
+                target = authoritative if observation.kind is FactKind.AUTHORITATIVE else claims
+                target[observation.key] = observation.model_dump(mode="json")["value"]
+                provenance[f"{observation.kind.value}:{observation.key}"] = {
+                    "kind": observation.kind.value,
+                    "source_type": source_type,
+                    "source_id": str(source_id),
+                }
+        try:
+            require_process_fact_projection(
+                authoritative_facts=authoritative,
+                customer_claims=claims,
+                fact_provenance=provenance,
+                limits=self._limits,
+            )
+        except SafetyLimitExceeded as error:
+            raise AgentContextLimitExceeded(str(error)) from error
+        except ValueError as error:
+            raise AgentContextError(str(error)) from error

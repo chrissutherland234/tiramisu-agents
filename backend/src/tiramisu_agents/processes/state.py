@@ -17,6 +17,10 @@ from tiramisu_agents.core.contracts.decisions import (
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.core.contracts.processes import ProcessStatus
+from tiramisu_agents.core.limits import (
+    require_memory_content,
+    require_process_fact_projection,
+)
 from tiramisu_agents.db.models.actions import ActionAttempt, ActionRequest
 from tiramisu_agents.db.models.events import EventInbox
 from tiramisu_agents.db.models.processes import ProcessInstance, ProcessStateRevision
@@ -133,6 +137,14 @@ class ProcessStateService:
                 claims=claims,
                 provenance=provenance,
             )
+        try:
+            require_process_fact_projection(
+                authoritative_facts=authoritative,
+                customer_claims=claims,
+                fact_provenance=provenance,
+            )
+        except ValueError as error:
+            raise ProcessStateConflict(str(error)) from error
 
         open_actions = await self._load_open_actions(
             session,
@@ -144,6 +156,13 @@ class ProcessStateService:
             terminal_states=terminal_states,
         )
         memory = decision.memory_update
+        try:
+            require_memory_content(
+                summary=memory.summary,
+                open_commitments=memory.open_commitments,
+            )
+        except ValueError as error:
+            raise ProcessStateConflict(str(error)) from error
         if memory.summary is not None:
             process.memory_summary = memory.summary
             process.memory_summary_source_event_ids = [

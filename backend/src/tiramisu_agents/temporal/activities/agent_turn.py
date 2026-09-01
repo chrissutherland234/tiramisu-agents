@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from tiramisu_agents.agents.context import PostgresAgentContextLoader
+from tiramisu_agents.agents.context import AgentContextError, PostgresAgentContextLoader
 from tiramisu_agents.agents.runner import AgentTurnRunner, ProposalCorrection
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
@@ -170,6 +170,12 @@ class AgentTurnActivities:
             raise ApplicationError(
                 str(error),
                 type="DeploymentCompatibilityError",
+                non_retryable=True,
+            ) from error
+        except AgentContextError as error:
+            raise ApplicationError(
+                str(error),
+                type=type(error).__name__,
                 non_retryable=True,
             ) from error
         except (TenantNotAuthorized, TenantUnavailable, TenantSuspended) as error:

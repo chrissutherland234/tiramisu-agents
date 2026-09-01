@@ -1,6 +1,6 @@
 # Testing strategy and gap plan
 
-Last reviewed: 2026-09-01
+Last reviewed: 2026-09-02
 
 Tiramisu's tests must prove durable business invariants across boundaries, not merely achieve line coverage. The highest-risk failures happen between PostgreSQL, Temporal, model execution, operator commands, and external providers, where no shared transaction exists.
 
@@ -8,12 +8,12 @@ Tiramisu's tests must prove durable business invariants across boundaries, not m
 
 The repository currently has:
 
-- 122 backend tests: 83 unit/contract cases, 36 PostgreSQL or Temporal integration cases, and 3 committed-history replay cases.
+- 132 backend tests: 93 unit/contract cases, 36 PostgreSQL or Temporal integration cases, and 3 committed-history replay cases.
 - 5 Vue component cases across 2 files covering the operator journey/review/intervention/dead-letter surface, permission degradation, polling, and Wake authority wording.
 - 1 Playwright live-stack journey covering real event ingestion, process inspection, takeover, resume, and the delivery-operations shell.
 - CI gates for locked dependency installation, Alembic drift, Ruff, Pyright, backend tests with PostgreSQL, Python package builds, Vue unit/type/build checks, the Playwright smoke, Compose startup, PostgreSQL runtime-role access, and Temporal health.
 
-Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, pinned deployment-release/queue/pack/definition compatibility before model and provider I/O, audited tenant assignment, old/new release dispatch fencing, published-only triggers, bounded semantic proposal repair with unchanged-snapshot and exhaustion checks, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, reserved manual reevaluation, and a complete scripted enquiry-to-booking journey that proves Wake guidance cannot manufacture completed payment.
+Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, pinned deployment-release/queue/pack/definition compatibility before model and provider I/O, audited tenant assignment, old/new release dispatch fencing, published-only triggers, byte/count boundaries for event/fact/review/proposal data, pre-model context and prospective-fact limits, pre-provider prompt limits, bounded semantic proposal repair with unchanged-snapshot and exhaustion checks, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, reserved manual reevaluation, and a complete scripted enquiry-to-booking journey that proves Wake guidance cannot manufacture completed payment.
 
 The count is not itself a release signal. Agent evaluation, provider contracts, load behavior, security automation, migration upgrade paths, and several concurrency combinations remain absent or shallow.
 
@@ -26,7 +26,7 @@ Run on every change without PostgreSQL, Temporal, OpenAI, or network access. Cov
 Next additions:
 
 - Add the full immutable definition publication lifecycle and an explicit isolated draft simulation mode.
-- Bound event payload bytes, fact counts and values, action parameters, review context, commitments, and rendered model context.
+- Add table-driven coverage for every platform limit and future tenant-configured lower ceiling; current tests cover representative exact-byte, one-over, no-persistence, prospective-projection, and no-provider-I/O boundaries.
 - Add table-driven lifecycle tests for every process status × action/review/control operation.
 - Add generated/state-machine tests for decision provenance, logical action identity, and wake-plan invariants once the core transitions are factored into a genuinely infrastructure-free kernel.
 

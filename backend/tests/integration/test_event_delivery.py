@@ -16,6 +16,7 @@ from temporalio.worker import Worker
 from tiramisu_agents.api.main import create_app
 from tiramisu_agents.api.settings import Settings
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
+from tiramisu_agents.core.limits import DEFAULT_PLATFORM_SAFETY_LIMITS
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.tenancy import Tenant, TenantSafetyEvent
@@ -239,6 +240,7 @@ async def test_development_api_can_start_a_configured_process() -> None:
         ),
         session_factory=runtime_factory,
     )
+    oversized_source_event_id = f"oversized-{uuid4()}"
 
     try:
         async with admin_factory.begin() as session:
@@ -309,6 +311,27 @@ async def test_development_api_can_start_a_configured_process() -> None:
                     ],
                 },
             )
+            oversized_response = await client.post(
+                "/v1/events",
+                headers={"X-Tiramisu-Tenant-ID": str(tenant_id)},
+                json={
+                    "event_type": "enquiry.created",
+                    "source": "stub.website",
+                    "source_event_id": oversized_source_event_id,
+                    "occurred_at": datetime.now(UTC).isoformat(),
+                    "external_references": [
+                        {
+                            "provider": "stub.website",
+                            "resource_type": "enquiry",
+                            "external_id": f"enquiry-{uuid4()}",
+                        }
+                    ],
+                    "payload": {
+                        "message": "x"
+                        * (DEFAULT_PLATFORM_SAFETY_LIMITS.max_event_payload_bytes + 1)
+                    },
+                },
+            )
 
         assert response.status_code == 202
         body = response.json()
@@ -325,6 +348,15 @@ async def test_development_api_can_start_a_configured_process() -> None:
         assert allow_list_response.json()["detail"] == (
             "tenant is not in this deployment's allow-list"
         )
+        assert oversized_response.status_code == 422
+        async with admin_factory.begin() as session:
+            oversized_inbox_count = await session.scalar(
+                select(func.count(EventInbox.id)).where(
+                    EventInbox.tenant_id == tenant_id,
+                    EventInbox.source_event_id == oversized_source_event_id,
+                )
+            )
+        assert oversized_inbox_count == 0
 
         async with admin_factory.begin() as session:
             tenant = await session.get(Tenant, tenant_id)

@@ -2,7 +2,7 @@
 
 Tiramisu is an open-source foundation for durable, long-running business agents. One logical agent follows a customer journey or case, performs bounded reasoning turns, and sleeps durably in Temporal until an approved event, timer, or human interaction wakes it.
 
-The project is in its foundation phase. See [PLAN.md](PLAN.md), the [testing strategy](docs/testing.md), the [local fictional demo guide](docs/local-demo.md), the [runtime configuration guide](docs/configuration.md), the [client-pack composition guide](docs/client-packs.md), the [security operations guide](docs/security.md), the [Temporal recovery guide](docs/temporal-recovery.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
+The project is in its foundation phase. See [PLAN.md](PLAN.md), the [testing strategy](docs/testing.md), the [platform safety limits](docs/safety-limits.md), the [local fictional demo guide](docs/local-demo.md), the [runtime configuration guide](docs/configuration.md), the [client-pack composition guide](docs/client-packs.md), the [security operations guide](docs/security.md), the [Temporal recovery guide](docs/temporal-recovery.md), and the [architecture decisions](docs/decisions/README.md) before treating any API as stable.
 
 ## Current shape
 
@@ -36,6 +36,8 @@ The pure kernel and scripted-agent tests remain integration-free: they require n
 ## Agent-turn foundation
 
 Versioned process definitions under `process_definitions/` are validated and compiled into deterministic decision policy before use. A PostgreSQL context loader builds a bounded snapshot from authoritative process, event, review, timer, and action-result records. The proposal-only Temporal Activity can run either a deterministic `ScriptedAgent` or the OpenAI Agents SDK adapter.
+
+Hard platform byte and count ceilings now reject oversized canonical events before persistence, bound every source included in a turn, preflight the prospective fact projection and complete context before model I/O, and check the final rendered prompt before provider I/O. Action parameters and persistent memory are checked again at their persistence boundaries. Unsafe turn construction fails closed into durable operator intervention; model-proposed excess receives the same bounded semantic-repair opportunity as other deterministic policy errors. Exact limits and remaining raw-transport/token-budget work are documented in the [platform safety limits](docs/safety-limits.md).
 
 The OpenAI adapter has no tools or handoffs, permits exactly one SDK invocation per proposal, and requests a strict structured output. Provider-specific action parameters cross that SDK boundary as encoded JSON and are converted back into the kernel's typed `AgentDecision`; deterministic policy then checks event lineage, allowed actions, wake events, action limits, and timer bounds. If policy rejects a typed proposal, the Activity can request at most two complete replacements using the exact validator error and rejected proposal while retaining the same loaded trusted snapshot. Only a validated proposal leaves the Activity; exhaustion follows the existing operator-intervention path.
 

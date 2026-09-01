@@ -17,6 +17,7 @@ from tiramisu_agents.core.contracts.actions import (
     PermissionOutcome,
 )
 from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision
+from tiramisu_agents.core.limits import require_action_parameters
 from tiramisu_agents.db.models.actions import (
     ActionPolicyRecord,
     ActionRequest,
@@ -236,6 +237,10 @@ class ActionGateway:
         action: ActionProposal,
         policy: ConfiguredActionPolicy,
     ) -> PersistedAction:
+        try:
+            require_action_parameters(action.parameters)
+        except ValueError as error:
+            raise ActionPersistenceConflict(str(error)) from error
         policy_decision = policy.evaluate(action)
         status = {
             PermissionOutcome.ALLOW: ActionRequestStatus.ALLOWED,
