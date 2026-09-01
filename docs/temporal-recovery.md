@@ -26,9 +26,10 @@ The Temporal test environment verifies that:
 
 - an open wait and buffered event survive a complete worker stop and a fresh worker start;
 - a retried Signal remains deduplicated after a Continue-As-New boundary;
+- a reserved manual wake bypasses the current business-event filter, supersedes the old event/timer plan, precedes an already-buffered matching event, and remains deduplicated across Continue-As-New;
 - buffered events, a pending approval, action execution state, and an absolute timer survive multiple runs;
 - transient action-persistence failures retry that Activity without rerunning the model Activity;
-- committed historical signal/wait and Activity-backed Continue-As-New executions replay with the current workflow code.
+- committed historical signal/wait, Activity-backed Continue-As-New, and manual-wake executions replay with the current workflow code.
 
 Run these checks locally with:
 

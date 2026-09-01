@@ -29,6 +29,7 @@ from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalRefere
 from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.core.contracts.processes import AgentTurnInput
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
+from tiramisu_agents.core.reserved_events import OPERATOR_MANUAL_WAKE_EVENT_TYPE
 from tiramisu_agents.db.models.actions import (
     ActionAttempt,
     ActionPolicyRecord,
@@ -52,6 +53,11 @@ from tiramisu_agents.db.session import (
     set_tenant_context,
 )
 from tiramisu_agents.events.ingestion import EventIngestionService
+from tiramisu_agents.processes.control import (
+    ProcessControlInput,
+    ProcessControlService,
+    ProcessControlType,
+)
 from tiramisu_agents.reviews.service import ReviewService
 from tiramisu_agents.temporal.activities.action_execution import ActionExecutionActivities
 from tiramisu_agents.temporal.activities.action_gateway import ActionGatewayActivities
@@ -114,6 +120,20 @@ def _decision_for(turn: AgentTurnInput) -> AgentDecision:
                     },
                     rationale="Create the calendar event after authoritative payment.",
                 ),
+            ),
+        )
+    if turn.events and turn.events[0].event_type == OPERATOR_MANUAL_WAKE_EVENT_TYPE:
+        event = turn.events[0]
+        assert event.payload["reason"] == "Customer says they paid cash; reconsider the case"
+        assert event.payload["command_type"] == "wake"
+        assert event.facts == ()
+        assert turn.process.authoritative_facts["payment.status"] == "pending"
+        return _new_decision(
+            turn,
+            status=DecisionStatus.WAITING,
+            wake_conditions=(
+                EventWakeCondition(event_type="payment.completed"),
+                EventWakeCondition(event_type="payment.failed"),
             ),
         )
 
@@ -329,7 +349,7 @@ async def test_full_scripted_journey_survives_worker_restarts() -> None:
     admin_factory = create_session_factory(admin_engine)
     tenant_id = uuid4()
     actor_id = uuid4()
-    runner = ScriptedAgent([_decision_for] * 8)
+    runner = ScriptedAgent([_decision_for] * 9)
     fixed_now = datetime(2026, 9, 1, 9, tzinfo=UTC)
     deployment = load_fictional_deployment(state=StubBusinessState(now=fixed_now))
     release = make_test_deployment_release(
@@ -537,6 +557,63 @@ async def test_full_scripted_journey_survives_worker_restarts() -> None:
                     minimum_version=6,
                 )
 
+            manual_reason = "Customer says they paid cash; reconsider the case"
+            manual_wake = ProcessControlInput(
+                command_id=uuid4(),
+                tenant_id=tenant_id,
+                process_instance_id=process_id,
+                actor_id=actor_id,
+                command_type=ProcessControlType.WAKE,
+                reason=manual_reason,
+            )
+            async with runtime_factory.begin() as session:
+                await ProcessControlService().apply_control(session, manual_wake)
+
+            async with restarted_worker() as dispatcher:
+                await _dispatch_all(dispatcher, tenant_id)
+                manual_state = await _wait_for_projection(
+                    runtime_factory,
+                    handle,
+                    tenant_id=tenant_id,
+                    process_instance_id=process_id,
+                    status="waiting",
+                    events=("payment.completed", "payment.failed"),
+                    minimum_version=7,
+                )
+                assert manual_state.wake_records[-1].reason == "operator_manual_wake"
+
+            async with runtime_factory.begin() as session:
+                await set_tenant_context(session, tenant_id)
+                process = await session.get(ProcessInstance, process_id)
+                manual_event = await session.scalar(
+                    select(EventInbox).where(
+                        EventInbox.process_instance_id == process_id,
+                        EventInbox.event_type == OPERATOR_MANUAL_WAKE_EVENT_TYPE,
+                    )
+                )
+                action_types_before_payment = set(
+                    await session.scalars(
+                        select(ActionRequest.action_type).where(
+                            ActionRequest.process_instance_id == process_id
+                        )
+                    )
+                )
+            assert process is not None
+            assert manual_event is not None
+            assert manual_event.event_data["payload"] == {
+                "reason": manual_reason,
+                "actor_id": str(actor_id),
+                "command_type": "wake",
+            }
+            assert process.authoritative_facts["payment.status"] == "pending"
+            assert "calendar.status" not in process.authoritative_facts
+            assert action_types_before_payment == {
+                "find_available_slots",
+                "send_message",
+                "propose_booking",
+                "request_payment",
+            }
+
             async with runtime_factory.begin() as session:
                 await set_tenant_context(session, tenant_id)
                 process = await session.get(ProcessInstance, process_id)
@@ -588,7 +665,13 @@ async def test_full_scripted_journey_survives_worker_restarts() -> None:
             assert process.authoritative_facts["calendar.status"] == "created"
             assert len(attempts) == 5
             assert {attempt.status for attempt in attempts} == {"succeeded"}
-            assert len(runner.turn_inputs) == 8
+            assert len(runner.turn_inputs) == 9
+            manual_turn = next(
+                turn
+                for turn in runner.turn_inputs
+                if turn.events and turn.events[0].event_type == OPERATOR_MANUAL_WAKE_EVENT_TYPE
+            )
+            assert manual_turn.events[0].payload["actor_id"] == str(actor_id)
     finally:
         await _delete_tenant_data(admin_factory, tenant_id)
         await runtime_engine.dispose()

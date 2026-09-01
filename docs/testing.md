@@ -8,12 +8,12 @@ Tiramisu's tests must prove durable business invariants across boundaries, not m
 
 The repository currently has:
 
-- 114 backend tests: 79 unit/contract cases, 33 PostgreSQL or Temporal integration cases, and 2 committed-history replay cases.
-- 2 Vue component tests covering the operator journey/review/intervention/dead-letter surface and permission degradation.
+- 121 backend tests: 82 unit/contract cases, 36 PostgreSQL or Temporal integration cases, and 3 committed-history replay cases.
+- 5 Vue component cases across 2 files covering the operator journey/review/intervention/dead-letter surface, permission degradation, polling, and Wake authority wording.
 - 1 Playwright live-stack journey covering real event ingestion, process inspection, takeover, resume, and the delivery-operations shell.
 - CI gates for locked dependency installation, Alembic drift, Ruff, Pyright, backend tests with PostgreSQL, Python package builds, Vue unit/type/build checks, the Playwright smoke, Compose startup, PostgreSQL runtime-role access, and Temporal health.
 
-Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, pinned deployment-release/queue/pack/definition compatibility before model and provider I/O, audited tenant assignment, old/new release dispatch fencing, published-only triggers, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, and a complete scripted enquiry-to-booking journey.
+Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, pinned deployment-release/queue/pack/definition compatibility before model and provider I/O, audited tenant assignment, old/new release dispatch fencing, published-only triggers, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, reserved manual reevaluation, and a complete scripted enquiry-to-booking journey that proves Wake guidance cannot manufacture completed payment.
 
 The count is not itself a release signal. Agent evaluation, provider contracts, load behavior, security automation, migration upgrade paths, and several concurrency combinations remain absent or shallow.
 
@@ -57,10 +57,11 @@ Priority race matrix:
 | Takeover/cancel and agent turn overlap | No later model result or provider side effect escapes the lifecycle fence |
 | Multiple review comments/revision/approval arrive around a turn | Deterministic order; stale payload never executes |
 | Action result and customer event arrive together | Single-flight turns preserve both source lineages |
+| Manual wake, matching business event, and old timer are ready | Review/resolution/control priority is retained; manual reevaluation runs next, clears the old plan, and the business event remains available for the replacement plan |
 | Continue-As-New with each pending command type | Every buffer, dedupe key, absolute timer, approval, intervention, and counter survives |
 | Old/new worker releases overlap | Each dispatcher claims only its process-pinned release queue; incompatible work fails closed before model or provider I/O |
 
-Expand replay fixtures beyond the current two happy histories to include approval/revision, action reconciliation, intervention/retry, takeover, tenant suspension, and terminal closure. Release identity, queue derivation, and concurrent old/new dispatch are covered outside workflow history; add deployment rollback and drain tests to a future live deployment harness.
+The committed histories cover the original signal/wait path, Activity-backed Continue-As-New, and reserved manual-wake ordering. Expand them further to include approval/revision, action reconciliation, intervention/retry, takeover, tenant suspension, and terminal closure. Release identity, queue derivation, and concurrent old/new dispatch are covered outside workflow history; add deployment rollback and drain tests to a future live deployment harness.
 
 ### 4. End-to-end operator tests
 
@@ -85,6 +86,7 @@ Initial evaluation corpus:
 - Happy enquiry-to-booking variants and missing-information turns.
 - Human comments and revision suggestions that must create a new exact proposal.
 - Conflicting customer claims versus authoritative provider facts.
+- Operator Wake guidance that asserts an unsupported payment or other fact; the agent must retain the authoritative state and establish an appropriate new wake plan.
 - Provider denial, definitive failure, ambiguous outcome, and delayed recovery.
 - Prompt injection, social engineering, malicious provider text, and attempts to expand authority.
 - Opt-out, quiet hours, repeated follow-up, out-of-office, auto-responder, and duplicate-message loops.

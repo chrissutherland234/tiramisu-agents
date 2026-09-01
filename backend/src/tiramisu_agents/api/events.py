@@ -18,6 +18,7 @@ from tiramisu_agents.core.contracts.knowledge import FactObservation
 from tiramisu_agents.events.ingestion import (
     EventIngestionService,
     ProcessBootstrap,
+    ReservedKernelEventType,
     TenantNotFound,
     TriggerReferenceRequired,
 )
@@ -118,7 +119,7 @@ async def ingest_event(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="tenant is not assigned to this deployment",
         ) from error
-    except TriggerReferenceRequired as error:
+    except (ReservedKernelEventType, TriggerReferenceRequired) as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(error),

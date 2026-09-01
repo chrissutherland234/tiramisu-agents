@@ -13,6 +13,7 @@ from tiramisu_agents.core.contracts.actions import PermissionOutcome
 from tiramisu_agents.core.contracts.processes import ProcessStatus
 from tiramisu_agents.core.contracts.reviews import ReviewCommandType
 from tiramisu_agents.core.policy import DecisionPolicy
+from tiramisu_agents.core.reserved_events import RESERVED_KERNEL_EVENT_TYPES
 
 IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 EVENT_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
@@ -98,6 +99,11 @@ class ProcessDefinition(BaseModel):
             raise ValueError("event types must use dotted lowercase identifiers")
         if len(values) != len(set(values)):
             raise ValueError("event types must be unique")
+        reserved = set(values) & RESERVED_KERNEL_EVENT_TYPES
+        if reserved:
+            raise ValueError(
+                f"event types are reserved for kernel use: {', '.join(sorted(reserved))}"
+            )
         return values
 
     @field_validator("allowed_actions")

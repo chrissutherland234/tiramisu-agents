@@ -10,6 +10,8 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
 
+from tiramisu_agents.core.reserved_events import OPERATOR_MANUAL_WAKE_EVENT_TYPE
+
 _SUSPENSION_RECHECK_DELAY = timedelta(minutes=1)
 
 
@@ -206,8 +208,9 @@ class ProcessMailboxWorkflow:
             if self._should_continue_as_new():
                 workflow.continue_as_new(self._continuation_input())
 
-            if not self._started and self._wake_plan is None and self._buffered_events:
-                event = self._buffered_events.pop(0)
+            initial_event_index = self._initial_event_index()
+            if not self._started and self._wake_plan is None and initial_event_index is not None:
+                event = self._buffered_events.pop(initial_event_index)
                 self._started = True
                 self._wake_records.append(
                     WakeRecord(
@@ -274,6 +277,23 @@ class ProcessMailboxWorkflow:
                     )
                 continue
 
+            manual_wake_index = self._manual_wake_event_index()
+            if manual_wake_index is not None:
+                event = self._buffered_events.pop(manual_wake_index)
+                self._started = True
+                self._wake_records.append(
+                    WakeRecord(
+                        reason="operator_manual_wake",
+                        event_id=event.event_id,
+                        event_type=event.event_type,
+                        timer_id=None,
+                        woke_at=workflow.now(),
+                    )
+                )
+                self._clear_wake_plan()
+                await self._run_turn(event_ids=(event.event_id,))
+                continue
+
             matching_index = self._matching_event_index()
             if matching_index is not None:
                 event = self._buffered_events.pop(matching_index)
@@ -321,8 +341,9 @@ class ProcessMailboxWorkflow:
                         or (
                             not self._started
                             and self._wake_plan is None
-                            and bool(self._buffered_events)
+                            and self._initial_event_index() is not None
                         )
+                        or self._manual_wake_event_index() is not None
                         or self._matching_event_index() is not None
                     ),
                     timeout=timeout,
@@ -639,6 +660,26 @@ class ProcessMailboxWorkflow:
         self._wake_plan = None
         self._timer_due_at = None
         self._plan_revision += 1
+
+    def _initial_event_index(self) -> int | None:
+        return next(
+            (
+                index
+                for index, event in enumerate(self._buffered_events)
+                if event.event_type != OPERATOR_MANUAL_WAKE_EVENT_TYPE
+            ),
+            None,
+        )
+
+    def _manual_wake_event_index(self) -> int | None:
+        return next(
+            (
+                index
+                for index, event in enumerate(self._buffered_events)
+                if event.event_type == OPERATOR_MANUAL_WAKE_EVENT_TYPE
+            ),
+            None,
+        )
 
     def _matching_event_index(self) -> int | None:
         if self._wake_plan is None:

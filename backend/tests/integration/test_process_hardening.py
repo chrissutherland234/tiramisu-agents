@@ -22,6 +22,7 @@ from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision, DecisionStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
 from tiramisu_agents.core.ports.actions import ProviderActionRequest, ProviderActionResult
+from tiramisu_agents.core.reserved_events import OPERATOR_MANUAL_WAKE_EVENT_TYPE
 from tiramisu_agents.db.models.actions import (
     ActionAttempt,
     ActionPolicyRecord,
@@ -261,6 +262,93 @@ async def test_interventions_controls_and_takeover_are_durable_and_idempotent() 
             assert original.status == "resolved"
             assert original.resolved_by_command_id == retry.command_id
             assert outbox_types.count("temporal.process_control") == 2
+
+
+@pytest.mark.asyncio
+async def test_wake_and_resume_persist_one_attributed_kernel_event_per_command() -> None:
+    async with _process_context() as context:
+        service = ProcessControlService()
+        wake = ProcessControlInput(
+            command_id=uuid4(),
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            actor_id=uuid4(),
+            command_type=ProcessControlType.WAKE,
+            reason="Reconsider the current payment evidence",
+        )
+        async with context.runtime_factory.begin() as session:
+            first = await service.apply_control(session, wake)
+        async with context.runtime_factory.begin() as session:
+            repeated = await service.apply_control(session, wake)
+        assert repeated.id == first.id == wake.command_id
+
+        takeover = ProcessControlInput(
+            command_id=uuid4(),
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            actor_id=uuid4(),
+            command_type=ProcessControlType.TAKEOVER,
+            reason="Pause while the operator checks the record",
+        )
+        resume = ProcessControlInput(
+            command_id=uuid4(),
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            actor_id=uuid4(),
+            command_type=ProcessControlType.RESUME,
+            reason="Checks complete; reevaluate before continuing",
+        )
+        async with context.runtime_factory.begin() as session:
+            await service.apply_control(session, takeover)
+        async with context.runtime_factory.begin() as session:
+            await service.apply_control(session, resume)
+        async with context.runtime_factory.begin() as session:
+            await service.apply_control(session, resume)
+
+        async with context.runtime_factory.begin() as session:
+            await set_tenant_context(session, context.tenant_id)
+            process = await session.get(ProcessInstance, context.process_id)
+            manual_events = (
+                await session.scalars(
+                    select(EventInbox)
+                    .where(
+                        EventInbox.process_instance_id == context.process_id,
+                        EventInbox.event_type == OPERATOR_MANUAL_WAKE_EVENT_TYPE,
+                    )
+                    .order_by(EventInbox.received_at)
+                )
+            ).all()
+            manual_outbox = (
+                await session.scalars(
+                    select(OutboxMessage)
+                    .where(
+                        OutboxMessage.process_instance_id == context.process_id,
+                        OutboxMessage.causation_event_id.in_(
+                            tuple(event.id for event in manual_events)
+                        ),
+                    )
+                    .order_by(OutboxMessage.created_at)
+                )
+            ).all()
+
+        assert process is not None
+        assert process.status == "active"
+        assert process.current_wake_conditions == []
+        assert len(manual_events) == 2
+        assert len(manual_outbox) == 2
+        assert [event.event_data["payload"] for event in manual_events] == [
+            {
+                "reason": wake.reason,
+                "actor_id": str(wake.actor_id),
+                "command_type": "wake",
+            },
+            {
+                "reason": resume.reason,
+                "actor_id": str(resume.actor_id),
+                "command_type": "resume",
+            },
+        ]
+        assert all(event.event_data["facts"] == [] for event in manual_events)
 
 
 @pytest.mark.asyncio

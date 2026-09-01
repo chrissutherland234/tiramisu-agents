@@ -468,6 +468,29 @@ Approval review supports these explicit commands:
 - **Correct fact:** submit a typed correction through the appropriate domain command. Free-text feedback alone never silently changes an authoritative business fact.
 - **Expire or cancel:** close the review without execution.
 
+### Operator reevaluation versus fact correction
+
+`Wake` and `Resume` are reevaluation controls, not fact mutations. They persist an attributed
+`operator.manual_wake` kernel event and ask the same logical agent to run one bounded turn against
+the currently recorded state. The event bypasses the agent-selected business-event filter, clears
+the previous wake plan, is consumed once by its durable event ID, and lets the resulting decision
+install a new plan. Review commands, action resolutions, and process controls retain priority;
+manual reevaluation then precedes an ordinary matching event or the superseded timer.
+
+The operator reason and actor are visible to the turn as guidance, but the manual-wake event carries
+no fact observations. Free text such as “assume the customer paid cash” therefore cannot change
+`payment.status`, satisfy a deterministic action precondition, or masquerade as a provider result.
+External ingress and tenant process definitions cannot create or subscribe to reserved kernel event
+types.
+
+Changing a business fact is a separate permissioned domain operation. A future admin fact editor
+may derive typed fields from the process definition, but it must validate the complete domain
+command, capture actor and evidence, be idempotent and append-only/audited, and produce an explicit
+correction or provider-equivalent canonical event. It must never edit projection JSON directly.
+Existing action reconciliation remains limited to evidence-backed resolution of an ambiguous action
+attempt; recording an offline cash payment when there is no ambiguous attempt requires a payment
+domain command.
+
 ```text
 PENDING_REVIEW
   ├── approve exact revision ──────────────── APPROVED → revalidate → execute
@@ -631,7 +654,7 @@ Avoid a generic JSON/EAV `business_objects` store unless a concrete client requi
 
 Testing is designed around an integration-free kernel, provider contracts, deterministic Temporal orchestration, and a separate layer of probabilistic agent evaluation.
 
-Current baseline: 106 backend tests (74 unit/contract, 30 PostgreSQL or Temporal integration, and 2 committed-history replay cases), 2 Vue component tests, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exact approval/action fencing, tenant Activity authorization, workflow restart/rollover, interventions, and the scripted reference journey. Configuration evolution, cross-layer scenario reuse, the broader race matrix, agent behavior, adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
+Current baseline: 121 backend tests (82 unit/contract, 36 PostgreSQL or Temporal integration, and 3 committed-history replay cases), 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exact approval/action fencing, tenant Activity authorization, workflow restart/rollover, manual reevaluation, interventions, and the scripted reference journey. Configuration evolution, cross-layer scenario reuse, the broader race matrix, agent behavior, adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
 
 ### Layer 1 — Pure kernel tests
 
@@ -870,7 +893,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Implement canonical event ingestion and source-event deduplication.
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
 - [ ] Implement quarantine resolution, late correlation, and replay.
-- [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Automatic single-flight event, timer, priority-review, and action-resolution turns are complete; batching, cancellation/takeover priority, and full tie rules remain.
+- [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Automatic single-flight event, timer, priority-review, action-resolution, and exactly-once logical manual-reevaluation turns are complete; reserved manual wakes supersede the old plan and precede ordinary matching events/timers. Batching, cancellation/takeover priority, and the remaining tie rules remain.
 - [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, bounded PostgreSQL event/review/action-result context loader, deterministic scripted-runner path, and automatic workflow consumption through the action gateway.
 - [x] Implement bounded context assembly, sourced authoritative-fact/customer-claim projection, provenance-checked summaries and commitments, immutable state revisions, and deterministic lifecycle projection.
 - [ ] Implement application-owned conversation/message history, memory compaction, and compaction lineage.
@@ -883,7 +906,7 @@ The following architecture decision records are gates for the durable kernel:
 - [ ] Implement budget, communication-policy, and safety-boundary enforcement. Initial follow-up count/interval policy, configured reply resets, deployment-tenant Activity authorization, lifecycle fencing, approval expiry, and tenant suspension are enforced; budgets and platform/capability circuit breakers remain.
 - [ ] Implement Continue-As-New with complete mailbox, wait, version, approval, and budget carry-forward. Versioned rollover now preserves active mailbox buffers, delivery deduplication, recent diagnostics, pending approvals, absolute timers, process-definition identity, and lifetime counters; budget carry-forward awaits the budget model.
 - [x] Add Temporal replay and failure-recovery tests. Committed signal/wait and Activity-backed Continue-As-New histories replay in CI; worker restart, rollover carry-forward, and retry-isolation tests cover the initial recovery surface. The broader failure matrix in the testing strategy remains ongoing.
-- [ ] Add committed replay histories for approval/revision, reconciliation, intervention/retry, takeover, suspension, and terminal closure, plus the timer/event, control/turn, review/turn, and event/action-result race matrix.
+- [ ] Add committed replay histories for approval/revision, reconciliation, intervention/retry, takeover, suspension, and terminal closure, plus the timer/event, control/turn, review/turn, and event/action-result race matrix. A reserved manual-wake ordering history is now committed alongside the original and Continue-As-New histories.
 - [ ] Run the optional Temporal/OpenAI SDK integration spike and record the decision without blocking the proposal-only path.
 
 ### Phase 3 — Reference journey
@@ -916,7 +939,7 @@ Recommended initial journey:
 - [ ] Add safe client-editable settings.
 - [ ] Add process simulation and validation before publication.
 - [x] Add the initial tenant process list/detail API and operator instance timeline, durable wake-condition, sourced-fact/claim, memory, and commitment UI.
-- [ ] Add the full approval, proposal-diff, review-chat, revision-lineage, and manual-intervention UI. Exact-payload approve/reject/comment/request-revision and intervention retry/wake/takeover/resume controls are complete; diffs, complete thread history, expiry management, and richer intervention diagnostics remain.
+- [ ] Add the full approval, proposal-diff, review-chat, revision-lineage, and manual-intervention UI. Exact-payload approve/reject/comment/request-revision and intervention retry/wake/takeover/resume controls are complete; Wake is explicitly presented as non-authoritative reevaluation. Diffs, complete thread history, expiry management, typed fact-correction controls, and richer intervention diagnostics remain.
 - [ ] Add event-quarantine, unknown-action, and reconciliation UI.
 - [x] Define active-instance migration behavior. Existing processes remain pinned to their immutable release while old/new workers coexist; tenant moves require terminal processes and published deliveries. Active-process pin migration is deliberately unsupported until an audited, replay-safe migration command is designed and implemented.
 - [ ] Decide the public distribution name and registry strategy when the extension API is stable; only then publish signed/versioned Python distributions if useful. Container releases may proceed independently.
@@ -969,6 +992,8 @@ The first vertical slice is complete when:
 27. The bundled fictional client pack owns its definition, manifest, output contract, and bindings in one package. Downstream client packages register through the same public manifest/factory contract and pass the same contract suites.
 28. The supported client-pack registration path cannot replace the workflow, action gateway, tenant checks, approval integrity, budgets, or audit path. Client-pack code is nevertheless a trusted executable artifact; isolation from malicious code is a deployment boundary, not a type-contract guarantee.
 29. Repository and release checks detect committed secrets, unsafe fixtures, generated credentials, and prohibited client/customer content.
+30. Wake and Resume each cause one durable reevaluation turn even when the current plan waits for another event; duplicate delivery and Continue-As-New do not repeat it.
+31. Operator reevaluation guidance is visible to the agent but cannot change an authoritative fact; a real provider event or typed, audited correction is required.
 
 ## 16. Open decisions
 

@@ -281,6 +281,17 @@ async def test_development_api_can_start_a_configured_process() -> None:
                     "occurred_at": datetime.now(UTC).isoformat(),
                 },
             )
+            reserved_event_response = await client.post(
+                "/v1/events",
+                headers={"X-Tiramisu-Tenant-ID": str(tenant_id)},
+                json={
+                    "event_type": "operator.manual_wake",
+                    "source": "spoofed.operator",
+                    "source_event_id": f"source-{uuid4()}",
+                    "occurred_at": datetime.now(UTC).isoformat(),
+                    "payload": {"reason": "Bypass the operator control API"},
+                },
+            )
             allow_list_response = await client.post(
                 "/v1/events",
                 headers={"X-Tiramisu-Tenant-ID": str(uuid4())},
@@ -306,6 +317,10 @@ async def test_development_api_can_start_a_configured_process() -> None:
         assert body["delivery_scheduled"] is True
         assert body["process_instance_id"] is not None
         assert missing_reference_response.status_code == 422
+        assert reserved_event_response.status_code == 422
+        assert reserved_event_response.json()["detail"] == (
+            "event type is reserved for kernel use: operator.manual_wake"
+        )
         assert allow_list_response.status_code == 403
         assert allow_list_response.json()["detail"] == (
             "tenant is not in this deployment's allow-list"

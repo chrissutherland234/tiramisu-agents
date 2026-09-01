@@ -291,6 +291,69 @@ describe("operator console", () => {
     wrapper.unmount();
   });
 
+  it("describes Wake as reevaluation and submits guidance without claiming a fact change", async () => {
+    const waitingSummary = { ...summary, status: "waiting", pending_reviews: 0 };
+    const waitingDetail = {
+      ...detail,
+      ...waitingSummary,
+      interventions: [],
+      current_wake_conditions: [{ type: "event", event_type: "payment.completed" }],
+      authoritative_facts: { ...detail.authoritative_facts, "payment.status": "pending" },
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const payload = url.endsWith("/v1/processes")
+        ? [waitingSummary]
+        : url.endsWith("/v1/reviews") ||
+            url.endsWith("/v1/outbox/dead-letters") ||
+            url.endsWith("/v1/outbox/recovery-commands")
+          ? []
+          : url.endsWith(`/v1/processes/${processId}/controls`)
+            ? { command_id: "55555555-5555-4555-8555-555555555555", command_type: "wake" }
+            : waitingDetail;
+      return new Response(JSON.stringify(payload), {
+        status: init?.method === "POST" ? 202 : 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const wrapper = mount(HomeView);
+
+    await wrapper.get('[data-testid="tenant-id"]').setValue("tenant-id");
+    await wrapper.get('[data-testid="actor-id"]').setValue("actor-id");
+    await wrapper.get('[data-testid="connect"]').trigger("click");
+    await flushPromises();
+
+    const controls = wrapper.get('[data-testid="intervention-controls"]');
+    expect(controls.text()).toContain("does not change authoritative business facts");
+    const guidance = "I received cash; please reconsider what should happen next.";
+    await controls
+      .get('textarea[placeholder^="Required reason; Wake guidance"]')
+      .setValue(guidance);
+    await controls
+      .findAll("button")
+      .find((button) => button.text() === "Wake and re-evaluate")
+      ?.trigger("click");
+    await flushPromises();
+
+    const controlCall = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith(`/v1/processes/${processId}/controls`) && init?.method === "POST",
+    );
+    expect(controlCall).toBeDefined();
+    expect(JSON.parse(String(controlCall?.[1]?.body))).toEqual({
+      command_type: "wake",
+      reason: guidance,
+      intervention_id: null,
+    });
+    expect(wrapper.text()).toContain(
+      "Reevaluation queued; authoritative facts are unchanged.",
+    );
+    expect(wrapper.text()).toContain("payment.status");
+    expect(wrapper.text()).toContain("pending");
+    wrapper.unmount();
+  });
+
   it("polls changed process state without hiding content and pauses in hidden tabs", async () => {
     vi.useFakeTimers();
     let processListCalls = 0;

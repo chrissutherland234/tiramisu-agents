@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
+from tiramisu_agents.core.reserved_events import RESERVED_KERNEL_EVENT_TYPES
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.tenancy import Tenant
@@ -49,6 +50,10 @@ class TriggerReferenceRequired(ValueError):
     """Raised when a configured trigger cannot establish a durable correlation."""
 
 
+class ReservedKernelEventType(ValueError):
+    """Raised when an integration attempts to impersonate a kernel-owned event."""
+
+
 class EventIngestionService:
     """Persist one canonical event and atomically schedule matched delivery."""
 
@@ -60,6 +65,10 @@ class EventIngestionService:
         bootstrap: ProcessBootstrap | None = None,
         deployment_id: str | None = None,
     ) -> IngestionResult:
+        if event.event_type in RESERVED_KERNEL_EVENT_TYPES:
+            raise ReservedKernelEventType(
+                f"event type is reserved for kernel use: {event.event_type}"
+            )
         await lock_tenant_deployment_for_ingress(session, event.tenant_id)
         await set_tenant_context(session, event.tenant_id)
         tenant_row = (

@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tiramisu_agents.core.contracts.decisions import HumanWakeCondition
+from tiramisu_agents.core.reserved_events import OPERATOR_MANUAL_WAKE_EVENT_TYPE
 from tiramisu_agents.db.models.events import EventInbox, OutboxMessage
 from tiramisu_agents.db.models.processes import (
     ProcessControlCommand,
@@ -219,6 +220,7 @@ class ProcessControlService:
         command: ProcessControlInput,
     ) -> None:
         event_id = uuid4()
+        recorded_at = datetime.now(UTC)
         session.add(
             EventInbox(
                 id=event_id,
@@ -226,22 +228,27 @@ class ProcessControlService:
                 process_instance_id=command.process_instance_id,
                 source="operator",
                 source_event_id=str(command.command_id),
-                event_type="operator.manual_wake",
+                event_type=OPERATOR_MANUAL_WAKE_EVENT_TYPE,
                 event_data={
                     "event_id": str(event_id),
                     "tenant_id": str(command.tenant_id),
                     "process_instance_id": str(command.process_instance_id),
                     "source": "operator",
                     "source_event_id": str(command.command_id),
-                    "event_type": "operator.manual_wake",
-                    "received_at": datetime.now(UTC).isoformat(),
-                    "payload": {"reason": command.reason, "actor_id": str(command.actor_id)},
+                    "event_type": OPERATOR_MANUAL_WAKE_EVENT_TYPE,
+                    "occurred_at": recorded_at.isoformat(),
+                    "received_at": recorded_at.isoformat(),
+                    "payload": {
+                        "reason": command.reason,
+                        "actor_id": str(command.actor_id),
+                        "command_type": command.command_type.value,
+                    },
                     "facts": [],
                     "external_references": [],
                 },
                 correlation_status="matched",
                 correlation_reason="operator_manual_wake",
-                received_at=datetime.now(UTC),
+                received_at=recorded_at,
             )
         )
         await session.execute(
@@ -254,7 +261,10 @@ class ProcessControlService:
                 message_type="temporal.process_event",
                 destination=process.workflow_id,
                 deduplication_key=f"process-control:{command.command_id}",
-                payload={"event_id": str(event_id), "event_type": "operator.manual_wake"},
+                payload={
+                    "event_id": str(event_id),
+                    "event_type": OPERATOR_MANUAL_WAKE_EVENT_TYPE,
+                },
             )
             .on_conflict_do_nothing(constraint="uq_outbox_messages_dedup")
         )

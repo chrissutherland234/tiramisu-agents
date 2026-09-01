@@ -138,7 +138,8 @@ i.status-completed, .large-status.status-completed { background: #dce8ea; color:
 .intervention-card h4 { margin: 8px 0; font-size: 16px; }
 .intervention-card p { margin: 0 0 10px; color: #6c5148; font-size: 13px; line-height: 1.5; }
 .intervention-action { display: grid; gap: 10px; align-content: start; }
-.manual-control { display: grid; grid-template-columns: minmax(280px, 1fr) auto; gap: 16px; align-items: end; margin-top: 20px; padding-top: 20px; border-top: 1px solid #dfc5bc; }
+.manual-control { display: grid; grid-template-columns: minmax(280px, 1fr) auto; gap: 8px 16px; align-items: end; margin-top: 20px; padding-top: 20px; border-top: 1px solid #dfc5bc; }
+.manual-control > p { grid-column: 1 / -1; margin: 0; }
 .state-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 26px; }
 .state-card { min-height: 170px; padding: 22px; border: 1px solid #d7ccc1; border-radius: 11px; background: rgba(255,255,255,.38); }
 .memory-card { background: #e8ded2; }

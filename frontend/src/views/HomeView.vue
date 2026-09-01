@@ -312,8 +312,8 @@ async function submitProcessControl(
         : commandType === "takeover"
           ? "Agent paused for operator takeover."
           : commandType === "resume"
-            ? "Agent resumed and queued to wake."
-            : "Manual wake queued for the process.";
+            ? "Agent resumed and reevaluation queued; authoritative facts are unchanged."
+            : "Reevaluation queued; authoritative facts are unchanged.";
     if (intervention) interventionReasons[intervention.id] = "";
     else processControlReason.value = "";
     await refresh(selected.value.id);
@@ -525,12 +525,16 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
             v-if="!['completed', 'cancelled', 'failed'].includes(selected.status)"
             class="manual-control"
           >
+            <p class="muted">
+              Wake asks the agent to reconsider its recorded state with your guidance. It does
+              not change authoritative business facts.
+            </p>
             <label>
-              <span>Control reason</span>
+              <span>Operator reason or guidance</span>
               <textarea
                 v-model="processControlReason"
                 rows="2"
-                placeholder="Required audit reason…"
+                placeholder="Required reason; Wake guidance does not change recorded facts…"
               />
             </label>
             <div class="review-buttons">
@@ -539,7 +543,7 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
                 class="button"
                 :disabled="actionInProgress !== null"
                 @click="submitProcessControl('wake')"
-              >{{ actionInProgress === `control:${selected.id}` ? "Sending…" : "Wake now" }}</button>
+              >{{ actionInProgress === `control:${selected.id}` ? "Sending…" : "Wake and re-evaluate" }}</button>
               <button
                 v-if="selected.status !== 'paused'"
                 class="button button-danger"

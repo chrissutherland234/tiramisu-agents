@@ -50,7 +50,6 @@ jobs:
       - run: uv run pyright
       - run: uv run pytest
       - run: uv build
-      - run: uv build --project examples/fictional_client_pack
 
   frontend:
     runs-on: ubuntu-latest

@@ -12,6 +12,7 @@ from temporalio.client import WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
+from tiramisu_agents.core.reserved_events import OPERATOR_MANUAL_WAKE_EVENT_TYPE
 from tiramisu_agents.temporal.workflows.mailbox import (
     MailboxActionResolution,
     MailboxContinuation,
@@ -152,6 +153,188 @@ async def test_mailbox_closes_completed_decision_with_stale_wake() -> None:
         result = await handle.result()
 
     assert result.closed is True
+
+
+@pytest.mark.asyncio
+async def test_manual_wake_bypasses_the_plan_once_across_continue_as_new() -> None:
+    task_queue = f"manual-wake-continue-test-{uuid4()}"
+    initial_event = MailboxEvent(event_id=str(uuid4()), event_type="enquiry.created")
+    manual_wake = MailboxEvent(event_id=str(uuid4()), event_type=OPERATOR_MANUAL_WAKE_EVENT_TYPE)
+
+    @activity.defn(name="run_agent_turn")
+    async def run_agent_turn(command: dict[str, Any]) -> dict[str, str]:
+        event_ids = tuple(str(value) for value in command["event_ids"])
+        wake_event = (
+            "payment.completed" if event_ids == (initial_event.event_id,) else "payment.failed"
+        )
+        return {
+            "decision_json": json.dumps(
+                {
+                    "decision_id": str(uuid4()),
+                    "based_on_event_ids": list(event_ids),
+                    "based_on_review_command_ids": [],
+                    "based_on_action_attempt_ids": [],
+                    "based_on_timer_ids": [],
+                    "status": "waiting",
+                    "actions": [],
+                    "wake_conditions": [{"type": "event", "event_type": wake_event}],
+                    "memory_update": {},
+                }
+            )
+        }
+
+    @activity.defn(name="persist_agent_actions")
+    async def persist_agent_actions(_command: dict[str, Any]) -> dict[str, str]:
+        return {"actions_json": "[]"}
+
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as environment,
+        Worker(
+            environment.client,
+            task_queue=task_queue,
+            workflows=[ProcessMailboxWorkflow],
+            activities=[run_agent_turn, persist_agent_actions, persist_process_state],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            ProcessMailboxWorkflow.run,
+            MailboxInput(
+                tenant_id="tenant-1",
+                process_instance_id="process-1",
+                process_definition_id="example",
+                process_definition_version="1",
+                continue_as_new_after_turns=1,
+            ),
+            id=f"manual-wake-continue-mailbox-{uuid4()}",
+            task_queue=task_queue,
+        )
+        await handle.signal(ProcessMailboxWorkflow.receive_event, initial_event)
+        state = await handle.query(ProcessMailboxWorkflow.state)
+        for _ in range(100):
+            state = await handle.query(ProcessMailboxWorkflow.state)
+            if state.continued_run_count == 1 and state.wake_plan is not None:
+                break
+            await asyncio.sleep(0.01)
+        assert state.completed_turn_count == 1
+        assert state.wake_plan == WakePlan(event_types=("payment.completed",))
+
+        await handle.signal(ProcessMailboxWorkflow.receive_event, manual_wake)
+        await handle.signal(ProcessMailboxWorkflow.receive_event, manual_wake)
+        state = await handle.query(ProcessMailboxWorkflow.state)
+        for _ in range(100):
+            state = await handle.query(ProcessMailboxWorkflow.state)
+            if state.continued_run_count == 2 and state.wake_plan is not None:
+                break
+            await asyncio.sleep(0.01)
+        assert state.completed_turn_count == 2
+        assert state.wake_plan == WakePlan(event_types=("payment.failed",))
+        assert state.buffered_events == ()
+        assert state.wake_records[-1].reason == "operator_manual_wake"
+        assert state.wake_records[-1].event_id == manual_wake.event_id
+        assert state.turn_records[-1].event_ids == (manual_wake.event_id,)
+
+        # The carried seen-event set prevents a redelivery after rollover from
+        # creating another logical reevaluation turn.
+        await handle.signal(ProcessMailboxWorkflow.receive_event, manual_wake)
+        repeated = await handle.query(ProcessMailboxWorkflow.state)
+        assert repeated.completed_turn_count == 2
+        assert repeated.buffered_events == ()
+
+        await handle.signal(ProcessMailboxWorkflow.close)
+        assert (await handle.result()).closed is True
+
+
+@pytest.mark.asyncio
+async def test_manual_wake_precedes_a_matching_business_event_and_old_timer() -> None:
+    task_queue = f"manual-wake-priority-test-{uuid4()}"
+    initial_event = MailboxEvent(event_id=str(uuid4()), event_type="enquiry.created")
+    payment_event = MailboxEvent(event_id=str(uuid4()), event_type="payment.completed")
+    manual_wake = MailboxEvent(event_id=str(uuid4()), event_type=OPERATOR_MANUAL_WAKE_EVENT_TYPE)
+    release_initial = asyncio.Event()
+    manual_turn_started = asyncio.Event()
+    release_manual = asyncio.Event()
+
+    @activity.defn(name="run_agent_turn")
+    async def run_agent_turn(command: dict[str, Any]) -> dict[str, str]:
+        event_ids = tuple(str(value) for value in command["event_ids"])
+        workflow_now = datetime.fromisoformat(str(command["workflow_now"]))
+        if event_ids == (initial_event.event_id,):
+            await release_initial.wait()
+            status = "waiting"
+            wakes = [
+                {"type": "event", "event_type": "payment.completed"},
+                {"type": "timer", "at": (workflow_now + timedelta(hours=1)).isoformat()},
+            ]
+        elif event_ids == (manual_wake.event_id,):
+            manual_turn_started.set()
+            await release_manual.wait()
+            status = "waiting"
+            wakes = [{"type": "event", "event_type": "payment.completed"}]
+        else:
+            assert event_ids == (payment_event.event_id,)
+            status = "completed"
+            wakes = []
+        return {
+            "decision_json": json.dumps(
+                {
+                    "decision_id": str(uuid4()),
+                    "based_on_event_ids": list(event_ids),
+                    "based_on_review_command_ids": [],
+                    "based_on_action_attempt_ids": [],
+                    "based_on_timer_ids": [],
+                    "status": status,
+                    "actions": [],
+                    "wake_conditions": wakes,
+                    "memory_update": {},
+                }
+            )
+        }
+
+    @activity.defn(name="persist_agent_actions")
+    async def persist_agent_actions(_command: dict[str, Any]) -> dict[str, str]:
+        return {"actions_json": "[]"}
+
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as environment,
+        Worker(
+            environment.client,
+            task_queue=task_queue,
+            workflows=[ProcessMailboxWorkflow],
+            activities=[run_agent_turn, persist_agent_actions, persist_process_state],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            ProcessMailboxWorkflow.run,
+            MailboxInput(
+                tenant_id="tenant-1",
+                process_instance_id="process-1",
+                process_definition_id="example",
+                process_definition_version="1",
+            ),
+            id=f"manual-wake-priority-mailbox-{uuid4()}",
+            task_queue=task_queue,
+        )
+        await handle.signal(ProcessMailboxWorkflow.receive_event, initial_event)
+        await handle.signal(ProcessMailboxWorkflow.receive_event, payment_event)
+        await handle.signal(ProcessMailboxWorkflow.receive_event, manual_wake)
+        release_initial.set()
+
+        await asyncio.wait_for(manual_turn_started.wait(), timeout=5)
+        during_manual = await handle.query(ProcessMailboxWorkflow.state)
+        assert during_manual.turn_in_progress is True
+        assert during_manual.wake_plan is None
+        assert during_manual.buffered_events == (payment_event,)
+        assert during_manual.wake_records[-1].reason == "operator_manual_wake"
+
+        release_manual.set()
+        result = await asyncio.wait_for(handle.result(), timeout=5)
+        assert result.closed is True
+        assert [record.event_ids for record in result.turn_records] == [
+            (initial_event.event_id,),
+            (manual_wake.event_id,),
+            (payment_event.event_id,),
+        ]
+        assert "timer" not in {record.reason for record in result.wake_records}
 
 
 @pytest.mark.asyncio

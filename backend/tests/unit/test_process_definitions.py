@@ -47,6 +47,31 @@ def test_invalid_event_type_is_rejected() -> None:
         ProcessDefinition.model_validate(document)
 
 
+@pytest.mark.parametrize("field", ("trigger_events", "allowed_wake_events"))
+def test_kernel_event_types_cannot_be_configured_as_business_events(field: str) -> None:
+    document = {
+        "id": "example",
+        "version": "1",
+        "status": "draft",
+        "trigger_events": [],
+        "goals": ["Do the thing"],
+        "terminal_states": ["completed"],
+        "allowed_actions": [],
+        "action_permissions": {},
+        "allowed_wake_events": [],
+        "limits": {
+            "max_actions_per_turn": 1,
+            "max_follow_ups_without_reply": 1,
+            "minimum_follow_up_interval_hours": 1,
+            "maximum_timer_horizon_days": 1,
+        },
+    }
+    document[field] = ["operator.manual_wake"]
+
+    with pytest.raises(ValidationError, match="reserved for kernel use"):
+        ProcessDefinition.model_validate(document)
+
+
 def test_action_guidance_must_describe_an_allowed_action() -> None:
     document = {
         "id": "example",

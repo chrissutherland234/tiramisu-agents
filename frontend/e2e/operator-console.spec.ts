@@ -47,13 +47,19 @@ test("ingests and displays a real process through the local stack", async ({ pag
   await expect(page.getByRole("alert")).toHaveCount(0);
 
   const controls = page.getByTestId("intervention-controls");
-  await controls.getByPlaceholder("Required audit reason…").fill("Operator checking this journey");
+  await controls
+    .getByPlaceholder("Required reason; Wake guidance does not change recorded facts…")
+    .fill("Operator checking this journey");
   await controls.getByRole("button", { name: "Pause and take over" }).click();
   await expect(page.getByRole("status")).toContainText("paused for operator takeover");
   await expect(page.getByTestId("process-detail").locator(".large-status")).toHaveText("paused");
 
-  await controls.getByPlaceholder("Required audit reason…").fill("Operator check complete");
+  await controls
+    .getByPlaceholder("Required reason; Wake guidance does not change recorded facts…")
+    .fill("Operator check complete");
   await controls.getByRole("button", { name: "Resume agent" }).click();
-  await expect(page.getByRole("status")).toContainText("resumed and queued to wake");
+  await expect(page.getByRole("status")).toContainText(
+    "resumed and reevaluation queued; authoritative facts are unchanged",
+  );
   await expect(page.getByTestId("process-detail").locator(".large-status")).toHaveText("active");
 });
