@@ -166,6 +166,27 @@ i.status-completed, .large-status.status-completed { background: #dce8ea; color:
 details { margin-top: 9px; }
 summary { color: #8a6e5c; cursor: pointer; font-size: 10px; }
 pre { overflow: auto; padding: 12px; border-radius: 7px; background: #e9e1da; font-size: 10px; line-height: 1.5; }
+.timeline-groups > li { display: block; position: static; padding-bottom: 16px; }
+.timeline.timeline-groups > li:not(:last-child)::before { display: none; }
+.timeline-groups > li.timeline-row { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 15px; position: relative; padding-bottom: 24px; }
+.timeline.timeline-groups > li.timeline-row:not(:last-child)::before { display: block; position: absolute; top: 14px; bottom: -2px; left: 5px; width: 1px; background: var(--border); content: ""; }
+.turn-group { margin: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.turn-group > summary { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 15px; padding: 16px; list-style: none; }
+.turn-group > summary::-webkit-details-marker { display: none; }
+.turn-group > summary::after { align-self: center; color: var(--muted); content: "+"; font-size: 16px; line-height: 1; }
+.turn-group[open] > summary::after { content: "−"; }
+.turn-group > summary .timeline-marker { margin-top: 5px; }
+.turn-group summary .timeline-content small { display: block; margin-top: 7px; color: var(--muted); font-size: 11px; }
+.turn-trail { overflow: hidden; margin: 8px 0 0; color: var(--subtext); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.turn-wakes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.turn-wakes > span { color: var(--muted); font-size: 11px; }
+.turn-wakes b { padding: 3px 7px; border: 1px solid var(--border); border-radius: 4px; color: var(--subtext); font-size: 11px; font-weight: 500; }
+.turn-body { padding: 0 16px 16px 47px; border-top: 1px solid var(--border); }
+.record-detail { margin-top: 12px; }
+.turn-steps { display: grid; gap: 0; margin: 14px 0 0; padding: 0; list-style: none; }
+.turn-steps li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 15px; position: relative; padding: 0 0 16px; }
+.turn-steps li:not(:last-child)::before { position: absolute; top: 14px; bottom: -2px; left: 5px; width: 1px; background: var(--border); content: ""; }
+.turn-steps .timeline-marker { margin-top: 3px; }
 .empty-state, .empty-detail { display: grid; gap: 8px; place-items: center; color: #8b796e; text-align: center; }
 .empty-state { margin-top: 30px; padding: 25px 10px; font-size: 12px; }
 .empty-detail { min-height: 600px; }
@@ -198,6 +219,7 @@ pre { overflow: auto; padding: 12px; border-radius: 7px; background: #e9e1da; fo
   .claims-card { grid-column: auto; }
   .wake-panel, .detail-header { align-items: flex-start; flex-direction: column; }
   .wake-list { justify-content: flex-start; }
+  .turn-body { padding-left: 16px; }
   .welcome { padding: 70px 0; }
 }
 

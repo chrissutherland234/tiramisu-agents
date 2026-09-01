@@ -5,6 +5,7 @@ import HomeView from "./HomeView.vue";
 
 const processId = "11111111-1111-4111-8111-111111111111";
 const threadId = "22222222-2222-4222-8222-222222222222";
+const agentTurnId = "55555555-5555-4555-8555-555555555555";
 const interventionId = "77777777-7777-4777-8777-777777777777";
 const deadLetterId = "99999999-9999-4999-8999-999999999999";
 const now = "2026-08-30T10:00:00Z";
@@ -69,12 +70,31 @@ const detail = {
   ],
   timeline: [
     {
+      id: "22222222-2222-4222-8222-222222222223",
+      kind: "event",
+      occurred_at: "2026-08-30T08:00:00Z",
+      title: "mail.received",
+      status: "processed",
+      detail: {},
+    },
+    {
       id: "33333333-3333-4333-8333-333333333334",
       kind: "decision",
       occurred_at: "2026-08-30T09:00:00Z",
       title: "Agent decision · version 1",
       status: "active",
+      agent_turn_id: agentTurnId,
       detail: { memory_summary: "The customer asked to book on Tuesday." },
+    },
+    {
+      id: "33333333-3333-4333-8333-333333333335",
+      kind: "action",
+      occurred_at: "2026-08-30T09:00:00Z",
+      title: "find_available_slots",
+      status: "succeeded",
+      agent_turn_id: agentTurnId,
+      action_request_id: "33333333-3333-4333-8333-333333333333",
+      detail: {},
     },
     {
       id: "44444444-4444-4444-8444-444444444444",
@@ -82,6 +102,7 @@ const detail = {
       occurred_at: now,
       title: "Agent decision · version 2",
       status: "review",
+      agent_turn_id: "55555555-5555-4555-8555-555555555556",
       detail: {
         memory_summary: "The customer is waiting for a response.",
         wake_conditions: [{ type: "human", interaction: "approval" }],
@@ -175,6 +196,16 @@ describe("operator console", () => {
     expect(wrapper.get('[data-testid="wake-panel"]').text()).toContain("Human · approval");
     expect(wrapper.get('[data-testid="review-queue"]').text()).toContain("Hello there");
     expect(wrapper.get('[data-testid="timeline"]').text()).toContain("Agent decision");
+    const turnGroups = wrapper.get('[data-testid="timeline"]').findAll(".turn-group");
+    expect(turnGroups).toHaveLength(2);
+    expect(turnGroups[0].attributes("open")).toBeUndefined();
+    expect(turnGroups[0].text()).toContain("find_available_slots");
+    expect(wrapper.get('[data-testid="timeline"]').text()).toContain(
+      "Agent decision → find available slots",
+    );
+    expect(wrapper.get('[data-testid="timeline"]').text()).toContain("Wakes on");
+    expect(wrapper.get('[data-testid="timeline"]').text()).toContain("Human · approval");
+    expect(wrapper.get('[data-testid="timeline"]').findAll(".timeline-row")).toHaveLength(1);
     const memoryHistory = wrapper.get('[data-testid="memory-history"]');
     expect(memoryHistory.text()).toContain("The customer asked to book on Tuesday.");
     expect(memoryHistory.text()).not.toContain("The customer is waiting for a response.");

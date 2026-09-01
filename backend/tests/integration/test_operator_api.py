@@ -299,6 +299,9 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
                 index for index, item in enumerate(timeline) if item["kind"] == "action"
             )
             assert decision_index < action_index
+            assert timeline[decision_index]["agent_turn_id"] == str(turn_id)
+            assert timeline[action_index]["agent_turn_id"] == str(turn_id)
+            assert timeline[action_index]["action_request_id"] == str(actions[0].action_request_id)
             bounded_detail = await client.get(
                 f"/v1/processes/{process_id}?timeline_limit=1", headers=headers
             )

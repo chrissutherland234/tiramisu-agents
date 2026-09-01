@@ -28,6 +28,8 @@ export interface TimelineItem {
   occurred_at: string;
   title: string;
   status: string | null;
+  agent_turn_id?: string | null;
+  action_request_id?: string | null;
   detail: Record<string, unknown>;
 }
 

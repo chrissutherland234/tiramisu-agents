@@ -12,8 +12,15 @@ import {
   type ProcessSummary,
   type RecoveryCommandSummary,
   type ReviewCommandType,
+  type TimelineItem,
   type WakeCondition,
 } from "@/api";
+
+interface TimelineGroup {
+  id: string;
+  decision: TimelineItem | null;
+  items: TimelineItem[];
+}
 
 const credentials = reactive<OperatorCredentials>({ tenantId: "", actorId: "" });
 const processes = ref<ProcessSummary[]>([]);
@@ -67,6 +74,44 @@ const historicalMemories = computed(() => {
       seen.add(normalized);
       return [{ id: item.id, summary: normalized, occurredAt: item.occurred_at }];
     });
+});
+
+const timelineGroups = computed<TimelineGroup[]>(() => {
+  const timeline = selected.value?.timeline ?? [];
+  const turnItems = new Map<string, TimelineItem[]>();
+  const decisionTurnIds = new Set<string>();
+
+  for (const item of timeline) {
+    if (item.kind === "decision" && item.agent_turn_id) {
+      decisionTurnIds.add(item.agent_turn_id);
+    }
+    if (item.agent_turn_id && (item.kind === "action" || item.kind === "attempt")) {
+      const items = turnItems.get(item.agent_turn_id) ?? [];
+      items.push(item);
+      turnItems.set(item.agent_turn_id, items);
+    }
+  }
+
+  const groups: TimelineGroup[] = [];
+  for (const item of timeline) {
+    if (item.kind === "decision" && item.agent_turn_id) {
+      groups.push({
+        id: `turn:${item.agent_turn_id}`,
+        decision: item,
+        items: turnItems.get(item.agent_turn_id) ?? [],
+      });
+      continue;
+    }
+    if (
+      item.agent_turn_id &&
+      (item.kind === "action" || item.kind === "attempt") &&
+      decisionTurnIds.has(item.agent_turn_id)
+    ) {
+      continue;
+    }
+    groups.push({ id: `${item.kind}:${item.id}`, decision: null, items: [item] });
+  }
+  return groups;
 });
 
 onMounted(() => {
@@ -347,6 +392,35 @@ function shortId(value: string) {
   return `${value.slice(0, 8)}…${value.slice(-4)}`;
 }
 
+function turnTrail(group: TimelineGroup) {
+  return [
+    "Agent decision",
+    ...group.items.map((item) =>
+      item.kind === "attempt" ? "Provider attempt" : item.title.replaceAll("_", " "),
+    ),
+  ].join(" → ");
+}
+
+function turnWakeLabels(group: TimelineGroup) {
+  const wakes = group.decision?.detail.wake_conditions;
+  if (!Array.isArray(wakes)) return [];
+
+  return wakes.flatMap((wake) => {
+    if (!wake || typeof wake !== "object") return [];
+    const condition = wake as Record<string, unknown>;
+    if (condition.type === "event" && typeof condition.event_type === "string") {
+      return [`Event · ${condition.event_type}`];
+    }
+    if (condition.type === "timer" && typeof condition.at === "string") {
+      return [`Timer · ${formatDate(condition.at)}`];
+    }
+    if (condition.type === "human" && typeof condition.interaction === "string") {
+      return [`Human · ${condition.interaction}`];
+    }
+    return [];
+  });
+}
+
 function factSource(kind: "authoritative" | "customer_claim", key: string) {
   const source = selected.value?.fact_provenance[`${kind}:${key}`];
   if (!source) return "";
@@ -618,14 +692,43 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
 
         <section class="timeline-section" data-testid="timeline">
           <div class="section-heading"><div><p class="eyebrow">Durable history</p><h3>Process timeline</h3></div><span>{{ selected.timeline.length }} records</span></div>
-          <ol class="timeline">
-            <li v-for="item in selected.timeline" :key="`${item.kind}-${item.id}`">
-              <span class="timeline-marker" :class="`kind-${item.kind}`"></span>
-              <div class="timeline-content">
-                <div><span>{{ item.kind }}</span><time>{{ formatDate(item.occurred_at) }}</time></div>
-                <h4>{{ item.title }}</h4><i v-if="item.status" :class="`status-${item.status}`">{{ item.status }}</i>
-                <details v-if="Object.keys(item.detail).length"><summary>Record detail</summary><pre>{{ JSON.stringify(item.detail, null, 2) }}</pre></details>
-              </div>
+          <ol class="timeline timeline-groups">
+            <li v-for="group in timelineGroups" :key="group.id" :class="{ 'timeline-row': !group.decision }">
+              <details v-if="group.decision" class="turn-group">
+                <summary>
+                  <span class="timeline-marker kind-decision"></span>
+                  <div class="timeline-content">
+                    <div><span>Agent turn</span><time>{{ formatDate(group.decision.occurred_at) }}</time></div>
+                    <h4>{{ group.decision.title }}</h4><i v-if="group.decision.status" :class="`status-${group.decision.status}`">{{ group.decision.status }}</i>
+                    <p v-if="group.items.length" class="turn-trail">{{ turnTrail(group) }}</p>
+                    <small v-else>No actions proposed</small>
+                    <div v-if="turnWakeLabels(group).length" class="turn-wakes">
+                      <span>Wakes on</span><b v-for="wake in turnWakeLabels(group)" :key="wake">{{ wake }}</b>
+                    </div>
+                  </div>
+                </summary>
+                <div class="turn-body">
+                  <details v-if="Object.keys(group.decision.detail).length" class="record-detail"><summary>Decision detail</summary><pre>{{ JSON.stringify(group.decision.detail, null, 2) }}</pre></details>
+                  <ol v-if="group.items.length" class="turn-steps">
+                    <li v-for="item in group.items" :key="`${item.kind}-${item.id}`">
+                      <span class="timeline-marker" :class="`kind-${item.kind}`"></span>
+                      <div class="timeline-content">
+                        <div><span>{{ item.kind }}</span><time>{{ formatDate(item.occurred_at) }}</time></div>
+                        <h4>{{ item.title }}</h4><i v-if="item.status" :class="`status-${item.status}`">{{ item.status }}</i>
+                        <details v-if="Object.keys(item.detail).length" class="record-detail"><summary>Record detail</summary><pre>{{ JSON.stringify(item.detail, null, 2) }}</pre></details>
+                      </div>
+                    </li>
+                  </ol>
+                </div>
+              </details>
+              <template v-else>
+                <span class="timeline-marker" :class="`kind-${group.items[0].kind}`"></span>
+                <div class="timeline-content">
+                  <div><span>{{ group.items[0].kind }}</span><time>{{ formatDate(group.items[0].occurred_at) }}</time></div>
+                  <h4>{{ group.items[0].title }}</h4><i v-if="group.items[0].status" :class="`status-${group.items[0].status}`">{{ group.items[0].status }}</i>
+                  <details v-if="Object.keys(group.items[0].detail).length" class="record-detail"><summary>Record detail</summary><pre>{{ JSON.stringify(group.items[0].detail, null, 2) }}</pre></details>
+                </div>
+              </template>
             </li>
           </ol>
         </section>

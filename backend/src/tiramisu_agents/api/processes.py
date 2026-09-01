@@ -64,6 +64,8 @@ class TimelineItem(BaseModel):
     occurred_at: datetime
     title: str
     status: str | None = None
+    agent_turn_id: UUID | None = None
+    action_request_id: UUID | None = None
     detail: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -520,6 +522,7 @@ async def _load_timeline(
             occurred_at=revision.created_at,
             title=f"Agent decision · version {revision.version}",
             status=revision.process_status,
+            agent_turn_id=revision.agent_turn_id,
             detail={
                 "decision_status": revision.decision_status,
                 "memory_summary": revision.memory_summary,
@@ -560,6 +563,8 @@ async def _load_timeline(
             ),
             title=action.action_type,
             status=action.status,
+            agent_turn_id=action.agent_turn_id,
+            action_request_id=action.id,
             detail={
                 "revision": revision.revision,
                 "proposed_at": action.created_at,
@@ -574,9 +579,10 @@ async def _load_timeline(
         )
         for action, revision, turn_revision in action_rows
     )
-    attempts = (
-        await session.scalars(
-            select(ActionAttempt)
+    attempt_rows = (
+        await session.execute(
+            select(ActionAttempt, ActionRequest)
+            .join(ActionRequest, ActionRequest.id == ActionAttempt.action_request_id)
             .where(ActionAttempt.process_instance_id == process_instance_id)
             .order_by(ActionAttempt.started_at.desc())
             .limit(limit)
@@ -589,13 +595,15 @@ async def _load_timeline(
             occurred_at=attempt.started_at,
             title=f"Provider attempt · {attempt.adapter_id}",
             status=attempt.status,
+            agent_turn_id=action.agent_turn_id,
+            action_request_id=attempt.action_request_id,
             detail={
                 "provider_reference": attempt.provider_reference,
                 "result": attempt.result,
                 "error": attempt.error,
             },
         )
-        for attempt in attempts
+        for attempt, action in attempt_rows
     )
     messages = (
         await session.scalars(
