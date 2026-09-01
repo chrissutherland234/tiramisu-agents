@@ -1,7 +1,6 @@
 """Complete integration-free enquiry-to-completion reference scenario."""
 
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
@@ -13,8 +12,8 @@ from tiramisu_agents.adapters.stubs import (
     StubPaymentAdapter,
     stub_business_bindings,
 )
+from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.decisions import ActionProposal
-from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.testkit import (
     FictionalJourneyDriver,
     ScenarioActionStatus,
@@ -25,9 +24,7 @@ from tiramisu_agents.testkit import (
 
 @pytest.mark.asyncio
 async def test_reference_journey_runs_every_primitive_to_completion() -> None:
-    definition = ProcessDefinitionRegistry.from_yaml_files(
-        [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-    ).get("enquiry_to_booking", "1")
+    definition = load_fictional_deployment().definition
     state = StubBusinessState(now=datetime(2026, 9, 1, 9, tzinfo=UTC))
     messaging = StubMessagingAdapter(state)
     booking = StubBookingAdapter(state)
@@ -80,9 +77,7 @@ async def test_reference_journey_runs_every_primitive_to_completion() -> None:
 
 
 def test_fictional_worker_bindings_cover_every_configured_action() -> None:
-    definition = ProcessDefinitionRegistry.from_yaml_files(
-        [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-    ).get("enquiry_to_booking", "1")
+    definition = load_fictional_deployment().definition
 
     bindings = stub_business_bindings(StubBusinessState(now=datetime(2026, 9, 1, 9, tzinfo=UTC)))
 
@@ -91,9 +86,7 @@ def test_fictional_worker_bindings_cover_every_configured_action() -> None:
 
 @pytest.mark.asyncio
 async def test_scenario_driver_does_not_execute_an_action_before_approval() -> None:
-    definition = ProcessDefinitionRegistry.from_yaml_files(
-        [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-    ).get("enquiry_to_booking", "1")
+    definition = load_fictional_deployment().definition
     state = StubBusinessState(now=datetime(2026, 9, 1, 9, tzinfo=UTC))
     bindings = stub_business_bindings(state)
     tenant_id, process_id = new_scenario_identity()

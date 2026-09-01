@@ -94,13 +94,13 @@ The runtime role cannot enumerate tenants. Signed provider-webhook verification,
 
 ## Public and private extensions
 
-The generic platform, test kit, stub adapters, and reusable provider adapters live here. Client-specific processes, prompts, policies, proprietary adapters, evaluations, and deployment composition belong in separate private client-pack repositories. Private packs return the public `tiramisu_agents.extensions.ClientPack` contract from an explicit zero-argument startup factory and must use the same manifest and contract tests as the fictional public example.
+The generic platform, test kit, stub adapters, and reusable provider adapters live here. Client-specific processes, prompts, policies, proprietary adapters, evaluations, and deployment composition belong in separate private client-pack repositories. Private packs return the public `tiramisu_agents.extensions.ClientPack` contract from an explicit zero-argument startup factory and should follow the same contract as the [bundled fictional pack](backend/src/tiramisu_agents/builtin/fictional.py).
 
 Install the core and a downstream pack as editable packages, then configure the exact same trusted factory path in the API and worker environment:
 
 ```bash
-uv pip install -e . -e examples/fictional_client_pack
-export TIRAMISU_CLIENT_PACK_FACTORY=tiramisu_fictional_client_pack:create_client_pack
+uv pip install -e . -e /path/to/client-pack
+export TIRAMISU_CLIENT_PACK_FACTORY=client_package:create_client_pack
 ```
 
 The factory is imported and validated before API traffic or Temporal worker polling. It is never discovered or imported from workflow code. A pack is trusted executable Python, not a sandbox. Under [ADR-011](docs/decisions/011-client-pack-deployment-topology.md), each pack has its own logical deployment and immutable release queues; tenants may share it only when they intentionally share the exact pack and release lifecycle. New processes pin the release, queue, complete pack, and definition fingerprints. Old and new workers can coexist during drain, while incompatible workers stop before model or provider I/O. Persisted installation inventory, active-instance migration, and custom Activity registration remain future work.

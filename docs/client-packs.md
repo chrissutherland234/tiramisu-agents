@@ -65,4 +65,4 @@ Assign a tenant to the logical deployment with `tiramisu-admin assign-tenant-dep
 - The supported contract cannot register replacement workflows or bypass the stock action gateway, tenant checks, approval integrity, or audit path. The pack itself is trusted executable Python; malicious or careless code can still perform hidden I/O. Use reviewed immutable builds, and use a separate process/service boundary where code-level isolation is required.
 - A fingerprint mismatch deliberately stops existing processes. Safe upgrade and rollback keep every required pinned release worker available until drain; changing files in place under an existing build identity is not supported.
 
-See [`examples/fictional_client_pack`](../examples/fictional_client_pack/README.md) for the buildable editable-package example.
+The [bundled fictional pack](../backend/src/tiramisu_agents/builtin/fictional.py) is the repository's local reference composition. A downstream pack should keep its definitions, manifest, output contract, policies, and bindings together in its own package.

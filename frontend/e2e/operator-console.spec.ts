@@ -32,7 +32,7 @@ test("ingests and displays a real process through the local stack", async ({ pag
   });
   expect(ingestion.status()).toBe(202);
 
-  await page.goto("/");
+  await page.goto("/processes");
   await page.getByTestId("tenant-id").fill(tenantId);
   await page.getByTestId("actor-id").fill(actorId);
   await page.getByTestId("connect").click();

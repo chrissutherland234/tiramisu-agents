@@ -1,18 +1,16 @@
-import json
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
 import pytest
-import yaml
 from pydantic import ValidationError
 from tiramisu_agents.api.events import fictional_trigger_rules
 from tiramisu_agents.api.settings import Settings
 from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.builtin.fictional_agent_output import FictionalAgentDecisionOutput
-from tiramisu_agents.extensions import ClientPack, ExtensionManifest
+from tiramisu_agents.extensions import ClientPack
 from tiramisu_agents.processes.compatibility import DeploymentCompatibilityError
-from tiramisu_agents.processes.definitions import DefinitionStatus, ProcessDefinition
+from tiramisu_agents.processes.definitions import DefinitionStatus
 from tiramisu_agents.temporal import worker as worker_module
 from tiramisu_agents.temporal.worker import (
     compose_fictional_worker,
@@ -124,25 +122,11 @@ def test_deployment_release_identity_is_deterministic_and_fails_closed() -> None
         make_test_deployment_release(deployment_id="unassigned")
 
 
-def test_bundled_fictional_configuration_matches_public_example() -> None:
+def test_bundled_fictional_configuration_is_self_consistent() -> None:
     deployment = load_fictional_deployment()
-    public_definition = ProcessDefinition.model_validate(
-        yaml.safe_load(
-            Path("process_definitions/examples/enquiry_to_booking.v1.yaml").read_text(
-                encoding="utf-8"
-            )
-        )
-    )
-    public_manifest = ExtensionManifest.model_validate(
-        json.loads(
-            Path("examples/fictional_client_pack/extension_manifest.json").read_text(
-                encoding="utf-8"
-            )
-        )
-    )
 
-    assert deployment.definition == public_definition
-    assert deployment.manifest == public_manifest
+    assert deployment.registry.get("enquiry_to_booking", "1") == deployment.definition
+    assert deployment.manifest.process_definitions == ("enquiry_to_booking.v1",)
 
 
 def test_settings_normalize_and_reject_unsafe_runtime_combinations() -> None:

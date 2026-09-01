@@ -2,13 +2,13 @@
 
 import os
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.exceptions import ApplicationError
+from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.decisions import (
     ActionProposal,
     AgentDecision,
@@ -22,7 +22,6 @@ from tiramisu_agents.db.models.tenancy import Tenant, TenantSafetyEvent
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
 from tiramisu_agents.processes.compatibility import DeploymentCompatibility
-from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.security.tenancy import TenantSafetyService
 from tiramisu_agents.temporal.activities.agent_turn import AgentTurnActivities, AgentTurnCommand
 from tiramisu_agents.testkit.deployment import TEST_DEPLOYMENT_RELEASE
@@ -64,10 +63,9 @@ async def test_activity_loads_context_and_rejects_out_of_policy_decision() -> No
     admin_engine = create_engine(migration_url)
     runtime_factory = create_session_factory(runtime_engine)
     admin_factory = create_session_factory(admin_engine)
-    registry = ProcessDefinitionRegistry.from_yaml_files(
-        [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-    )
-    definition = registry.get("enquiry_to_booking", "1")
+    deployment = load_fictional_deployment()
+    registry = deployment.registry
+    definition = deployment.definition
     compatibility = DeploymentCompatibility(
         client_pack_fingerprint="b" * 64,
         extension_manifest_hash="a" * 64,

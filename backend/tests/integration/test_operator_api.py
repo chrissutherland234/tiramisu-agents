@@ -2,7 +2,6 @@
 
 import os
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tiramisu_agents.actions.gateway import ActionGateway
 from tiramisu_agents.api.main import create_app
 from tiramisu_agents.api.settings import Settings
+from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.decisions import (
     ActionProposal,
     AgentDecision,
@@ -100,9 +100,7 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
     admin_engine = create_engine(migration_url)
     runtime_factory = create_session_factory(runtime_engine)
     admin_factory = create_session_factory(admin_engine)
-    definition = ProcessDefinitionRegistry.from_yaml_files(
-        [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-    ).get("enquiry_to_booking", "1")
+    definition = load_fictional_deployment().definition
     tenant_id = uuid4()
     other_tenant_id = uuid4()
     actor_id = uuid4()

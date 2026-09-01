@@ -2,13 +2,13 @@
 
 import os
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tiramisu_agents.agents.context import PostgresAgentContextLoader
+from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.decisions import (
     AgentDecision,
     DecisionStatus,
@@ -24,7 +24,6 @@ from tiramisu_agents.db.models.tenancy import Tenant
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
 from tiramisu_agents.processes.compatibility import DeploymentCompatibility
-from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateConflict, ProcessStateService
 from tiramisu_agents.testkit.deployment import TEST_DEPLOYMENT_RELEASE
 
@@ -64,10 +63,8 @@ async def test_process_state_projects_sourced_knowledge_and_versioned_memory() -
     admin_engine = create_engine(migration_url)
     runtime_factory = create_session_factory(runtime_engine)
     admin_factory = create_session_factory(admin_engine)
-    registry = ProcessDefinitionRegistry.from_yaml_files(
-        [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-    )
-    definition = registry.get("enquiry_to_booking", "1")
+    deployment = load_fictional_deployment()
+    definition = deployment.definition
     tenant_id = uuid4()
     reference = ExternalReference(
         provider="stub.website",

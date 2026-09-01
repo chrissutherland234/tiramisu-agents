@@ -3,7 +3,6 @@
 import json
 import os
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -20,6 +19,7 @@ from tiramisu_agents.actions.reconciliation import (
 )
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
 from tiramisu_agents.adapters.stubs import StubActionAdapter, StubAmbiguousSuccess
+from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.actions import (
     ActionResolution,
     OperatorActionResolution,
@@ -121,9 +121,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
     admin_engine = create_engine(migration_url)
     runtime_factory = create_session_factory(runtime_engine)
     admin_factory = create_session_factory(admin_engine)
-    definition = ProcessDefinitionRegistry.from_yaml_files(
-        [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-    ).get("enquiry_to_booking", "1")
+    definition = load_fictional_deployment().definition
     compatibility = DeploymentCompatibility(
         client_pack_fingerprint="b" * 64,
         extension_manifest_hash="a" * 64,

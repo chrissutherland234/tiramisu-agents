@@ -1,16 +1,14 @@
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
+from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.processes.definitions import DefinitionStatus, ProcessDefinition
 from tiramisu_agents.processes.registry import AmbiguousTrigger, ProcessDefinitionRegistry
 
-EXAMPLE_PATH = Path("process_definitions/examples/enquiry_to_booking.v1.yaml")
-
 
 def test_example_process_definition_compiles_to_policy_and_instructions() -> None:
-    registry = ProcessDefinitionRegistry.from_yaml_files([EXAMPLE_PATH])
-    definition = registry.get("enquiry_to_booking", "1")
+    deployment = load_fictional_deployment()
+    registry = deployment.registry
+    definition = deployment.definition
 
     assert definition.status is DefinitionStatus.PUBLISHED
     assert registry.resolve_trigger("enquiry.created") == definition
@@ -72,7 +70,7 @@ def test_action_guidance_must_describe_an_allowed_action() -> None:
 
 
 def test_ambiguous_enabled_trigger_is_rejected() -> None:
-    draft = ProcessDefinitionRegistry.from_yaml_files([EXAMPLE_PATH]).get("enquiry_to_booking", "1")
+    draft = load_fictional_deployment().definition
     other = draft.model_copy(update={"id": "other_process"})
     registry = ProcessDefinitionRegistry([draft, other])
 

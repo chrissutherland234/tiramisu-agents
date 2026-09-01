@@ -2,16 +2,15 @@
 
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from temporalio.exceptions import ApplicationError
 from tiramisu_agents.actions.execution import ActionExecutor
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
+from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.processes.compatibility import DeploymentCompatibility
-from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.temporal.activities.action_execution import (
     ActionExecutionActivities,
     ExecuteActionCommand,
@@ -44,10 +43,9 @@ async def _assert_not_authorized[CommandT](
 async def test_all_tenant_bearing_activities_reject_unassigned_tenant_before_io() -> None:
     engine = create_engine("postgresql+asyncpg://unused:unused@127.0.0.1:1/unused")
     session_factory = create_session_factory(engine)
-    registry = ProcessDefinitionRegistry.from_yaml_files(
-        [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-    )
-    definition = registry.get("enquiry_to_booking", "1")
+    deployment = load_fictional_deployment()
+    registry = deployment.registry
+    definition = deployment.definition
     compatibility = DeploymentCompatibility(
         client_pack_fingerprint="b" * 64,
         extension_manifest_hash="a" * 64,

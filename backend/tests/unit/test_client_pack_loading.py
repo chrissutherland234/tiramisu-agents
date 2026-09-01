@@ -1,7 +1,6 @@
 """Public client-pack composition and explicit startup loading contracts."""
 
 import sys
-from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
@@ -44,16 +43,8 @@ def test_client_pack_contract_fails_closed_on_manifest_runtime_drift() -> None:
         )
 
 
-def test_api_and_worker_load_the_same_editable_client_pack_contract(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repository_root = Path(__file__).resolve().parents[3]
-    monkeypatch.setattr(
-        sys,
-        "path",
-        [str(repository_root / "examples" / "fictional_client_pack" / "src"), *sys.path],
-    )
-    factory_path = "tiramisu_fictional_client_pack:create_client_pack"
+def test_api_and_worker_load_the_same_bundled_client_pack_contract() -> None:
+    factory_path = "tiramisu_agents.builtin:load_fictional_deployment"
     tenant_id = "5dc839ab-b42e-42e8-a8d9-afc240ce1d94"
     settings = _settings(
         client_pack_factory=factory_path,

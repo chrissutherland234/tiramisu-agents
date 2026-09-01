@@ -92,7 +92,8 @@ async function connect() {
   localStorage.setItem("tiramisu.actorId", credentials.actorId.trim());
   connected.value = true;
   stopPolling();
-  await refresh(undefined, !selected.value);
+  const requestedProcessId = new URLSearchParams(window.location.search).get("process") ?? undefined;
+  await refresh(requestedProcessId, !selected.value);
   schedulePoll();
 }
 
@@ -356,11 +357,13 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
 <template>
   <main class="operator-shell">
     <header class="topbar">
-      <a class="brand" href="/" aria-label="Tiramisu operator home">
+      <a class="brand" href="/" aria-label="Tiramisu dashboard">
         <span class="brand-mark">T</span>
         <span><strong>Tiramisu</strong><small>Operator console</small></span>
       </a>
       <div class="topbar-actions">
+        <a class="topbar-link" href="/">Dashboard</a>
+        <a class="topbar-link active" href="/processes">Processes</a>
         <span v-if="connected" class="connection-dot">Local identity</span>
         <span
           v-if="connected"

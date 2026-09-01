@@ -665,7 +665,7 @@ Every real and stub implementation of a port must pass the same provider-neutral
 
 This prevents stubs from behaving more conveniently than production providers.
 
-The same public suite validates private client packs without requiring them in public CI. It checks extension-manifest compatibility, process-definition publication, capability registration, policy monotonicity, adapter behavior, replay fixtures, migration compatibility, and that supported registrations do not replace core safety boundaries. It detects accidental contract violations; it does not sandbox deliberately malicious Python. The public repository also includes a fictional example pack that exercises the identical packaging and registration path.
+The same public suite validates private client packs without requiring them in public CI. It checks extension-manifest compatibility, process-definition publication, capability registration, policy monotonicity, adapter behavior, replay fixtures, migration compatibility, and that supported registrations do not replace core safety boundaries. It detects accidental contract violations; it does not sandbox deliberately malicious Python. The public repository also includes a bundled fictional pack as its local reference composition.
 
 ### Layer 5 — Provider sandbox tests
 
@@ -761,6 +761,7 @@ The public repository begins as one editable Python package in a monorepo:
 │   │   ├── adapters/
 │   │   │   ├── providers/
 │   │   │   └── stubs/
+│   │   ├── builtin/
 │   │   ├── policies/
 │   │   ├── approvals/
 │   │   ├── reconciliation/
@@ -778,10 +779,6 @@ The public repository begins as one editable Python package in a monorepo:
 ├── frontend/
 │   ├── src/
 │   └── tests/
-├── process_definitions/
-│   └── examples/
-├── examples/
-│   └── fictional_client_pack/
 ├── docs/
 │   ├── architecture/
 │   └── decisions/
@@ -849,7 +846,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Initialize the public repository with MIT `LICENSE`, `README`, contribution, security-reporting, code-of-conduct, and third-party notice files.
 - [ ] Add secret scanning, dependency updates, lockfile review, SBOM generation, and safe CI behavior for untrusted public pull requests.
 - [x] Establish the `tiramisu_agents` namespace, editable `uv` package workflow, internal compatibility versioning, and initial extension-manifest contract without requiring PyPI publication.
-- [x] Add a fictional client-pack manifest that will use the same installation, registration, and contract-test path as a private pack.
+- [x] Bundle the fictional client-pack manifest, definition, output contract, and bindings as the local reference composition.
 - [x] Add PostgreSQL Compose service, SQLAlchemy models, and a reversible, drift-checked initial Alembic migration.
 - [x] Add and runtime-validate the local Temporal development service.
 - [x] Add forced PostgreSQL row-level security, composite tenant foreign keys, transaction-scoped tenant context, and separate local admin/runtime roles.
@@ -969,7 +966,7 @@ The first vertical slice is complete when:
 24. Revision feedback supersedes the original proposal; a late approval of the old revision cannot execute it.
 25. The operator can compare proposal revisions and approve only the exact final action payload.
 26. The public repository builds, tests, and runs the fictional reference journey without any private client package.
-27. A separately authored and packaged fictional client extension owns its definitions and adapters, registers through the public manifest/factory path, and passes the same contracts required of private client packs. The current editable wrapper proves packaging/loading but still delegates to the bundled example.
+27. The bundled fictional client pack owns its definition, manifest, output contract, and bindings in one package. Downstream client packages register through the same public manifest/factory contract and pass the same contract suites.
 28. The supported client-pack registration path cannot replace the workflow, action gateway, tenant checks, approval integrity, budgets, or audit path. Client-pack code is nevertheless a trusted executable artifact; isolation from malicious code is a deployment boundary, not a type-contract guarantee.
 29. Repository and release checks detect committed secrets, unsafe fixtures, generated credentials, and prohibited client/customer content.
 
@@ -1087,7 +1084,7 @@ Recommended initial packaging:
 - PyPI distribution name and publication: deferred until the extension API is stable and there is a concrete need
 - One internal package boundary initially; future distribution splitting remains undecided
 - Explicit versioned extension manifest composed at worker startup
-- Public fictional client pack using the same contract suite as private packs
+- Bundled fictional client pack used as the local reference composition
 - No canonical client implementation stored only in a gitignored directory
 
 Status: Recommended working default. The unqualified `tiramisu` PyPI distribution is already occupied, but no replacement name needs to be chosen or reserved during the editable-package phase.

@@ -6,7 +6,6 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -19,6 +18,7 @@ from tiramisu_agents.actions.gateway import (
     CommunicationPolicy,
 )
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
+from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision, DecisionStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
 from tiramisu_agents.core.ports.actions import ProviderActionRequest, ProviderActionResult
@@ -52,7 +52,6 @@ from tiramisu_agents.processes.control import (
     ProcessControlService,
     ProcessControlType,
 )
-from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateService
 from tiramisu_agents.testkit.deployment import TEST_DEPLOYMENT_RELEASE
 
@@ -130,9 +129,7 @@ async def _process_context() -> AsyncGenerator[_TestContext]:
             ),
         ),
     )
-    definition = ProcessDefinitionRegistry.from_yaml_files(
-        [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-    ).get("enquiry_to_booking", "1")
+    definition = load_fictional_deployment().definition
     compatibility = DeploymentCompatibility(
         client_pack_fingerprint="b" * 64,
         extension_manifest_hash="a" * 64,
@@ -336,9 +333,7 @@ class _BlockingAdapter:
 @pytest.mark.asyncio
 async def test_takeover_serializes_with_the_final_provider_execution_fence() -> None:
     async with _process_context() as context:
-        definition = ProcessDefinitionRegistry.from_yaml_files(
-            [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-        ).get("enquiry_to_booking", "1")
+        definition = load_fictional_deployment().definition
         decision = AgentDecision(
             based_on_event_ids=(context.enquiry.event_id,),
             status=DecisionStatus.ACTIVE,
@@ -411,9 +406,7 @@ async def test_takeover_serializes_with_the_final_provider_execution_fence() -> 
 @pytest.mark.asyncio
 async def test_communication_limits_reset_only_after_a_configured_reply() -> None:
     async with _process_context() as context:
-        definition = ProcessDefinitionRegistry.from_yaml_files(
-            [Path("process_definitions/examples/enquiry_to_booking.v1.yaml")]
-        ).get("enquiry_to_booking", "1")
+        definition = load_fictional_deployment().definition
         gateway = ActionGateway()
         policy = CommunicationPolicy(
             outbound_action_types=frozenset({"send_message"}),
