@@ -1,5 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import HomeView from "./HomeView.vue";
 
@@ -69,12 +69,23 @@ const detail = {
   ],
   timeline: [
     {
+      id: "33333333-3333-4333-8333-333333333334",
+      kind: "decision",
+      occurred_at: "2026-08-30T09:00:00Z",
+      title: "Agent decision · version 1",
+      status: "active",
+      detail: { memory_summary: "The customer asked to book on Tuesday." },
+    },
+    {
       id: "44444444-4444-4444-8444-444444444444",
       kind: "decision",
       occurred_at: now,
       title: "Agent decision · version 2",
       status: "review",
-      detail: { wake_conditions: [{ type: "human", interaction: "approval" }] },
+      detail: {
+        memory_summary: "The customer is waiting for a response.",
+        wake_conditions: [{ type: "human", interaction: "approval" }],
+      },
     },
   ],
 };
@@ -119,6 +130,11 @@ describe("operator console", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+  });
+
   it("loads durable state and submits an exact-payload approval", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -159,6 +175,9 @@ describe("operator console", () => {
     expect(wrapper.get('[data-testid="wake-panel"]').text()).toContain("Human · approval");
     expect(wrapper.get('[data-testid="review-queue"]').text()).toContain("Hello there");
     expect(wrapper.get('[data-testid="timeline"]').text()).toContain("Agent decision");
+    const memoryHistory = wrapper.get('[data-testid="memory-history"]');
+    expect(memoryHistory.text()).toContain("The customer asked to book on Tuesday.");
+    expect(memoryHistory.text()).not.toContain("The customer is waiting for a response.");
     expect(wrapper.get('[data-testid="intervention-controls"]').text()).toContain(
       "DecisionRejected",
     );
@@ -229,6 +248,7 @@ describe("operator console", () => {
       reason: "Temporal cluster connectivity has been restored.",
     });
     expect(wrapper.text()).toContain("Delivery requeued");
+    wrapper.unmount();
   });
 
   it("keeps journey inspection available without outbox permission", async () => {
@@ -268,5 +288,82 @@ describe("operator console", () => {
     );
     expect(wrapper.text()).toContain("missing scope: outbox:read");
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("polls changed process state without hiding content and pauses in hidden tabs", async () => {
+    vi.useFakeTimers();
+    let processListCalls = 0;
+    let releasePoll: ((response: Response) => void) | undefined;
+    const updatedSummary = {
+      ...summary,
+      status: "waiting",
+      state_version: 3,
+      updated_at: "2026-08-30T10:01:00Z",
+    };
+    const updatedDetail = {
+      ...detail,
+      ...updatedSummary,
+      current_wake_conditions: [{ type: "event", event_type: "customer.email_received" }],
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/processes")) {
+        processListCalls += 1;
+        if (processListCalls === 2) {
+          return new Promise<Response>((resolve) => {
+            releasePoll = resolve;
+          });
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(processListCalls > 2 ? [updatedSummary] : [summary])),
+        );
+      }
+      const payload = url.endsWith("/v1/reviews")
+        ? [review]
+        : url.endsWith("/v1/outbox/dead-letters") ||
+            url.endsWith("/v1/outbox/recovery-commands")
+          ? []
+          : processListCalls > 1
+            ? updatedDetail
+            : detail;
+      return Promise.resolve(new Response(JSON.stringify(payload)));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const wrapper = mount(HomeView);
+
+    await wrapper.get('[data-testid="tenant-id"]').setValue("tenant-id");
+    await wrapper.get('[data-testid="actor-id"]').setValue("actor-id");
+    await wrapper.get('[data-testid="connect"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="process-detail"]').text()).toContain("state 2");
+    vi.advanceTimersByTime(2_000);
+    await flushPromises();
+    expect(wrapper.get('[data-testid="sync-status"]').text()).toContain("Live");
+    expect(wrapper.get('[data-testid="connect"]').text()).toContain("Refresh now");
+    expect(wrapper.get('[data-testid="connect"]').attributes("disabled")).toBeUndefined();
+    expect(wrapper.get('[data-testid="process-detail"]').text()).toContain("state 2");
+
+    releasePoll?.(new Response(JSON.stringify([updatedSummary])));
+    await flushPromises();
+    expect(wrapper.get('[data-testid="sync-status"]').text()).toContain("Live");
+    expect(wrapper.get('[data-testid="process-detail"]').text()).toContain("state 3");
+    expect(wrapper.get('[data-testid="wake-panel"]').text()).toContain(
+      "Event · customer.email_received",
+    );
+
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    const callsBeforeHiddenWait = processListCalls;
+    vi.advanceTimersByTime(5_000);
+    await flushPromises();
+    expect(processListCalls).toBe(callsBeforeHiddenWait);
+
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+    expect(processListCalls).toBe(callsBeforeHiddenWait + 1);
+    wrapper.unmount();
   });
 });

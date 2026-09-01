@@ -500,6 +500,7 @@ async def _load_timeline(
             status=revision.process_status,
             detail={
                 "decision_status": revision.decision_status,
+                "memory_summary": revision.memory_summary,
                 "wake_conditions": revision.wake_conditions,
                 "open_commitments": revision.open_commitments,
             },

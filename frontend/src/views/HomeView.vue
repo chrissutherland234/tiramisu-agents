@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 
 import {
   operatorApi,
@@ -26,19 +26,59 @@ const interventionReasons = reactive<Record<string, string>>({});
 const requeueReasons = reactive<Record<string, string>>({});
 const processControlReason = ref("");
 const connected = ref(false);
-const loading = ref(false);
+const initialLoading = ref(false);
+const refreshing = ref(false);
+const polling = ref(false);
+const actionInProgress = ref<string | null>(null);
+const selectingProcessId = ref<string | null>(null);
+const lastUpdatedAt = ref<string | null>(null);
+const syncError = ref("");
 const error = ref("");
 const notice = ref("");
 const operationsError = ref("");
+
+const POLL_INTERVAL_MS = 2_000;
+const OPERATIONS_POLL_INTERVAL_MS = 10_000;
+let pollTimer: ReturnType<typeof window.setTimeout> | undefined;
+let lastOperationsPollAt = 0;
 
 const selectedReviews = computed(() =>
   reviews.value.filter((review) => review.process_instance_id === selected.value?.id),
 );
 
+const syncLabel = computed(() => {
+  if (syncError.value) return "Retrying updates";
+  if (refreshing.value) return "Updating";
+  return "Live";
+});
+
+const historicalMemories = computed(() => {
+  const currentSummary = selected.value?.memory_summary?.trim();
+  const seen = new Set<string>();
+  if (currentSummary) seen.add(currentSummary);
+
+  return [...(selected.value?.timeline ?? [])]
+    .reverse()
+    .flatMap((item) => {
+      if (item.kind !== "decision") return [];
+      const summary = item.detail.memory_summary;
+      if (typeof summary !== "string" || !summary.trim() || seen.has(summary.trim())) return [];
+      const normalized = summary.trim();
+      seen.add(normalized);
+      return [{ id: item.id, summary: normalized, occurredAt: item.occurred_at }];
+    });
+});
+
 onMounted(() => {
+  document.addEventListener("visibilitychange", handleVisibilityChange);
   credentials.tenantId = localStorage.getItem("tiramisu.tenantId") ?? "";
   credentials.actorId = localStorage.getItem("tiramisu.actorId") ?? "";
   if (credentials.tenantId && credentials.actorId) void connect();
+});
+
+onBeforeUnmount(() => {
+  stopPolling();
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
 });
 
 async function connect() {
@@ -51,11 +91,14 @@ async function connect() {
   localStorage.setItem("tiramisu.tenantId", credentials.tenantId.trim());
   localStorage.setItem("tiramisu.actorId", credentials.actorId.trim());
   connected.value = true;
-  await refresh();
+  stopPolling();
+  await refresh(undefined, !selected.value);
+  schedulePoll();
 }
 
-async function refresh(preferredProcessId?: string) {
-  loading.value = true;
+async function refresh(preferredProcessId?: string, showInitialLoading = false) {
+  if (showInitialLoading) initialLoading.value = true;
+  else refreshing.value = true;
   error.value = "";
   try {
     const operationsRequest = Promise.all([
@@ -84,11 +127,98 @@ async function refresh(preferredProcessId?: string) {
       nextReviews[0]?.process_instance_id ??
       nextProcesses[0]?.id;
     selected.value = processId ? await operatorApi.getProcess(credentials, processId) : null;
+    lastOperationsPollAt = Date.now();
+    lastUpdatedAt.value = new Date().toISOString();
+    syncError.value = "";
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Could not load the operator view.";
   } finally {
-    loading.value = false;
+    initialLoading.value = false;
+    refreshing.value = false;
   }
+}
+
+function stopPolling() {
+  if (pollTimer !== undefined) window.clearTimeout(pollTimer);
+  pollTimer = undefined;
+}
+
+function schedulePoll(delay = POLL_INTERVAL_MS) {
+  stopPolling();
+  if (!connected.value || document.hidden) return;
+  pollTimer = window.setTimeout(() => void poll(), delay);
+}
+
+async function poll(forceSelectedRefresh = false) {
+  if (
+    !connected.value ||
+    document.hidden ||
+    polling.value ||
+    refreshing.value ||
+    initialLoading.value ||
+    actionInProgress.value
+  ) {
+    schedulePoll();
+    return;
+  }
+  polling.value = true;
+  try {
+    const nextProcesses = await operatorApi.listProcesses(credentials);
+    const nextReviews = await operatorApi.listReviews(credentials);
+    const selectedId = selected.value?.id;
+    const nextSelectedSummary = nextProcesses.find((process) => process.id === selectedId);
+    const selectedChanged =
+      forceSelectedRefresh ||
+      !selected.value ||
+      !nextSelectedSummary ||
+      nextSelectedSummary.state_version !== selected.value.state_version ||
+      nextSelectedSummary.status !== selected.value.status ||
+      nextSelectedSummary.updated_at !== selected.value.updated_at;
+
+    processes.value = nextProcesses;
+    reviews.value = nextReviews;
+
+    const processId =
+      (nextSelectedSummary && selectedId) ??
+      nextReviews[0]?.process_instance_id ??
+      nextProcesses[0]?.id;
+    if (processId && (selectedChanged || processId !== selectedId)) {
+      selected.value = await operatorApi.getProcess(credentials, processId);
+    } else if (!processId) {
+      selected.value = null;
+    }
+
+    if (Date.now() - lastOperationsPollAt >= OPERATIONS_POLL_INTERVAL_MS) {
+      try {
+        const [letters, commands] = await Promise.all([
+          operatorApi.listDeadLetters(credentials),
+          operatorApi.listRecoveryCommands(credentials),
+        ]);
+        deadLetters.value = letters;
+        recoveryCommands.value = commands;
+        operationsError.value = "";
+      } catch (cause) {
+        operationsError.value =
+          cause instanceof Error ? cause.message : "Delivery operations are unavailable.";
+      }
+      lastOperationsPollAt = Date.now();
+    }
+    lastUpdatedAt.value = new Date().toISOString();
+    syncError.value = "";
+  } catch (cause) {
+    syncError.value = cause instanceof Error ? cause.message : "Live updates are unavailable.";
+  } finally {
+    polling.value = false;
+    schedulePoll();
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.hidden) {
+    stopPolling();
+    return;
+  }
+  void poll(true);
 }
 
 async function requeueDeadLetter(message: DeadLetterSummary) {
@@ -97,7 +227,7 @@ async function requeueDeadLetter(message: DeadLetterSummary) {
     error.value = "Add a reason before requeueing a dead-lettered delivery.";
     return;
   }
-  loading.value = true;
+  actionInProgress.value = `requeue:${message.id}`;
   error.value = "";
   try {
     await operatorApi.requeueDeadLetter(credentials, message.id, reason);
@@ -107,19 +237,20 @@ async function requeueDeadLetter(message: DeadLetterSummary) {
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Could not requeue the delivery.";
   } finally {
-    loading.value = false;
+    actionInProgress.value = null;
+    schedulePoll();
   }
 }
 
 async function selectProcess(processId: string) {
-  loading.value = true;
+  selectingProcessId.value = processId;
   error.value = "";
   try {
     selected.value = await operatorApi.getProcess(credentials, processId);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Could not load the process.";
   } finally {
-    loading.value = false;
+    selectingProcessId.value = null;
   }
 }
 
@@ -129,7 +260,7 @@ async function submitReview(review: PendingReview, commandType: ReviewCommandTyp
     error.value = "Add a note before sending feedback or requesting a change.";
     return;
   }
-  loading.value = true;
+  actionInProgress.value = `review:${review.thread_id}`;
   error.value = "";
   try {
     await operatorApi.submitReview(credentials, review, commandType, message);
@@ -146,7 +277,8 @@ async function submitReview(review: PendingReview, commandType: ReviewCommandTyp
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Could not submit the review.";
   } finally {
-    loading.value = false;
+    actionInProgress.value = null;
+    schedulePoll();
   }
 }
 
@@ -162,7 +294,8 @@ async function submitProcessControl(
     error.value = "Add a reason before issuing a process control.";
     return;
   }
-  loading.value = true;
+  const controlKey = intervention?.id ?? selected.value.id;
+  actionInProgress.value = `control:${controlKey}`;
   error.value = "";
   try {
     await operatorApi.submitProcessControl(
@@ -186,7 +319,8 @@ async function submitProcessControl(
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Could not control the process.";
   } finally {
-    loading.value = false;
+    actionInProgress.value = null;
+    schedulePoll();
   }
 }
 
@@ -228,6 +362,13 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
       </a>
       <div class="topbar-actions">
         <span v-if="connected" class="connection-dot">Local identity</span>
+        <span
+          v-if="connected"
+          class="sync-status"
+          :class="{ 'is-updating': refreshing, 'has-error': syncError }"
+          :title="syncError || (lastUpdatedAt ? `Last updated ${formatDate(lastUpdatedAt)}` : '')"
+          data-testid="sync-status"
+        ><i></i>{{ syncLabel }}</span>
         <a href="http://127.0.0.1:8233" target="_blank">Temporal ↗</a>
         <a href="http://127.0.0.1:8000/docs" target="_blank">API ↗</a>
       </div>
@@ -236,8 +377,8 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
     <section class="identity-bar" aria-label="Local operator identity">
       <label><span>Tenant ID</span><input v-model="credentials.tenantId" data-testid="tenant-id" placeholder="UUID" /></label>
       <label><span>Actor ID</span><input v-model="credentials.actorId" data-testid="actor-id" placeholder="UUID" /></label>
-      <button class="button button-primary" data-testid="connect" :disabled="loading" @click="connect">
-        {{ connected ? "Refresh" : "Connect locally" }}
+      <button class="button button-primary" data-testid="connect" :disabled="initialLoading || refreshing || actionInProgress !== null" @click="connect">
+        {{ initialLoading ? "Connecting…" : refreshing ? "Updating…" : connected ? "Refresh now" : "Connect locally" }}
       </button>
       <p>Development headers only. Production identity is deliberately not implied.</p>
     </section>
@@ -245,7 +386,7 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
     <div v-if="error" class="alert alert-error" role="alert">{{ error }}</div>
     <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
 
-    <section v-if="connected" class="delivery-operations" data-testid="delivery-operations">
+    <section v-if="connected && !initialLoading" class="delivery-operations" data-testid="delivery-operations">
       <div class="section-heading">
         <div><p class="eyebrow">Delivery operations</p><h2>Dead-letter queue</h2></div>
         <span :class="{ 'danger-count': deadLetters.length }">{{ deadLetters.length }} waiting</span>
@@ -272,7 +413,11 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
                 placeholder="Provider restored, configuration corrected, or other evidence…"
               />
             </label>
-            <button class="button button-primary" :disabled="loading" @click="requeueDeadLetter(message)">Requeue delivery</button>
+            <button
+              class="button button-primary"
+              :disabled="actionInProgress !== null"
+              @click="requeueDeadLetter(message)"
+            >{{ actionInProgress === `requeue:${message.id}` ? "Requeueing…" : "Requeue delivery" }}</button>
           </div>
         </article>
       </div>
@@ -291,18 +436,21 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
       </details>
     </section>
 
-    <section v-if="connected" class="workspace" :class="{ 'is-loading': loading }">
+    <section v-if="connected" class="workspace" :aria-busy="initialLoading">
       <aside class="process-rail">
         <div class="rail-heading">
           <div><p class="eyebrow">Journeys</p><h1>{{ processes.length }} processes</h1></div>
           <span class="review-count">{{ reviews.length }} review</span>
         </div>
-        <div v-if="processes.length" class="process-list" data-testid="process-list">
+        <div v-if="initialLoading" class="rail-loading" data-testid="initial-loading">
+          <span></span><span></span><span></span>
+        </div>
+        <div v-else-if="processes.length" class="process-list" data-testid="process-list">
           <button
             v-for="process in processes"
             :key="process.id"
             class="process-item"
-            :class="{ active: selected?.id === process.id }"
+            :class="{ active: selected?.id === process.id, 'is-selecting': selectingProcessId === process.id }"
             @click="selectProcess(process.id)"
           >
             <span class="process-item-top">
@@ -365,9 +513,9 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
               </label>
               <button
                 class="button button-primary"
-                :disabled="loading"
+                :disabled="actionInProgress !== null"
                 @click="submitProcessControl('retry', intervention)"
-              >Retry failed turn</button>
+              >{{ actionInProgress === `control:${intervention.id}` ? "Retrying…" : "Retry failed turn" }}</button>
             </div>
           </article>
           <div
@@ -386,19 +534,19 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
               <button
                 v-if="selected.status !== 'paused'"
                 class="button"
-                :disabled="loading"
+                :disabled="actionInProgress !== null"
                 @click="submitProcessControl('wake')"
-              >Wake now</button>
+              >{{ actionInProgress === `control:${selected.id}` ? "Sending…" : "Wake now" }}</button>
               <button
                 v-if="selected.status !== 'paused'"
                 class="button button-danger"
-                :disabled="loading"
+                :disabled="actionInProgress !== null"
                 @click="submitProcessControl('takeover')"
               >Pause and take over</button>
               <button
                 v-else
                 class="button button-primary"
-                :disabled="loading"
+                :disabled="actionInProgress !== null"
                 @click="submitProcessControl('resume')"
               >Resume agent</button>
             </div>
@@ -424,10 +572,10 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
             <div class="review-controls">
               <label><span>Suggestion or decision note</span><textarea v-model="reviewNotes[review.thread_id]" rows="4" placeholder="Maybe something more like this…" /></label>
               <div class="review-buttons">
-                <button class="button button-primary" @click="submitReview(review, 'approve')">Approve exact proposal</button>
-                <button class="button" @click="submitReview(review, 'request_revision')">Suggest &amp; try again</button>
-                <button class="button" @click="submitReview(review, 'comment')">Comment</button>
-                <button class="button button-danger" @click="submitReview(review, 'reject')">Reject</button>
+                <button class="button button-primary" :disabled="actionInProgress !== null" @click="submitReview(review, 'approve')">{{ actionInProgress === `review:${review.thread_id}` ? "Submitting…" : "Approve exact proposal" }}</button>
+                <button class="button" :disabled="actionInProgress !== null" @click="submitReview(review, 'request_revision')">Suggest &amp; try again</button>
+                <button class="button" :disabled="actionInProgress !== null" @click="submitReview(review, 'comment')">Comment</button>
+                <button class="button button-danger" :disabled="actionInProgress !== null" @click="submitReview(review, 'reject')">Reject</button>
               </div>
             </div>
           </article>
@@ -436,6 +584,15 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
         <div class="state-grid">
           <section class="state-card memory-card">
             <p class="eyebrow">Working memory</p><p class="memory-copy">{{ selected.memory_summary ?? "No durable summary yet." }}</p>
+            <div v-if="historicalMemories.length" class="memory-history" data-testid="memory-history">
+              <p class="memory-history-heading">Earlier memories</p>
+              <ol>
+                <li v-for="memory in historicalMemories" :key="memory.id">
+                  <p>{{ memory.summary }}</p>
+                  <time>{{ formatDate(memory.occurredAt) }}</time>
+                </li>
+              </ol>
+            </div>
             <ul v-if="selected.open_commitments.length"><li v-for="commitment in selected.open_commitments" :key="commitment">{{ commitment }}</li></ul>
           </section>
           <section class="state-card">
@@ -467,6 +624,7 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
         </section>
       </article>
 
+      <div v-else-if="initialLoading" class="detail-loading"><span></span><span></span><span></span></div>
       <div v-else class="empty-detail"><span class="brand-mark">T</span><h2>Nothing is waiting yet.</h2><p>Start a journey and its durable context will appear here.</p></div>
     </section>
 

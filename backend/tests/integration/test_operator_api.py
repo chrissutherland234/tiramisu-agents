@@ -287,6 +287,12 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
                 "decision",
                 "action",
             }
+            decision_item = next(
+                item for item in detail.json()["timeline"] if item["kind"] == "decision"
+            )
+            assert decision_item["detail"]["memory_summary"] == (
+                "The customer is waiting for an initial response."
+            )
             bounded_detail = await client.get(
                 f"/v1/processes/{process_id}?timeline_limit=1", headers=headers
             )
