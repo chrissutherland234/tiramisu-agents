@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
@@ -12,6 +13,7 @@ from tiramisu_agents.agents.openai_runner import (
     AgentsSDKExecutor,
     OpenAIAgentsTurnRunner,
 )
+from tiramisu_agents.agents.runner import ProposalCorrection
 from tiramisu_agents.core.contracts.actions import ActionAttemptStatus
 from tiramisu_agents.core.contracts.decisions import DecisionStatus, EventWakeCondition
 from tiramisu_agents.core.contracts.events import CanonicalEvent
@@ -119,6 +121,82 @@ def test_openai_transport_is_a_strict_sdk_output_schema() -> None:
     assert schema.is_plain_text() is False
     assert schema.json_schema()["additionalProperties"] is False
     assert "based_on_action_attempt_ids" not in schema.json_schema()["properties"]
+
+
+@pytest.mark.asyncio
+async def test_correction_reuses_the_snapshot_and_includes_exact_validator_feedback() -> None:
+    tenant_id = uuid4()
+    process_id = uuid4()
+    event_id = uuid4()
+    turn_input = AgentTurnInput(
+        turn_id=uuid4(),
+        process=ProcessSnapshot(
+            tenant_id=tenant_id,
+            process_instance_id=process_id,
+            process_type="test_process",
+            process_definition_version="1",
+            status=ProcessStatus.ACTIVE,
+            authoritative_facts={"payment.status": "pending"},
+        ),
+        events=(
+            CanonicalEvent(
+                event_id=event_id,
+                tenant_id=tenant_id,
+                process_instance_id=process_id,
+                event_type="payment.requested",
+                source="test",
+                source_event_id="payment-requested-1",
+                occurred_at=datetime.now(UTC),
+            ),
+        ),
+        instructions="Complete only after authoritative payment.",
+    )
+    rejected = AgentDecisionOutput(
+        status=DecisionStatus.COMPLETED,
+        actions=(
+            ActionProposalOutput(
+                logical_action_key="send_confirmation",
+                action_type="send_message",
+                parameters_json='{"template":"confirmed"}',
+                rationale="Send the confirmation before completing.",
+            ),
+        ),
+    ).to_agent_decision(turn_input)
+    validation_error = "completed decision cannot propose unresolved actions"
+    output = AgentDecisionOutput(
+        status=DecisionStatus.WAITING,
+        wake_conditions=(EventWakeCondition(event_type="payment.completed"),),
+    )
+    prompts: list[str] = []
+    max_turns_seen: list[int] = []
+
+    async def execute(agent: Any, prompt: str, max_turns: int, run_config: Any) -> Any:
+        del agent, run_config
+        prompts.append(prompt)
+        max_turns_seen.append(max_turns)
+        return SimpleNamespace(final_output=output)
+
+    runner = OpenAIAgentsTurnRunner(
+        model="test-model",
+        executor=cast(AgentsSDKExecutor, execute),
+    )
+    await runner.run_turn(turn_input)
+    corrected = await runner.run_turn(
+        turn_input,
+        correction=ProposalCorrection(
+            correction_attempt=1,
+            rejected_decision=rejected,
+            validation_error=validation_error,
+        ),
+    )
+
+    assert corrected.status is DecisionStatus.WAITING
+    assert prompts[1].startswith(f"{prompts[0]}\n")
+    feedback = json.loads(prompts[1].splitlines()[-1])
+    assert feedback["correction_attempt"] == 1
+    assert feedback["validation_error"] == validation_error
+    assert feedback["rejected_proposal"] == rejected.model_dump(mode="json")
+    assert max_turns_seen == [1, 1]
 
 
 @pytest.mark.asyncio

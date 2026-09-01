@@ -157,16 +157,17 @@ This is deliberately separate from Temporal's OpenAI Agents SDK integration, whi
 2. Deduplicate and persist the events.
 3. Load the process instance, pinned definition, agent memory, and relevant business facts.
 4. Assemble a bounded context package.
-5. Run one proposal-only OpenAI Agents SDK turn inside a Temporal Activity.
+5. Run one proposal-only OpenAI Agents SDK invocation inside a Temporal Activity.
 6. Require a structured `AgentDecision` result.
 7. Validate the decision against current process state, deterministic lifecycle rules, tenant policy, and autonomy budgets.
-8. Create durable approval requests for actions that require human authorization.
-9. Execute allowed or approved actions through idempotent Activities.
-10. Resolve each business capability to the tenant's configured integration adapter.
-11. Persist action attempts and outcomes; reconcile any ambiguous result before retrying an unsafe side effect.
-12. Update durable memory without allowing summaries or inferences to overwrite authoritative facts.
-13. Install approved event and timer wake conditions.
-14. Wait for the next event, timeout, cancellation, or operator intervention.
+8. If deterministic validation rejects the proposal, allow at most two complete replacement proposals using the exact controlled error, rejected proposal, identical loaded context, and unchanged workflow timestamp. Correction feedback is not business evidence; exhaustion fails closed into operator intervention.
+9. Create durable approval requests for actions that require human authorization.
+10. Execute allowed or approved actions through idempotent Activities.
+11. Resolve each business capability to the tenant's configured integration adapter.
+12. Persist action attempts and outcomes; reconcile any ambiguous result before retrying an unsafe side effect.
+13. Update durable memory without allowing summaries or inferences to overwrite authoritative facts.
+14. Install approved event and timer wake conditions.
+15. Wait for the next event, timeout, cancellation, or operator intervention.
 
 Model calls, database access, and network calls must not run directly in Temporal workflow code. They belong in Activities so workflow execution remains deterministic and replay-safe. The workflow contains only deterministic orchestration and state. Hard lifecycle transitions, completion criteria, approval requirements, and safety restrictions are application rules; the model chooses only among allowed proposals.
 
@@ -894,7 +895,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
 - [ ] Implement quarantine resolution, late correlation, and replay.
 - [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Automatic single-flight event, timer, priority-review, action-resolution, and exactly-once logical manual-reevaluation turns are complete; reserved manual wakes supersede the old plan and precede ordinary matching events/timers. Batching, cancellation/takeover priority, and the remaining tie rules remain.
-- [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, bounded PostgreSQL event/review/action-result context loader, deterministic scripted-runner path, and automatic workflow consumption through the action gateway.
+- [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, at-most-two validator-guided semantic corrections against one trusted snapshot, bounded PostgreSQL event/review/action-result context loader, deterministic scripted-runner path, and automatic workflow consumption through the action gateway.
 - [x] Implement bounded context assembly, sourced authoritative-fact/customer-claim projection, provenance-checked summaries and commitments, immutable state revisions, and deterministic lifecycle projection.
 - [ ] Implement application-owned conversation/message history, memory compaction, and compaction lineage.
 - [x] Implement initial typed decision validation for exact event lineage, allowed actions and wake events, per-turn action limits, and timer bounds.

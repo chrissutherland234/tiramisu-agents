@@ -12,7 +12,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from tiramisu_agents.agents.context import PostgresAgentContextLoader
-from tiramisu_agents.agents.runner import AgentTurnRunner
+from tiramisu_agents.agents.runner import AgentTurnRunner, ProposalCorrection
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
 from tiramisu_agents.db.models.processes import ProcessInstance
@@ -29,6 +29,8 @@ from tiramisu_agents.security.tenancy import (
     require_active_tenant,
     require_authorized_tenant,
 )
+
+_MAX_SEMANTIC_CORRECTIONS = 2
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ class AgentTurnCommand:
 @dataclass(frozen=True)
 class AgentTurnActivityResult:
     decision_json: str
+    proposal_attempt_count: int = 1
 
 
 class AgentTurnActivities:
@@ -117,35 +120,52 @@ class AgentTurnActivities:
                     compatibility=self._compatibility,
                     deployment_release=self._deployment_release,
                 )
-            # Recheck as close as possible to the nondeterministic model call.
-            async with self._session_factory.begin() as session:
-                await require_active_tenant(
-                    session,
-                    tenant_id,
-                    deployment_id=self._deployment_release.deployment_id,
+            decision_policy = definition.decision_policy()
+            expected_event_ids = frozenset(event.event_id for event in turn_input.events)
+            expected_review_command_ids = frozenset(
+                review.command_id for review in turn_input.reviews
+            )
+            expected_action_attempt_ids = frozenset(
+                action_result.attempt_id for action_result in turn_input.action_results
+            )
+            expected_timer_ids = frozenset(turn_input.timer_ids)
+            correction: ProposalCorrection | None = None
+            for proposal_attempt_count in range(1, _MAX_SEMANTIC_CORRECTIONS + 2):
+                # Recheck safety controls before every nondeterministic model call without
+                # rebuilding the trusted turn snapshot used by corrective attempts.
+                await self._require_model_execution_allowed(
+                    tenant_id=tenant_id,
+                    process_instance_id=UUID(command.process_instance_id),
                 )
-                process = await session.scalar(
-                    select(ProcessInstance).where(
-                        ProcessInstance.id == UUID(command.process_instance_id)
+                if proposal_attempt_count == 1 and self._event_observer is not None:
+                    for event in turn_input.events:
+                        self._event_observer(event, turn_input.process.authoritative_facts)
+                decision = await self._runner.run_turn(turn_input, correction=correction)
+                try:
+                    validated = validate_decision(
+                        decision,
+                        decision_policy,
+                        workflow_now=command.workflow_now,
+                        expected_event_ids=expected_event_ids,
+                        expected_review_command_ids=expected_review_command_ids,
+                        expected_action_attempt_ids=expected_action_attempt_ids,
+                        expected_timer_ids=expected_timer_ids,
                     )
+                except DecisionRejected as error:
+                    if proposal_attempt_count > _MAX_SEMANTIC_CORRECTIONS:
+                        raise ApplicationError(
+                            str(error), type="DecisionRejected", non_retryable=True
+                        ) from error
+                    correction = ProposalCorrection(
+                        correction_attempt=proposal_attempt_count,
+                        rejected_decision=decision,
+                        validation_error=str(error),
+                    )
+                    continue
+                return AgentTurnActivityResult(
+                    decision_json=validated.model_dump_json(),
+                    proposal_attempt_count=proposal_attempt_count,
                 )
-                if process is None:
-                    raise DeploymentCompatibilityError("process instance is unavailable")
-                self._compatibility.require_process(
-                    process_type=process.process_type,
-                    definition_version=process.definition_version,
-                    client_pack_fingerprint=process.client_pack_fingerprint,
-                    extension_manifest_hash=process.extension_manifest_hash,
-                    process_definition_fingerprint=process.process_definition_fingerprint,
-                )
-                self._deployment_release.require_process(
-                    deployment_id=process.deployment_id,
-                    deployment_release_fingerprint=process.deployment_release_fingerprint,
-                    temporal_task_queue=process.temporal_task_queue,
-                )
-            if self._event_observer is not None:
-                for event in turn_input.events:
-                    self._event_observer(event, turn_input.process.authoritative_facts)
         except DeploymentCompatibilityError as error:
             raise ApplicationError(
                 str(error),
@@ -158,23 +178,34 @@ class AgentTurnActivities:
                 type=type(error).__name__,
                 non_retryable=True,
             ) from error
-        decision = await self._runner.run_turn(turn_input)
-        try:
-            validated = validate_decision(
-                decision,
-                definition.decision_policy(),
-                workflow_now=command.workflow_now,
-                expected_event_ids=frozenset(event.event_id for event in turn_input.events),
-                expected_review_command_ids=frozenset(
-                    review.command_id for review in turn_input.reviews
-                ),
-                expected_action_attempt_ids=frozenset(
-                    action_result.attempt_id for action_result in turn_input.action_results
-                ),
-                expected_timer_ids=frozenset(turn_input.timer_ids),
+        raise AssertionError("agent proposal loop exited without a result")
+
+    async def _require_model_execution_allowed(
+        self,
+        *,
+        tenant_id: UUID,
+        process_instance_id: UUID,
+    ) -> None:
+        async with self._session_factory.begin() as session:
+            await require_active_tenant(
+                session,
+                tenant_id,
+                deployment_id=self._deployment_release.deployment_id,
             )
-        except DecisionRejected as error:
-            raise ApplicationError(
-                str(error), type="DecisionRejected", non_retryable=True
-            ) from error
-        return AgentTurnActivityResult(decision_json=validated.model_dump_json())
+            process = await session.scalar(
+                select(ProcessInstance).where(ProcessInstance.id == process_instance_id)
+            )
+            if process is None:
+                raise DeploymentCompatibilityError("process instance is unavailable")
+            self._compatibility.require_process(
+                process_type=process.process_type,
+                definition_version=process.definition_version,
+                client_pack_fingerprint=process.client_pack_fingerprint,
+                extension_manifest_hash=process.extension_manifest_hash,
+                process_definition_fingerprint=process.process_definition_fingerprint,
+            )
+            self._deployment_release.require_process(
+                deployment_id=process.deployment_id,
+                deployment_release_fingerprint=process.deployment_release_fingerprint,
+                temporal_task_queue=process.temporal_task_queue,
+            )

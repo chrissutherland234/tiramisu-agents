@@ -25,3 +25,4 @@ async def test_scripted_agent_returns_decisions_in_order() -> None:
 
     assert await runner.run_turn(turn_input) == expected
     assert runner.turn_inputs == [turn_input]
+    assert runner.corrections == [None]

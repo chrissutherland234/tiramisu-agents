@@ -50,7 +50,7 @@ async def _delete_tenant_data(
 
 
 @pytest.mark.asyncio
-async def test_activity_loads_context_and_rejects_out_of_policy_decision() -> None:
+async def test_activity_repairs_then_rejects_out_of_policy_decisions_with_one_snapshot() -> None:
     runtime_url = os.getenv(
         "TIRAMISU_DATABASE_URL",
         "postgresql+asyncpg://tiramisu_app:tiramisu_app@localhost:5432/tiramisu_test",
@@ -102,7 +102,18 @@ async def test_activity_loads_context_and_rejects_out_of_policy_decision() -> No
             ),
         ),
     )
-    scripted_agent = ScriptedAgent([valid_decision, invalid_decision])
+    repaired_decision = valid_decision.model_copy(update={"decision_id": uuid4()})
+    scripted_agent = ScriptedAgent(
+        [
+            valid_decision,
+            invalid_decision,
+            invalid_decision,
+            repaired_decision,
+            invalid_decision,
+            invalid_decision,
+            invalid_decision,
+        ]
+    )
     activities = AgentTurnActivities(
         runtime_factory,
         registry,
@@ -149,16 +160,45 @@ async def test_activity_loads_context_and_rejects_out_of_policy_decision() -> No
 
         result = await activities.run_agent_turn(command)
         assert AgentDecision.model_validate_json(result.decision_json) == valid_decision
+        assert result.proposal_attempt_count == 1
         assert (
             scripted_agent.turn_inputs[0].events[0].process_instance_id
             == ingested.process_instance_id
         )
         assert "Allowed action types" in scripted_agent.turn_inputs[0].instructions
 
+        repaired = await activities.run_agent_turn(command)
+        assert AgentDecision.model_validate_json(repaired.decision_json) == repaired_decision
+        assert repaired.proposal_attempt_count == 3
+        assert scripted_agent.turn_inputs[1] is scripted_agent.turn_inputs[2]
+        assert scripted_agent.turn_inputs[2] is scripted_agent.turn_inputs[3]
+        corrections = scripted_agent.corrections[2:4]
+        assert all(correction is not None for correction in corrections)
+        assert [
+            correction.correction_attempt if correction is not None else None
+            for correction in corrections
+        ] == [1, 2]
+        assert all(
+            correction is not None and correction.rejected_decision is invalid_decision
+            for correction in corrections
+        )
+        assert all(
+            correction is not None
+            and correction.validation_error == "action type is not allowed: delete_everything"
+            for correction in corrections
+        )
+
         with pytest.raises(ApplicationError) as raised:
             await activities.run_agent_turn(command)
         assert raised.value.non_retryable is True
         assert raised.value.type == "DecisionRejected"
+        assert len(scripted_agent.turn_inputs) == 7
+        assert scripted_agent.turn_inputs[4] is scripted_agent.turn_inputs[5]
+        assert scripted_agent.turn_inputs[5] is scripted_agent.turn_inputs[6]
+        assert [
+            item.correction_attempt if item is not None else None
+            for item in scripted_agent.corrections[4:]
+        ] == [None, 1, 2]
 
         async with admin_factory.begin() as session:
             process = await session.get(ProcessInstance, ingested.process_instance_id)
