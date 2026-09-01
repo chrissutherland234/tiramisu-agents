@@ -509,12 +509,19 @@ async def _load_timeline(
     )
     action_rows = (
         await session.execute(
-            select(ActionRequest, ActionRevision)
+            select(ActionRequest, ActionRevision, ProcessStateRevision)
             .join(
                 ActionRevision,
                 and_(
                     ActionRevision.action_request_id == ActionRequest.id,
                     ActionRevision.revision == ActionRequest.current_revision,
+                ),
+            )
+            .outerjoin(
+                ProcessStateRevision,
+                and_(
+                    ProcessStateRevision.process_instance_id == ActionRequest.process_instance_id,
+                    ProcessStateRevision.agent_turn_id == ActionRequest.agent_turn_id,
                 ),
             )
             .where(ActionRequest.process_instance_id == process_instance_id)
@@ -526,11 +533,14 @@ async def _load_timeline(
         TimelineItem(
             id=str(action.id),
             kind="action",
-            occurred_at=action.created_at,
+            occurred_at=(
+                turn_revision.created_at if turn_revision is not None else action.created_at
+            ),
             title=action.action_type,
             status=action.status,
             detail={
                 "revision": revision.revision,
+                "proposed_at": action.created_at,
                 "parameters": revision.parameters,
                 "rationale": revision.rationale,
                 "supersedes_action_request_id": (
@@ -540,7 +550,7 @@ async def _load_timeline(
                 ),
             },
         )
-        for action, revision in action_rows
+        for action, revision, turn_revision in action_rows
     )
     attempts = (
         await session.scalars(
@@ -641,4 +651,12 @@ async def _load_timeline(
         )
         for control in controls
     )
-    return sorted(items, key=lambda item: (item.occurred_at, item.kind, item.id))[-limit:]
+    return sorted(
+        items,
+        key=lambda item: (
+            item.occurred_at,
+            1 if item.kind == "action" else 0,
+            item.kind,
+            item.id,
+        ),
+    )[-limit:]

@@ -291,6 +291,14 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             assert decision_item["detail"]["memory_summary"] == (
                 "The customer is waiting for an initial response."
             )
+            timeline = detail.json()["timeline"]
+            decision_index = next(
+                index for index, item in enumerate(timeline) if item["kind"] == "decision"
+            )
+            action_index = next(
+                index for index, item in enumerate(timeline) if item["kind"] == "action"
+            )
+            assert decision_index < action_index
             bounded_detail = await client.get(
                 f"/v1/processes/{process_id}?timeline_limit=1", headers=headers
             )
