@@ -283,6 +283,7 @@ i.status-review, .large-status.status-review { background: color-mix(in srgb, va
 i.status-waiting, .large-status.status-waiting { background: color-mix(in srgb, var(--yellow) 18%, var(--surface)); color: var(--yellow); }
 i.status-active, .large-status.status-active { background: color-mix(in srgb, var(--green) 17%, var(--surface)); color: var(--green); }
 i.status-completed, .large-status.status-completed { background: color-mix(in srgb, var(--teal) 17%, var(--surface)); color: var(--teal); }
+i.status-conflict, .large-status.status-conflict { background: color-mix(in srgb, var(--red) 16%, var(--surface)); color: var(--red); }
 .wake-panel { border-color: var(--crust); background: var(--mantle); color: var(--text); }
 .wake-panel .eyebrow { color: var(--mauve); }
 .wake-list span { border-color: var(--border); color: var(--subtext); }
@@ -371,6 +372,10 @@ summary { font-size: 11px; }
 .wake-list span { font-size: 12px; }
 .memory-history li p { line-height: 1.5; }
 .memory-history time { margin-top: 4px; }
+
+/* Older memory timestamps are metadata, not part of the memory sentence. */
+.memory-history time { color: var(--muted); font-size: 10px; font-weight: 500; letter-spacing: .01em; }
+.process-wakes { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .timeline-content > div:first-child { letter-spacing: .06em; }
 .timeline-content h4 { font-size: 15px; }
 pre { font-size: 12px; }

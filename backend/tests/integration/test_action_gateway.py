@@ -21,15 +21,25 @@ from tiramisu_agents.adapters.registry import ActionAdapterRegistry
 from tiramisu_agents.adapters.stubs import StubActionAdapter, StubAmbiguousSuccess
 from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.actions import (
+    ActionConflict,
     ActionResolution,
     OperatorActionResolution,
     PermissionOutcome,
 )
-from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision, DecisionStatus
+from tiramisu_agents.core.contracts.decisions import (
+    ActionProposal,
+    AgentDecision,
+    DecisionStatus,
+    EventWakeCondition,
+)
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
 from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
-from tiramisu_agents.core.ports.actions import AmbiguousActionOutcome, ProviderActionResult
+from tiramisu_agents.core.ports.actions import (
+    AmbiguousActionOutcome,
+    DefinitiveActionConflict,
+    ProviderActionResult,
+)
 from tiramisu_agents.db.models.actions import (
     ActionAttempt,
     ActionPolicyRecord,
@@ -357,6 +367,20 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
             [
                 StubAmbiguousSuccess(availability_result),
                 AmbiguousActionOutcome("provider timed out with no lookup record"),
+                DefinitiveActionConflict(
+                    ActionConflict(
+                        code="resource_unavailable",
+                        message="the requested resource is no longer available",
+                        details={"resource_type": "appointment_slot"},
+                        facts=(
+                            FactObservation(
+                                key="booking.available_slots",
+                                kind=FactKind.AUTHORITATIVE,
+                                value=["2026-09-04T14:00:00+00:00"],
+                            ),
+                        ),
+                    )
+                ),
             ]
         )
         executor = ActionExecutor(
@@ -491,6 +515,93 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         assert unresolved.status == "unknown"
         assert still_unknown.status == "unknown"
         assert len(availability_adapter.requests) == 2
+
+        conflict_turn_id = uuid4()
+        conflict_decision = AgentDecision(
+            based_on_event_ids=(event.event_id,),
+            status=DecisionStatus.ACTIVE,
+            actions=(
+                ActionProposal(
+                    logical_action_key="availability_conflict_1",
+                    action_type="find_available_slots",
+                    parameters={"days": 21},
+                    rationale="Exercise a definitive provider resource conflict.",
+                ),
+            ),
+        )
+        async with runtime_factory.begin() as session:
+            conflict_action = (
+                await gateway.persist_decision(
+                    session,
+                    tenant_id=tenant_id,
+                    process_instance_id=ingested.process_instance_id,
+                    agent_turn_id=conflict_turn_id,
+                    process_definition_version=definition.version,
+                    decision=conflict_decision,
+                    policy=definition.action_policy(),
+                )
+            )[0]
+        conflict_result = await executor.execute(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            action_request_id=conflict_action.action_request_id,
+            revision=1,
+        )
+        conflict_retry = await executor.execute(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            action_request_id=conflict_action.action_request_id,
+            revision=1,
+        )
+        assert conflict_result == conflict_retry
+        assert conflict_result.status == "conflict"
+        assert conflict_result.conflict is not None
+        assert conflict_result.conflict.code == "resource_unavailable"
+        assert conflict_result.facts[0].value == ["2026-09-04T14:00:00+00:00"]
+        assert len(availability_adapter.requests) == 3
+
+        conflict_follow_up = AgentDecision(
+            based_on_event_ids=(),
+            based_on_action_attempt_ids=(conflict_result.attempt_id,),
+            status=DecisionStatus.WAITING,
+            wake_conditions=(EventWakeCondition(event_type="customer.email_received"),),
+        )
+        conflict_agent = ScriptedAgent([conflict_follow_up])
+        await AgentTurnActivities(
+            runtime_factory,
+            ProcessDefinitionRegistry([definition]),
+            conflict_agent,
+            compatibility=compatibility,
+            deployment_release=TEST_DEPLOYMENT_RELEASE,
+        ).run_agent_turn(
+            AgentTurnCommand(
+                tenant_id=str(tenant_id),
+                process_instance_id=str(ingested.process_instance_id),
+                process_definition_id=definition.id,
+                process_definition_version=definition.version,
+                turn_id=str(uuid4()),
+                event_ids=(),
+                workflow_now=datetime.now(UTC),
+                action_attempt_ids=(str(conflict_result.attempt_id),),
+            )
+        )
+        follow_up_result = conflict_agent.turn_inputs[0].action_results[0]
+        assert follow_up_result.status == "conflict"
+        assert follow_up_result.conflict == conflict_result.conflict
+        async with runtime_factory.begin() as session:
+            await ProcessStateService().apply_decision(
+                session,
+                tenant_id=tenant_id,
+                process_instance_id=ingested.process_instance_id,
+                agent_turn_id=uuid4(),
+                decision=conflict_follow_up,
+            )
+            await set_tenant_context(session, tenant_id)
+            process = await session.get(ProcessInstance, ingested.process_instance_id)
+            assert process is not None
+            assert process.authoritative_facts["booking.available_slots"] == [
+                "2026-09-04T14:00:00+00:00"
+            ]
 
         operator_resolution = OperatorActionResolution(
             tenant_id=tenant_id,

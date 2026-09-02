@@ -18,6 +18,7 @@ const summary = {
   state_version: 2,
   memory_summary: "The customer is waiting for a response.",
   open_commitments: ["Send the approved response"],
+  current_wake_conditions: [{ type: "human", interaction: "approval" }],
   pending_reviews: 1,
   updated_at: now,
 };
@@ -41,7 +42,10 @@ const detail = {
   ...summary,
   workflow_id: `process:${processId}`,
   authoritative_facts: { "customer.identifier": "customer-1" },
-  customer_claims: { "customer.initial_request": "Tuesday please" },
+  customer_claims: {
+    "customer.initial_request": "Tuesday please",
+    "customer.last_message": "Thursday afternoon please",
+  },
   fact_provenance: {
     "authoritative:customer.identifier": {
       source_type: "event",
@@ -75,7 +79,19 @@ const detail = {
       occurred_at: "2026-08-30T08:00:00Z",
       title: "mail.received",
       status: "processed",
-      detail: {},
+      detail: {
+        facts: [{ key: "customer.initial_request", kind: "customer_claim", value: "Tuesday please" }],
+      },
+    },
+    {
+      id: "22222222-2222-4222-8222-222222222224",
+      kind: "event",
+      occurred_at: "2026-08-30T08:30:00Z",
+      title: "customer.email_received",
+      status: "processed",
+      detail: {
+        facts: [{ key: "customer.last_message", kind: "customer_claim", value: "Thursday afternoon please" }],
+      },
     },
     {
       id: "33333333-3333-4333-8333-333333333334",
@@ -205,7 +221,7 @@ describe("operator console", () => {
     );
     expect(wrapper.get('[data-testid="timeline"]').text()).toContain("Wakes on");
     expect(wrapper.get('[data-testid="timeline"]').text()).toContain("Human · approval");
-    expect(wrapper.get('[data-testid="timeline"]').findAll(".timeline-row")).toHaveLength(1);
+    expect(wrapper.get('[data-testid="timeline"]').findAll(".timeline-row")).toHaveLength(2);
     const memoryHistory = wrapper.get('[data-testid="memory-history"]');
     expect(memoryHistory.text()).toContain("The customer asked to book on Tuesday.");
     expect(memoryHistory.text()).not.toContain("The customer is waiting for a response.");
@@ -219,6 +235,8 @@ describe("operator console", () => {
       "Temporal was restored.",
     );
     expect(wrapper.text()).toContain("Tuesday please");
+    expect(wrapper.text()).toContain("Thursday afternoon please");
+    expect(wrapper.get('[data-testid="process-list"]').text()).toContain("Human · approval");
     expect(wrapper.text()).toContain("event · 66666666…6666");
     const processListCall = fetchMock.mock.calls.find(([input]) =>
       String(input).endsWith("/v1/processes"),

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 from uuid import UUID
 
+from tiramisu_agents.core.contracts.actions import ActionConflict
 from tiramisu_agents.core.contracts.knowledge import FactObservation
 
 
@@ -35,6 +36,14 @@ class ActionAdapter(Protocol):
 
 class DefinitiveActionFailure(RuntimeError):
     """The provider definitively rejected or did not perform an action."""
+
+
+class DefinitiveActionConflict(DefinitiveActionFailure):
+    """The provider definitively declined an action because current state conflicts."""
+
+    def __init__(self, conflict: ActionConflict) -> None:
+        self.conflict = conflict
+        super().__init__(conflict.message)
 
 
 class AmbiguousActionOutcome(RuntimeError):

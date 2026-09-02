@@ -1039,7 +1039,7 @@ class ProcessMailboxWorkflow:
                         reconciliation_error, "DeploymentCompatibilityError"
                     ):
                         raise
-            if result["status"] in {"succeeded", "failed"}:
+            if result["status"] in {"succeeded", "failed", "conflict"}:
                 self._remove_pending_action(action_request_id)
             return result
         except ActivityError as error:

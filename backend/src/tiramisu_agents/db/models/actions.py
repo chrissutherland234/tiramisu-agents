@@ -28,7 +28,7 @@ class ActionRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint(
             "status IN ('allowed', 'denied', 'pending_approval', 'approved', "
             "'rejected', 'superseded', 'executing', 'succeeded', 'failed', "
-            "'unknown', 'reconciling')",
+            "'conflict', 'unknown', 'reconciling')",
             name="status_valid",
         ),
         CheckConstraint("current_revision >= 1", name="current_revision_positive"),
@@ -206,7 +206,7 @@ class ActionAttempt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("attempt_number >= 1", name="attempt_number_positive"),
         CheckConstraint(
-            "status IN ('executing', 'succeeded', 'failed', 'unknown', 'reconciling')",
+            "status IN ('executing', 'succeeded', 'failed', 'conflict', 'unknown', 'reconciling')",
             name="status_valid",
         ),
         ForeignKeyConstraint(
@@ -249,6 +249,7 @@ class ActionAttempt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_reference: Mapped[str | None] = mapped_column(String(500))
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    conflict: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     facts: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, server_default=text("'[]'::jsonb"), nullable=False
     )

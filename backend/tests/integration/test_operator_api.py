@@ -228,6 +228,42 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             approval_request = await session.get(ApprovalRequest, actions[0].approval_request_id)
             assert approval_request is not None
             approval_request.required_role = "message_approver"
+            action_request = await session.get(ActionRequest, actions[0].action_request_id)
+            assert action_request is not None
+            action_request.status = "conflict"
+            conflict_attempt = ActionAttempt(
+                tenant_id=tenant_id,
+                process_instance_id=process_id,
+                action_request_id=actions[0].action_request_id,
+                revision=1,
+                attempt_number=1,
+                idempotency_key="c" * 64,
+                adapter_id="stub.booking.v1",
+                status="conflict",
+                conflict={
+                    "code": "resource_unavailable",
+                    "message": "the requested booking slot is no longer available",
+                    "details": {"resource_type": "appointment_slot"},
+                    "facts": [
+                        {
+                            "key": "booking.available_slots",
+                            "kind": "authoritative",
+                            "value": ["2026-09-04T10:00:00+00:00"],
+                        }
+                    ],
+                },
+                facts=[
+                    {
+                        "key": "booking.available_slots",
+                        "kind": "authoritative",
+                        "value": ["2026-09-04T10:00:00+00:00"],
+                    }
+                ],
+                error="the requested booking slot is no longer available",
+                started_at=datetime.now(UTC),
+                completed_at=datetime.now(UTC),
+            )
+            session.add(conflict_attempt)
             await ProcessControlService().record_intervention(
                 session,
                 InterventionInput(
@@ -257,6 +293,9 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             assert processes.json()[0]["id"] == str(process_id)
             assert processes.json()[0]["status"] == "review"
             assert processes.json()[0]["pending_reviews"] == 1
+            assert processes.json()[0]["current_wake_conditions"] == [
+                {"type": "human", "interaction": "approval"}
+            ]
 
             detail = await client.get(f"/v1/processes/{process_id}", headers=headers)
             assert detail.status_code == 200
@@ -302,6 +341,30 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             assert timeline[decision_index]["agent_turn_id"] == str(turn_id)
             assert timeline[action_index]["agent_turn_id"] == str(turn_id)
             assert timeline[action_index]["action_request_id"] == str(actions[0].action_request_id)
+            conflict_attempt_item = next(
+                item
+                for item in timeline
+                if item["kind"] == "attempt" and item["status"] == "conflict"
+            )
+            assert conflict_attempt_item["detail"]["conflict"] == {
+                "code": "resource_unavailable",
+                "message": "the requested booking slot is no longer available",
+                "details": {"resource_type": "appointment_slot"},
+                "facts": [
+                    {
+                        "key": "booking.available_slots",
+                        "kind": "authoritative",
+                        "value": ["2026-09-04T10:00:00+00:00"],
+                    }
+                ],
+            }
+            assert conflict_attempt_item["detail"]["facts"] == [
+                {
+                    "key": "booking.available_slots",
+                    "kind": "authoritative",
+                    "value": ["2026-09-04T10:00:00+00:00"],
+                }
+            ]
             bounded_detail = await client.get(
                 f"/v1/processes/{process_id}?timeline_limit=1", headers=headers
             )

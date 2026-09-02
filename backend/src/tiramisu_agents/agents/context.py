@@ -6,6 +6,7 @@ from pydantic import TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tiramisu_agents.core.contracts.actions import ActionConflict
 from tiramisu_agents.core.contracts.decisions import WakeCondition
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
@@ -279,6 +280,11 @@ class PostgresAgentContextLoader:
                     FactObservation.model_validate(fact) for fact in row.ActionAttempt.facts
                 ),
                 error=row.ActionAttempt.error,
+                conflict=(
+                    ActionConflict.model_validate(row.ActionAttempt.conflict)
+                    if row.ActionAttempt.conflict is not None
+                    else None
+                ),
                 operator_resolution_id=(
                     row.ActionReconciliationDecision.id
                     if row.ActionReconciliationDecision is not None

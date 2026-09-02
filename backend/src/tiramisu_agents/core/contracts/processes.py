@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from tiramisu_agents.core.contracts.actions import ActionAttemptStatus
+from tiramisu_agents.core.contracts.actions import ActionAttemptStatus, ActionConflict
 from tiramisu_agents.core.contracts.decisions import WakeCondition
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.contracts.knowledge import FactObservation
@@ -45,6 +45,7 @@ class ActionResultContext(BaseModel):
     result: dict[str, Any] | None = None
     facts: tuple[FactObservation, ...] = ()
     error: str | None = None
+    conflict: ActionConflict | None = None
     operator_resolution_id: UUID | None = None
     operator_actor_id: UUID | None = None
     operator_evidence: str | None = None

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
 from tiramisu_agents.core.contracts.actions import (
     ActionAttemptStatus,
+    ActionConflict,
     ActionRequestStatus,
     ApprovalStatus,
     PermissionOutcome,
@@ -19,6 +20,7 @@ from tiramisu_agents.core.contracts.actions import (
 from tiramisu_agents.core.contracts.knowledge import FactObservation
 from tiramisu_agents.core.ports.actions import (
     AmbiguousActionOutcome,
+    DefinitiveActionConflict,
     DefinitiveActionFailure,
     ProviderActionRequest,
     ProviderActionResult,
@@ -62,6 +64,7 @@ class ActionExecutionResult:
     result: dict[str, object] | None
     facts: tuple[FactObservation, ...]
     error: str | None
+    conflict: ActionConflict | None = None
 
 
 def execution_idempotency_key(
@@ -143,6 +146,7 @@ class ActionExecutor:
             if attempt.status in {
                 ActionAttemptStatus.SUCCEEDED.value,
                 ActionAttemptStatus.FAILED.value,
+                ActionAttemptStatus.CONFLICT.value,
             }:
                 return self._result(attempt)
             request.status = ActionRequestStatus.EXECUTING.value
@@ -197,6 +201,13 @@ class ActionExecutor:
             except Exception as error:
                 provider_error = error
 
+        if isinstance(provider_error, DefinitiveActionConflict):
+            return await self._record_conflict(
+                tenant_id,
+                action_request_id,
+                key,
+                provider_error.conflict,
+            )
         if isinstance(provider_error, DefinitiveActionFailure):
             error = provider_error
             return await self._record_failure(tenant_id, action_request_id, key, str(error))
@@ -272,6 +283,7 @@ class ActionExecutor:
             if attempt.status in {
                 ActionAttemptStatus.SUCCEEDED.value,
                 ActionAttemptStatus.FAILED.value,
+                ActionAttemptStatus.CONFLICT.value,
             }:
                 return self._result(attempt)
             attempt.status = ActionAttemptStatus.RECONCILING.value
@@ -374,6 +386,7 @@ class ActionExecutor:
             ActionRequestStatus.RECONCILING.value,
             ActionRequestStatus.SUCCEEDED.value,
             ActionRequestStatus.FAILED.value,
+            ActionRequestStatus.CONFLICT.value,
         }
         if outcome is PermissionOutcome.ALLOW:
             if request.status not in {ActionRequestStatus.ALLOWED.value, *retryable_statuses}:
@@ -433,6 +446,23 @@ class ActionExecutor:
             tenant_id, action_request_id, key, ActionAttemptStatus.FAILED, error=error
         )
 
+    async def _record_conflict(
+        self,
+        tenant_id: UUID,
+        action_request_id: UUID,
+        key: str,
+        conflict: ActionConflict,
+    ) -> ActionExecutionResult:
+        return await self._record_terminal(
+            tenant_id,
+            action_request_id,
+            key,
+            ActionAttemptStatus.CONFLICT,
+            facts=conflict.facts,
+            error=conflict.message,
+            conflict=conflict,
+        )
+
     async def _record_unknown(
         self, tenant_id: UUID, action_request_id: UUID, key: str, error: str
     ) -> ActionExecutionResult:
@@ -451,6 +481,7 @@ class ActionExecutor:
         result: dict[str, object] | None = None,
         facts: tuple[FactObservation, ...] = (),
         error: str | None = None,
+        conflict: ActionConflict | None = None,
     ) -> ActionExecutionResult:
         async with self._session_factory.begin() as session:
             await set_tenant_context(session, tenant_id)
@@ -465,11 +496,13 @@ class ActionExecutor:
             if attempt.status in {
                 ActionAttemptStatus.SUCCEEDED.value,
                 ActionAttemptStatus.FAILED.value,
+                ActionAttemptStatus.CONFLICT.value,
             }:
                 return self._result(attempt)
             attempt.status = status.value
             attempt.provider_reference = provider_reference
             attempt.result = result
+            attempt.conflict = conflict.model_dump(mode="json") if conflict is not None else None
             attempt.facts = [fact.model_dump(mode="json") for fact in facts]
             attempt.error = error[:2000] if error else None
             attempt.completed_at = datetime.now(UTC)
@@ -488,4 +521,9 @@ class ActionExecutor:
             result=attempt.result,
             facts=tuple(FactObservation.model_validate(fact) for fact in attempt.facts),
             error=attempt.error,
+            conflict=(
+                ActionConflict.model_validate(attempt.conflict)
+                if attempt.conflict is not None
+                else None
+            ),
         )

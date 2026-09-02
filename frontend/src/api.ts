@@ -11,6 +11,7 @@ export interface ProcessSummary {
   state_version: number;
   memory_summary: string | null;
   open_commitments: string[];
+  current_wake_conditions: WakeCondition[];
   pending_reviews: number;
   updated_at: string;
 }

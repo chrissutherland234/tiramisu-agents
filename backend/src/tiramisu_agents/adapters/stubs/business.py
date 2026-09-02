@@ -6,10 +6,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
+from tiramisu_agents.core.contracts.actions import ActionConflict
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
 from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.core.ports.actions import (
     ActionAdapter,
+    DefinitiveActionConflict,
     DefinitiveActionFailure,
     ProviderActionRequest,
     ProviderActionResult,
@@ -365,6 +367,7 @@ class StubBookingAdapter(_StatefulActionAdapter):
                 slot
                 for slot in self.state.available_slots
                 if datetime.fromisoformat(slot) <= horizon
+                and not any(booking.slot == slot for booking in self.state.bookings.values())
             )
             return ProviderActionResult(
                 provider_reference=f"availability_{request.idempotency_key[:16]}",
@@ -391,6 +394,27 @@ class StubBookingAdapter(_StatefulActionAdapter):
         )
         if slot not in available_slots:
             raise DefinitiveActionFailure("booking slot is not available")
+        remaining_slots = tuple(
+            candidate
+            for candidate in self.state.available_slots
+            if candidate != slot
+            and not any(booking.slot == candidate for booking in self.state.bookings.values())
+        )
+        if any(booking.slot == slot for booking in self.state.bookings.values()):
+            raise DefinitiveActionConflict(
+                ActionConflict(
+                    code="resource_unavailable",
+                    message="the requested booking slot is no longer available",
+                    details={"resource_type": "appointment_slot", "selected_slot": slot},
+                    facts=(
+                        FactObservation(
+                            key="booking.available_slots",
+                            kind=FactKind.AUTHORITATIVE,
+                            value=list(remaining_slots),
+                        ),
+                    ),
+                )
+            )
         reference = f"booking_{request.idempotency_key[:16]}"
         self.state.bookings[reference] = StubBooking(
             reference=reference,

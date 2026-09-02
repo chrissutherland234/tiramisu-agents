@@ -69,6 +69,7 @@ class ActionExecutionActivities:
             "attempt_id": str(result.attempt_id),
             "status": result.status.value,
             "facts": [fact.model_dump(mode="json") for fact in result.facts],
+            "conflict": result.conflict.model_dump(mode="json") if result.conflict else None,
         }
         return ExecuteActionResult(
             result_json=json.dumps(payload, sort_keys=True, separators=(",", ":"))

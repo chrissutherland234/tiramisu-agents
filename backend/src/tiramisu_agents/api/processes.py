@@ -54,6 +54,7 @@ class ProcessSummary(BaseModel):
     state_version: int
     memory_summary: str | None
     open_commitments: tuple[str, ...]
+    current_wake_conditions: tuple[WakeCondition, ...]
     pending_reviews: int
     updated_at: datetime
 
@@ -244,6 +245,10 @@ async def list_processes(
             state_version=process.state_version,
             memory_summary=process.memory_summary,
             open_commitments=tuple(process.open_commitments),
+            current_wake_conditions=tuple(
+                _wake_condition_adapter.validate_python(value)
+                for value in process.current_wake_conditions
+            ),
             pending_reviews=int(pending_count),
             updated_at=process.updated_at,
         )
@@ -600,6 +605,8 @@ async def _load_timeline(
             detail={
                 "provider_reference": attempt.provider_reference,
                 "result": attempt.result,
+                "conflict": attempt.conflict,
+                "facts": attempt.facts,
                 "error": attempt.error,
             },
         )

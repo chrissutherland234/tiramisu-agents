@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from tiramisu_agents.core.contracts.actions import ActionConflict
 from tiramisu_agents.core.contracts.decisions import (
     ActionProposal,
     AgentDecision,
@@ -13,6 +14,7 @@ from tiramisu_agents.core.contracts.decisions import (
     TimerWakeCondition,
 )
 from tiramisu_agents.core.contracts.events import CanonicalEvent
+from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
 from tiramisu_agents.core.policy import DecisionPolicy, DecisionRejected, validate_decision
 
@@ -25,6 +27,21 @@ def test_canonical_event_requires_timezone_aware_timestamps() -> None:
             source="website",
             source_event_id="enquiry-1",
             occurred_at=datetime(2026, 8, 29),
+        )
+
+
+def test_conflict_facts_must_be_authoritative() -> None:
+    with pytest.raises(ValidationError, match="must be authoritative"):
+        ActionConflict(
+            code="resource_unavailable",
+            message="the requested resource is no longer available",
+            facts=(
+                FactObservation(
+                    key="booking.available_slots",
+                    kind=FactKind.CUSTOMER_CLAIM,
+                    value=["2026-09-02T10:00:00+00:00"],
+                ),
+            ),
         )
 
 

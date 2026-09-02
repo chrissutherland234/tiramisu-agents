@@ -99,7 +99,9 @@ Publishing a definition or changing its prompt/model requires an approved baseli
 
 Create one public contract suite per provider-neutral port. Run the same suite against stubs, private adapters, and—where possible—provider sandboxes.
 
-Every mutating adapter contract must cover stable idempotency keys, timeout-after-success, lookup/reconciliation, definitive versus ambiguous failure, malformed provider responses, rate limits, and tenant credential selection. Domain-specific suites add email threading/bounce/opt-out, calendar time-zone/DST/conflict behavior, payment webhook duplication/expiry, and booking concurrency.
+Every mutating adapter contract must cover stable idempotency keys, timeout-after-success, lookup/reconciliation, definitive failure, definitive conflict, ambiguous failure, malformed provider responses, rate limits, and tenant credential selection. A definitive conflict must have no successful lookup result and must not cause a repeated side effect. Adapters that model resource holds must also cover expiry as either a success, a definitive conflict, or an explicitly ambiguous provider outcome. Domain-specific suites add email threading/bounce/opt-out, calendar time-zone/DST/conflict behavior, payment webhook duplication/expiry, and booking concurrency.
+
+Exact approval freshness is intentionally an execution-gateway contract, rather than an adapter contract: the core rechecks approval immediately before dispatch and the PostgreSQL integration suite proves that an expired approval cannot cross that fence. The same suite proves lookup-only reconciliation for ambiguous outcomes. This separation lets private adapters share the public provider contract without receiving review or database authority.
 
 Do not add a real provider until its stub passes the shared contract and the failure semantics are representable by the port.
 

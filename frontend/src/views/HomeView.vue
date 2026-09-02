@@ -22,6 +22,13 @@ interface TimelineGroup {
   items: TimelineItem[];
 }
 
+interface CustomerClaim {
+  id: string;
+  key: string;
+  value: unknown;
+  occurredAt: string;
+}
+
 const credentials = reactive<OperatorCredentials>({ tenantId: "", actorId: "" });
 const processes = ref<ProcessSummary[]>([]);
 const reviews = ref<PendingReview[]>([]);
@@ -74,6 +81,44 @@ const historicalMemories = computed(() => {
       seen.add(normalized);
       return [{ id: item.id, summary: normalized, occurredAt: item.occurred_at }];
     });
+});
+
+const customerClaims = computed<CustomerClaim[]>(() => {
+  const eventClaims = (selected.value?.timeline ?? []).flatMap((item) => {
+    if (item.kind !== "event" || !Array.isArray(item.detail.facts)) return [];
+    return item.detail.facts.flatMap((fact, index) => {
+      if (!fact || typeof fact !== "object") return [];
+      const observation = fact as Record<string, unknown>;
+      if (
+        observation.kind !== "customer_claim" ||
+        typeof observation.key !== "string" ||
+        !("value" in observation)
+      ) {
+        return [];
+      }
+      return [{
+        id: `${item.id}:${index}`,
+        key: observation.key,
+        value: observation.value,
+        occurredAt: item.occurred_at,
+      }];
+    });
+  });
+  const eventValues = new Set(eventClaims.map((claim) => `${claim.key}:${displayValue(claim.value)}`));
+  const currentClaims = Object.entries(selected.value?.customer_claims ?? {}).flatMap(
+    ([key, value]) =>
+      eventValues.has(`${key}:${displayValue(value)}`)
+        ? []
+        : [
+            {
+              id: `current:${key}`,
+              key,
+              value,
+              occurredAt: selected.value?.updated_at ?? "",
+            },
+          ],
+  );
+  return [...eventClaims, ...currentClaims];
 });
 
 const timelineGroups = computed<TimelineGroup[]>(() => {
@@ -376,6 +421,11 @@ function wakeLabel(wake: WakeCondition) {
   return `Human · ${wake.interaction}`;
 }
 
+function processWakeLabels(process: ProcessSummary) {
+  const labels = process.current_wake_conditions.map(wakeLabel);
+  return labels.length ? labels : ["No active wake"];
+}
+
 function formatDate(value?: string | null) {
   if (!value) return "Not set";
   return new Intl.DateTimeFormat(undefined, {
@@ -425,6 +475,12 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
   const source = selected.value?.fact_provenance[`${kind}:${key}`];
   if (!source) return "";
   return `${String(source.source_type).replaceAll("_", " ")} · ${shortId(String(source.source_id))}`;
+}
+
+function customerClaimLabel(key: string) {
+  if (key === "customer.initial_request") return "Initial request";
+  if (key === "customer.last_message") return "Customer message";
+  return key.replace(/^customer\./, "").replaceAll("_", " ");
 }
 </script>
 
@@ -534,7 +590,7 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
               <strong>{{ process.process_type.replaceAll("_", " ") }}</strong>
               <i :class="`status-${process.status}`">{{ process.status }}</i>
             </span>
-            <span>{{ shortId(process.id) }}</span>
+            <span class="process-wakes">{{ processWakeLabels(process).join(" · ") }}</span>
             <span class="process-item-foot">
               <time>{{ formatDate(process.updated_at) }}</time>
               <b v-if="process.pending_reviews">{{ process.pending_reviews }} needs review</b>
@@ -684,8 +740,8 @@ function factSource(kind: "authoritative" | "customer_claim", key: string) {
           </section>
           <section class="state-card claims-card">
             <p class="eyebrow">Customer claims</p>
-            <dl v-if="Object.keys(selected.customer_claims).length" class="fact-list">
-              <template v-for="(value, key) in selected.customer_claims" :key="key"><dt>{{ key }}</dt><dd>{{ displayValue(value) }}<small v-if="factSource('customer_claim', key)">{{ factSource("customer_claim", key) }}</small></dd></template>
+            <dl v-if="customerClaims.length" class="fact-list">
+              <template v-for="claim in customerClaims" :key="claim.id"><dt>{{ customerClaimLabel(claim.key) }}</dt><dd>{{ displayValue(claim.value) }}<small>{{ formatDate(claim.occurredAt) }}</small></dd></template>
             </dl><p v-else class="muted">No customer claims recorded.</p>
           </section>
         </div>

@@ -65,6 +65,10 @@ decision_guidance:
     Once an approved booking proposal returns booking.status confirmed, request the configured
     fictional payment immediately; do not wait for another customer email.
   - >
+    If an action result has status conflict, it is a definitive provider outcome. Do not repeat the
+    rejected action unchanged. Use any authoritative conflict facts to propose a permitted
+    alternative, or wait for customer or operator input when no safe alternative is available.
+  - >
     Whenever you propose one or more actions, return status active, never completed. Return
     status completed only on a later turn with no actions and no wake conditions, after
     authoritative action results show that every required action, including create_calendar_event,

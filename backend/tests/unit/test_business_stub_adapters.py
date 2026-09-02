@@ -12,9 +12,12 @@ from tiramisu_agents.adapters.stubs import (
     StubOutboundMessage,
     StubPaymentAdapter,
 )
-from tiramisu_agents.core.ports.actions import (
-    DefinitiveActionFailure,
-    ProviderActionRequest,
+from tiramisu_agents.core.contracts.actions import ActionConflict
+from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
+from tiramisu_agents.core.ports.actions import DefinitiveActionFailure, ProviderActionRequest
+from tiramisu_agents.testkit import (
+    MutatingActionAdapterContract,
+    assert_mutating_action_adapter_contract,
 )
 
 
@@ -36,6 +39,49 @@ async def test_booking_rejects_a_slot_the_provider_did_not_offer() -> None:
         )
 
     assert state.bookings == {}
+
+
+@pytest.mark.asyncio
+async def test_booking_reports_a_typed_conflict_for_a_slot_taken_after_availability() -> None:
+    state = StubBusinessState(now=datetime(2026, 9, 1, 9, tzinfo=UTC))
+    adapter = StubBookingAdapter(state)
+    selected_slot, *other_slots = state.available_slots
+    await assert_mutating_action_adapter_contract(
+        adapter,
+        MutatingActionAdapterContract(
+            successful_request=ProviderActionRequest(
+                action_type="propose_booking",
+                parameters={"customer_id": "first-customer", "slot": selected_slot},
+                idempotency_key="b" * 64,
+            ),
+            conflict_request=ProviderActionRequest(
+                action_type="propose_booking",
+                parameters={"customer_id": "second-customer", "slot": selected_slot},
+                idempotency_key="c" * 64,
+                authoritative_facts={"booking.available_slots": list(state.available_slots)},
+            ),
+            expected_conflict=ActionConflict(
+                code="resource_unavailable",
+                message="the requested booking slot is no longer available",
+                details={"resource_type": "appointment_slot", "selected_slot": selected_slot},
+                facts=(
+                    FactObservation(
+                        key="booking.available_slots",
+                        kind=FactKind.AUTHORITATIVE,
+                        value=other_slots,
+                    ),
+                ),
+            ),
+        ),
+    )
+    available = await adapter.execute(
+        ProviderActionRequest(
+            action_type="find_available_slots",
+            parameters={"days": 7},
+            idempotency_key="d" * 64,
+        )
+    )
+    assert available.result["slots"] == list(other_slots)
 
 
 @pytest.mark.asyncio

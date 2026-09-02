@@ -1180,6 +1180,106 @@ async def test_mailbox_runs_result_turn_after_approved_action_executes() -> None
 
 
 @pytest.mark.asyncio
+async def test_conflicted_action_is_not_retried_and_drives_one_result_turn() -> None:
+    task_queue = f"conflict-result-test-{uuid4()}"
+    action_request_id = str(uuid4())
+    action_attempt_id = str(uuid4())
+
+    @activity.defn(name="run_agent_turn")
+    async def run_agent_turn(command: dict[str, Any]) -> dict[str, str]:
+        workflow_now = datetime.fromisoformat(str(command["workflow_now"]))
+        decision: dict[str, Any] = {
+            "decision_id": str(uuid4()),
+            "based_on_event_ids": command["event_ids"],
+            "based_on_review_command_ids": [],
+            "based_on_action_attempt_ids": command["action_attempt_ids"],
+            "based_on_timer_ids": [],
+            "status": "waiting",
+            "actions": ([{"action_type": "propose_booking"}] if command["event_ids"] else []),
+            "wake_conditions": [
+                {"type": "timer", "at": (workflow_now + timedelta(minutes=1)).isoformat()}
+            ],
+            "memory_update": {},
+        }
+        return {"decision_json": json.dumps(decision)}
+
+    @activity.defn(name="persist_agent_actions")
+    async def persist_agent_actions(command: dict[str, Any]) -> dict[str, str]:
+        actions = (
+            [{"action_request_id": action_request_id, "revision": 1, "outcome": "allow"}]
+            if command["event_ids"]
+            else []
+        )
+        return {"actions_json": json.dumps(actions)}
+
+    @activity.defn(name="execute_action")
+    async def execute_action(command: dict[str, Any]) -> dict[str, str]:
+        return {
+            "result_json": json.dumps(
+                {
+                    "action_request_id": command["action_request_id"],
+                    "attempt_id": action_attempt_id,
+                    "status": "conflict",
+                    "idempotency_key": "f" * 64,
+                    "provider_reference": None,
+                    "result": None,
+                    "error": "the requested booking slot is no longer available",
+                    "conflict": {
+                        "code": "resource_unavailable",
+                        "message": "the requested booking slot is no longer available",
+                        "details": {"resource_type": "appointment_slot"},
+                        "facts": [],
+                    },
+                }
+            )
+        }
+
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as environment,
+        Worker(
+            environment.client,
+            task_queue=task_queue,
+            workflows=[ProcessMailboxWorkflow],
+            activities=[
+                run_agent_turn,
+                persist_agent_actions,
+                persist_process_state,
+                execute_action,
+            ],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            ProcessMailboxWorkflow.run,
+            MailboxInput(
+                tenant_id="tenant-1",
+                process_instance_id="process-1",
+                process_definition_id="example",
+                process_definition_version="1",
+            ),
+            id=f"conflict-result-mailbox-{uuid4()}",
+            task_queue=task_queue,
+        )
+        await handle.signal(
+            ProcessMailboxWorkflow.receive_event,
+            MailboxEvent(event_id=str(uuid4()), event_type="enquiry.created"),
+        )
+
+        for _ in range(100):
+            state = await handle.query(ProcessMailboxWorkflow.state)
+            if len(state.turn_records) == 2 and not state.turn_in_progress:
+                break
+            await asyncio.sleep(0.01)
+
+        assert state.pending_action_request_ids == ()
+        assert len(state.execution_records) == 1
+        assert json.loads(state.execution_records[0].result_json or "{}")["status"] == "conflict"
+        assert state.turn_records[1].action_attempt_ids == (action_attempt_id,)
+
+        await handle.signal(ProcessMailboxWorkflow.close)
+        assert (await handle.result()).closed is True
+
+
+@pytest.mark.asyncio
 async def test_autonomous_result_cannot_arm_a_timer_while_an_approval_is_pending() -> None:
     task_queue = f"mixed-action-test-{uuid4()}"
     autonomous_action_id = str(uuid4())
