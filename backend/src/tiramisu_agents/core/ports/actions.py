@@ -25,13 +25,16 @@ class ProviderActionResult:
     facts: tuple[FactObservation, ...] = ()
 
 
+ProviderActionOutcome = ProviderActionResult | ActionConflict
+
+
 class ActionAdapter(Protocol):
     id: str
     guarantees_idempotency: bool
 
     async def execute(self, request: ProviderActionRequest) -> ProviderActionResult: ...
 
-    async def lookup(self, idempotency_key: str) -> ProviderActionResult | None: ...
+    async def lookup(self, idempotency_key: str) -> ProviderActionOutcome | None: ...
 
 
 class DefinitiveActionFailure(RuntimeError):

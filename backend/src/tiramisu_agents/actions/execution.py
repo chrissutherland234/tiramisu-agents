@@ -163,6 +163,8 @@ class ActionExecutor:
                     f"lookup failed: {type(error).__name__}: {error}",
                 )
             if recovered is not None:
+                if isinstance(recovered, ActionConflict):
+                    return await self._record_conflict(tenant_id, action_request_id, key, recovered)
                 return await self._record_success(tenant_id, action_request_id, key, recovered)
             if not adapter.guarantees_idempotency:
                 return await self._record_unknown(
@@ -305,6 +307,8 @@ class ActionExecutor:
                 key,
                 "provider lookup could not establish the execution outcome",
             )
+        if isinstance(recovered, ActionConflict):
+            return await self._record_conflict(tenant_id, action_request_id, key, recovered)
         return await self._record_success(tenant_id, action_request_id, key, recovered)
 
     async def _require_reconciliation_enabled(self, session: AsyncSession, tenant_id: UUID) -> None:

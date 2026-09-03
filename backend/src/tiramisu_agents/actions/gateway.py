@@ -1,17 +1,17 @@
 """Idempotently persist action proposals before any side effect is possible."""
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from hashlib import sha256
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tiramisu_agents.core.action_identity import action_payload_identity
 from tiramisu_agents.core.action_policy import ConfiguredActionPolicy
 from tiramisu_agents.core.contracts.actions import (
+    ActionAttemptStatus,
     ActionRequestStatus,
     ApprovalStatus,
     PermissionOutcome,
@@ -19,6 +19,7 @@ from tiramisu_agents.core.contracts.actions import (
 from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision
 from tiramisu_agents.core.limits import require_action_parameters
 from tiramisu_agents.db.models.actions import (
+    ActionAttempt,
     ActionPolicyRecord,
     ActionRequest,
     ActionRevision,
@@ -54,12 +55,10 @@ class CommunicationPolicy:
 
 
 def action_payload_hash(action: ActionProposal) -> str:
-    payload = {
-        "action_type": action.action_type,
-        "parameters": action.model_dump(mode="json")["parameters"],
-    }
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return sha256(canonical.encode()).hexdigest()
+    return action_payload_identity(
+        action.action_type,
+        action.model_dump(mode="json")["parameters"],
+    )
 
 
 class ActionGateway:
@@ -98,6 +97,12 @@ class ActionGateway:
             review_command_ids=decision.based_on_review_command_ids,
         )
         used_targets: set[UUID] = set()
+        conflicted_payload_hashes = await self._conflicted_payload_hashes(
+            session,
+            tenant_id=tenant_id,
+            process_instance_id=process_instance_id,
+            action_attempt_ids=decision.based_on_action_attempt_ids,
+        )
         persisted: list[PersistedAction] = []
         for action in decision.actions:
             existing_action_id = await session.scalar(
@@ -108,6 +113,13 @@ class ActionGateway:
                     ActionRequest.logical_action_key == action.logical_action_key,
                 )
             )
+            if (
+                existing_action_id is None
+                and action_payload_hash(action) in conflicted_payload_hashes
+            ):
+                raise ActionPersistenceConflict(
+                    "decision repeats an action payload that just returned a definitive conflict"
+                )
             if (
                 existing_action_id is None
                 and communication_policy is not None
@@ -150,6 +162,42 @@ class ActionGateway:
                 )
             )
         return tuple(persisted)
+
+    @staticmethod
+    async def _conflicted_payload_hashes(
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+        process_instance_id: UUID,
+        action_attempt_ids: tuple[UUID, ...],
+    ) -> frozenset[str]:
+        if not action_attempt_ids:
+            return frozenset()
+        rows = (
+            await session.execute(
+                select(ActionRequest.action_type, ActionRevision.parameters)
+                .join(
+                    ActionAttempt,
+                    (ActionAttempt.action_request_id == ActionRequest.id)
+                    & (ActionAttempt.tenant_id == ActionRequest.tenant_id)
+                    & (ActionAttempt.process_instance_id == ActionRequest.process_instance_id),
+                )
+                .join(
+                    ActionRevision,
+                    (ActionRevision.action_request_id == ActionAttempt.action_request_id)
+                    & (ActionRevision.revision == ActionAttempt.revision)
+                    & (ActionRevision.tenant_id == ActionAttempt.tenant_id)
+                    & (ActionRevision.process_instance_id == ActionAttempt.process_instance_id),
+                )
+                .where(
+                    ActionAttempt.tenant_id == tenant_id,
+                    ActionAttempt.process_instance_id == process_instance_id,
+                    ActionAttempt.id.in_(action_attempt_ids),
+                    ActionAttempt.status == ActionAttemptStatus.CONFLICT.value,
+                )
+            )
+        ).all()
+        return frozenset(action_payload_identity(row.action_type, row.parameters) for row in rows)
 
     @staticmethod
     async def _enforce_communication_policy(

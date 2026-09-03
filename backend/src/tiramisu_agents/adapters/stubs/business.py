@@ -13,6 +13,7 @@ from tiramisu_agents.core.ports.actions import (
     ActionAdapter,
     DefinitiveActionConflict,
     DefinitiveActionFailure,
+    ProviderActionOutcome,
     ProviderActionRequest,
     ProviderActionResult,
 )
@@ -311,18 +312,26 @@ class _StatefulActionAdapter:
         self.state = state
         self.requests: list[ProviderActionRequest] = []
         self._results: dict[str, ProviderActionResult] = {}
+        self._conflicts: dict[str, ActionConflict] = {}
 
     async def execute(self, request: ProviderActionRequest) -> ProviderActionResult:
         self.requests.append(request)
         existing = self._results.get(request.idempotency_key)
         if existing is not None:
             return existing
-        result = self._perform(request)
+        existing_conflict = self._conflicts.get(request.idempotency_key)
+        if existing_conflict is not None:
+            raise DefinitiveActionConflict(existing_conflict)
+        try:
+            result = self._perform(request)
+        except DefinitiveActionConflict as error:
+            self._conflicts[request.idempotency_key] = error.conflict
+            raise
         self._results[request.idempotency_key] = result
         return result
 
-    async def lookup(self, idempotency_key: str) -> ProviderActionResult | None:
-        return self._results.get(idempotency_key)
+    async def lookup(self, idempotency_key: str) -> ProviderActionOutcome | None:
+        return self._results.get(idempotency_key) or self._conflicts.get(idempotency_key)
 
     def _perform(self, request: ProviderActionRequest) -> ProviderActionResult:
         raise NotImplementedError

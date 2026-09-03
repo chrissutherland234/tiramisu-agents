@@ -13,6 +13,8 @@ from temporalio.exceptions import ApplicationError
 
 from tiramisu_agents.agents.context import AgentContextError, PostgresAgentContextLoader
 from tiramisu_agents.agents.runner import AgentTurnRunner, ProposalCorrection
+from tiramisu_agents.core.action_identity import action_payload_identity
+from tiramisu_agents.core.contracts.actions import ActionAttemptStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
 from tiramisu_agents.db.models.processes import ProcessInstance
@@ -129,6 +131,11 @@ class AgentTurnActivities:
                 action_result.attempt_id for action_result in turn_input.action_results
             )
             expected_timer_ids = frozenset(turn_input.timer_ids)
+            conflicted_action_payload_hashes = frozenset(
+                action_payload_identity(result.action_type, result.parameters)
+                for result in turn_input.action_results
+                if result.status is ActionAttemptStatus.CONFLICT
+            )
             correction: ProposalCorrection | None = None
             for proposal_attempt_count in range(1, _MAX_SEMANTIC_CORRECTIONS + 2):
                 # Recheck safety controls before every nondeterministic model call without
@@ -150,6 +157,7 @@ class AgentTurnActivities:
                         expected_review_command_ids=expected_review_command_ids,
                         expected_action_attempt_ids=expected_action_attempt_ids,
                         expected_timer_ids=expected_timer_ids,
+                        conflicted_action_payload_hashes=conflicted_action_payload_hashes,
                     )
                 except DecisionRejected as error:
                     if proposal_attempt_count > _MAX_SEMANTIC_CORRECTIONS:

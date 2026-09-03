@@ -36,6 +36,9 @@ class PlatformSafetyLimits:
 
     max_action_parameter_fields: int = 100
     max_action_parameters_bytes: int = 32 * 1024
+    max_action_conflict_facts: int = 50
+    max_action_conflict_message_bytes: int = 4 * 1024
+    max_action_conflict_bytes: int = 128 * 1024
     max_review_message_bytes: int = 16 * 1024
     max_operator_guidance_bytes: int = 16 * 1024
 

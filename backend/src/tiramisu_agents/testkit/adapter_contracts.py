@@ -5,8 +5,11 @@ from dataclasses import dataclass
 from tiramisu_agents.core.contracts.actions import ActionConflict
 from tiramisu_agents.core.ports.actions import (
     ActionAdapter,
+    AmbiguousActionOutcome,
     DefinitiveActionConflict,
+    DefinitiveActionFailure,
     ProviderActionRequest,
+    ProviderActionResult,
 )
 
 
@@ -15,8 +18,8 @@ class MutatingActionAdapterContract:
     """Adapter-specific fixtures for the common idempotency/conflict contract.
 
     Client packs choose the resource, allocation rule, and optional expiry
-    fixture. The common contract only asserts that a definitive conflict has
-    no successful side effect to reconcile or retry.
+    fixture. A conflict is itself a terminal lookup outcome, so recovery never
+    needs to repeat the provider operation.
     """
 
     successful_request: ProviderActionRequest
@@ -62,14 +65,55 @@ async def _assert_conflict(
     request: ProviderActionRequest,
     expected: ActionConflict,
 ) -> None:
+    for _ in range(2):
+        try:
+            await adapter.execute(request)
+        except DefinitiveActionConflict as error:
+            if error.conflict != expected:
+                raise AssertionError(
+                    "adapter returned a different conflict than its contract fixture"
+                ) from error
+        else:
+            raise AssertionError("adapter did not return a definitive conflict")
+    if await adapter.lookup(request.idempotency_key) != expected:
+        raise AssertionError("adapter lookup did not recover the definitive conflict")
+
+
+async def assert_timeout_after_success_adapter_contract(
+    adapter: ActionAdapter,
+    request: ProviderActionRequest,
+    expected: ProviderActionResult,
+) -> None:
+    """Assert an ambiguous response can be recovered without another side effect."""
+
+    try:
+        await adapter.execute(request)
+    except AmbiguousActionOutcome:
+        pass
+    else:
+        raise AssertionError("adapter did not model an ambiguous timeout after success")
+    if await adapter.lookup(request.idempotency_key) != expected:
+        raise AssertionError("adapter lookup did not recover the ambiguous successful outcome")
+    if await adapter.execute(request) != expected:
+        raise AssertionError("adapter retry did not return the prior successful outcome")
+
+
+async def assert_definitive_failure_adapter_contract(
+    adapter: ActionAdapter,
+    request: ProviderActionRequest,
+    *,
+    message: str,
+) -> None:
+    """Assert a definitive failure has no recoverable provider outcome."""
+
     try:
         await adapter.execute(request)
     except DefinitiveActionConflict as error:
-        if error.conflict != expected:
-            raise AssertionError(
-                "adapter returned a different conflict than its contract fixture"
-            ) from error
+        raise AssertionError("ordinary definitive failure was reported as a conflict") from error
+    except DefinitiveActionFailure as error:
+        if str(error) != message:
+            raise AssertionError("adapter returned a different definitive failure") from error
     else:
-        raise AssertionError("adapter did not return a definitive conflict")
+        raise AssertionError("adapter did not return a definitive failure")
     if await adapter.lookup(request.idempotency_key) is not None:
-        raise AssertionError("a definitive conflict must not create a successful lookup result")
+        raise AssertionError("definitive failure unexpectedly created a lookup outcome")

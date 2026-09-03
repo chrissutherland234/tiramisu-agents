@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
 
+from tiramisu_agents.core.action_identity import action_payload_identity
 from tiramisu_agents.core.contracts.decisions import (
     AgentDecision,
     DecisionStatus,
@@ -69,6 +70,7 @@ def validate_decision(
     expected_review_command_ids: frozenset[UUID] | None = None,
     expected_action_attempt_ids: frozenset[UUID] | None = None,
     expected_timer_ids: frozenset[str] | None = None,
+    conflicted_action_payload_hashes: frozenset[str] = frozenset(),
 ) -> AgentDecision:
     """Return the unchanged decision if it fits policy; otherwise fail closed."""
 
@@ -164,6 +166,13 @@ def validate_decision(
             raise DecisionRejected(f"action type is not allowed: {action.action_type}")
         if action.logical_action_key in action_keys:
             raise DecisionRejected(f"duplicate logical action key: {action.logical_action_key}")
+        if (
+            action_payload_identity(action.action_type, action.parameters)
+            in conflicted_action_payload_hashes
+        ):
+            raise DecisionRejected(
+                "decision repeats an action payload that just returned a definitive conflict"
+            )
         action_keys.add(action.logical_action_key)
 
     if any(isinstance(wake, HumanWakeCondition) for wake in decision.wake_conditions) and not any(

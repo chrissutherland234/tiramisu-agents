@@ -1,6 +1,6 @@
 # Platform safety limits
 
-Last reviewed: 2026-09-02
+Last reviewed: 2026-09-03
 
 Tiramisu applies deterministic hard ceilings to untrusted semantic data and every assembled
 agent turn. These are platform safety maxima, not prompt instructions. A future tenant or process
@@ -25,6 +25,7 @@ persistence, and tests.
 | Action results per agent turn | 20 |
 | Timers per agent turn | 50 |
 | One action's parameters | 100 top-level fields and 32 KiB |
+| One action conflict | 50 authoritative facts, 4 KiB message, and 128 KiB complete outcome |
 | One review message | 16 KiB |
 | Operator wake/control guidance | 16 KiB |
 | Open commitments | 50 items, 2 KiB each, and 32 KiB combined |
@@ -53,11 +54,13 @@ correction feedback, and serialization around the already-bounded context.
   error within the bounded two-attempt semantic correction loop. Exhaustion enters intervention.
 - The action gateway and process-state projector repeat hard checks immediately before persistence
   as defense in depth.
+- Provider-declared action conflicts are rejected at contract construction if their fact count,
+  encoded message, or complete structured outcome exceeds the platform envelope.
 
 ## Deliberate remaining work
 
 These limits do not yet provide an ASGI/web-server raw request-body cap, attachment streaming
-limits, provider-response limits, model token/cost budgets, process-lifetime budgets, tenant-specific
-lower ceilings, or per-tenant throughput/back-pressure quotas. Raw transport limits are required
+limits, general successful provider-response limits, model token/cost budgets, process-lifetime
+budgets, tenant-specific lower ceilings, or per-tenant throughput/back-pressure quotas. Raw transport limits are required
 before public production ingress. Token, cost, rate, and lifetime budgets belong to the next
 autonomy-budget milestone and must be durable across Continue-As-New.

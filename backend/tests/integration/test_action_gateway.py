@@ -560,14 +560,51 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
         assert conflict_result.facts[0].value == ["2026-09-04T14:00:00+00:00"]
         assert len(availability_adapter.requests) == 3
 
+        # Model a platform crash after the provider recorded its conflict but
+        # before the terminal database update. Lookup must recover the conflict;
+        # the provider operation itself must not run again.
+        async with runtime_factory.begin() as session:
+            await set_tenant_context(session, tenant_id)
+            attempt = await session.get(ActionAttempt, conflict_result.attempt_id)
+            request = await session.get(ActionRequest, conflict_action.action_request_id)
+            assert attempt is not None
+            assert request is not None
+            attempt.status = "executing"
+            attempt.conflict = None
+            attempt.facts = []
+            attempt.error = None
+            attempt.completed_at = None
+            request.status = "executing"
+        recovered_conflict = await executor.execute(
+            tenant_id=tenant_id,
+            process_instance_id=ingested.process_instance_id,
+            action_request_id=conflict_action.action_request_id,
+            revision=1,
+        )
+        assert recovered_conflict == conflict_result
+        assert len(availability_adapter.requests) == 3
+
+        repeated_conflict_action = AgentDecision(
+            based_on_event_ids=(),
+            based_on_action_attempt_ids=(conflict_result.attempt_id,),
+            status=DecisionStatus.ACTIVE,
+            actions=(
+                ActionProposal(
+                    logical_action_key="availability_conflict_unchanged",
+                    action_type="find_available_slots",
+                    parameters={"days": 21},
+                    rationale="Incorrectly repeat the action without changing it.",
+                ),
+            ),
+        )
         conflict_follow_up = AgentDecision(
             based_on_event_ids=(),
             based_on_action_attempt_ids=(conflict_result.attempt_id,),
             status=DecisionStatus.WAITING,
             wake_conditions=(EventWakeCondition(event_type="customer.email_received"),),
         )
-        conflict_agent = ScriptedAgent([conflict_follow_up])
-        await AgentTurnActivities(
+        conflict_agent = ScriptedAgent([repeated_conflict_action, conflict_follow_up])
+        conflict_turn = await AgentTurnActivities(
             runtime_factory,
             ProcessDefinitionRegistry([definition]),
             conflict_agent,
@@ -585,9 +622,28 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
                 action_attempt_ids=(str(conflict_result.attempt_id),),
             )
         )
+        assert conflict_turn.proposal_attempt_count == 2
+        assert conflict_agent.corrections[1] is not None
+        assert "just returned a definitive conflict" in (
+            conflict_agent.corrections[1].validation_error
+        )
         follow_up_result = conflict_agent.turn_inputs[0].action_results[0]
         assert follow_up_result.status == "conflict"
         assert follow_up_result.conflict == conflict_result.conflict
+        assert conflict_agent.turn_inputs[1] == conflict_agent.turn_inputs[0]
+
+        with pytest.raises(ActionPersistenceConflict, match="definitive conflict"):
+            async with runtime_factory.begin() as session:
+                await gateway.persist_decision(
+                    session,
+                    tenant_id=tenant_id,
+                    process_instance_id=ingested.process_instance_id,
+                    agent_turn_id=uuid4(),
+                    process_definition_version=definition.version,
+                    decision=repeated_conflict_action,
+                    policy=definition.action_policy(),
+                )
+        assert len(availability_adapter.requests) == 3
         async with runtime_factory.begin() as session:
             await ProcessStateService().apply_decision(
                 session,

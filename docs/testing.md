@@ -1,6 +1,6 @@
 # Testing strategy and gap plan
 
-Last reviewed: 2026-09-02
+Last reviewed: 2026-09-03
 
 Tiramisu's tests must prove durable business invariants across boundaries, not merely achieve line coverage. The highest-risk failures happen between PostgreSQL, Temporal, model execution, operator commands, and external providers, where no shared transaction exists.
 
@@ -8,12 +8,12 @@ Tiramisu's tests must prove durable business invariants across boundaries, not m
 
 The repository currently has:
 
-- 132 backend tests: 93 unit/contract cases, 36 PostgreSQL or Temporal integration cases, and 3 committed-history replay cases.
+- 140 backend tests: 99 unit/contract cases, 38 PostgreSQL or Temporal integration cases, and 3 committed-history replay cases.
 - 5 Vue component cases across 2 files covering the operator journey/review/intervention/dead-letter surface, permission degradation, polling, and Wake authority wording.
 - 1 Playwright live-stack journey covering real event ingestion, process inspection, takeover, resume, and the delivery-operations shell.
 - CI gates for locked dependency installation, Alembic drift, Ruff, Pyright, backend tests with PostgreSQL, Python package builds, Vue unit/type/build checks, the Playwright smoke, Compose startup, PostgreSQL runtime-role access, and Temporal health.
 
-Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, pinned deployment-release/queue/pack/definition compatibility before model and provider I/O, audited tenant assignment, old/new release dispatch fencing, published-only triggers, byte/count boundaries for event/fact/review/proposal data, pre-model context and prospective-fact limits, pre-provider prompt limits, bounded semantic proposal repair with unchanged-snapshot and exhaustion checks, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, reserved manual reevaluation, and a complete scripted enquiry-to-booking journey that proves Wake guidance cannot manufacture completed payment.
+Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, typed conflict lookup recovery and unchanged-conflict re-proposal rejection, pinned deployment-release/queue/pack/definition compatibility before model and provider I/O, audited tenant assignment, old/new release dispatch fencing, published-only triggers, byte/count boundaries for event/fact/review/proposal/conflict data, pre-model context and prospective-fact limits, pre-provider prompt limits, bounded semantic proposal repair with unchanged-snapshot and exhaustion checks, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, reserved manual reevaluation, a populated conflict-migration downgrade/upgrade, and a complete scripted enquiry-to-booking journey that proves Wake guidance cannot manufacture completed payment.
 
 The count is not itself a release signal. Agent evaluation, provider contracts, load behavior, security automation, migration upgrade paths, and several concurrency combinations remain absent or shallow.
 
@@ -42,7 +42,7 @@ Next additions:
 - Cover every credential scope and role against every operator endpoint, including read-only UI degradation.
 - Exercise conflicting correlations, event-ID/source-ID collisions, late reference assignment, quarantine resolution, and replay once that feature exists.
 - Exercise dispatcher backoff timestamps, exhaustion, concurrent requeue/claim, retention boundaries, and bulk backlog pagination.
-- Test migration from the previous released schema with representative data preservation in CI—not only an empty-database upgrade and autogenerate drift check. CI now round-trips migration 13 down to 12 and back on an empty database; the generalized populated previous-release fixture remains.
+- Generalize the populated migration fixture across each released schema boundary and representative business records. The conflict migration now has an isolated data-bearing downgrade/upgrade test, while CI also round-trips migration 13 down to 12 and back on the main empty test database.
 - Add request-size and malformed-JSON limits before production ingress is exposed.
 
 ### 3. Temporal workflow and replay tests
@@ -99,7 +99,7 @@ Publishing a definition or changing its prompt/model requires an approved baseli
 
 Create one public contract suite per provider-neutral port. Run the same suite against stubs, private adapters, and—where possible—provider sandboxes.
 
-Every mutating adapter contract must cover stable idempotency keys, timeout-after-success, lookup/reconciliation, definitive failure, definitive conflict, ambiguous failure, malformed provider responses, rate limits, and tenant credential selection. A definitive conflict must have no successful lookup result and must not cause a repeated side effect. Adapters that model resource holds must also cover expiry as either a success, a definitive conflict, or an explicitly ambiguous provider outcome. Domain-specific suites add email threading/bounce/opt-out, calendar time-zone/DST/conflict behavior, payment webhook duplication/expiry, and booking concurrency.
+The public contract helpers now cover stable success idempotency, timeout-after-success recovery, definitive failure without an outcome, and lookup-recoverable definitive conflicts—including repeated execution with the same key. A definitive conflict lookup must return the same terminal conflict and must not cause a repeated side effect. Expand the suite with ambiguous failure before provider acceptance, malformed provider responses, rate limits, and tenant credential selection. Adapters that model resource holds must also cover expiry as either a success, a definitive conflict, or an explicitly ambiguous provider outcome. Domain-specific suites add email threading/bounce/opt-out, calendar time-zone/DST/conflict behavior, payment webhook duplication/expiry, and booking concurrency.
 
 Exact approval freshness is intentionally an execution-gateway contract, rather than an adapter contract: the core rechecks approval immediately before dispatch and the PostgreSQL integration suite proves that an expired approval cannot cross that fence. The same suite proves lookup-only reconciliation for ambiguous outcomes. This separation lets private adapters share the public provider contract without receiving review or database authority.
 

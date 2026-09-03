@@ -7,7 +7,13 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
-from tiramisu_agents.core.limits import require_action_parameters
+from tiramisu_agents.core.limits import (
+    DEFAULT_PLATFORM_SAFETY_LIMITS,
+    require_action_parameters,
+    require_item_count,
+    require_json_bytes,
+    require_utf8_bytes,
+)
 
 
 class PermissionOutcome(StrEnum):
@@ -69,6 +75,21 @@ class ActionConflict(BaseModel):
     def _require_authoritative_facts(self) -> "ActionConflict":
         if any(fact.kind is not FactKind.AUTHORITATIVE for fact in self.facts):
             raise ValueError("action conflict facts must be authoritative")
+        require_item_count(
+            self.facts,
+            label="action conflict facts",
+            max_items=DEFAULT_PLATFORM_SAFETY_LIMITS.max_action_conflict_facts,
+        )
+        require_utf8_bytes(
+            self.message,
+            label="action conflict message",
+            max_bytes=DEFAULT_PLATFORM_SAFETY_LIMITS.max_action_conflict_message_bytes,
+        )
+        require_json_bytes(
+            self.model_dump(mode="json"),
+            label="action conflict",
+            max_bytes=DEFAULT_PLATFORM_SAFETY_LIMITS.max_action_conflict_bytes,
+        )
         return self
 
 

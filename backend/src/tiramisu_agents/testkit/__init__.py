@@ -2,7 +2,9 @@
 
 from tiramisu_agents.testkit.adapter_contracts import (
     MutatingActionAdapterContract,
+    assert_definitive_failure_adapter_contract,
     assert_mutating_action_adapter_contract,
+    assert_timeout_after_success_adapter_contract,
 )
 from tiramisu_agents.testkit.deployment import (
     TEST_DEPLOYMENT_RELEASE,
@@ -29,5 +31,7 @@ __all__ = [
     "make_test_deployment_release",
     "new_scenario_identity",
     "assert_mutating_action_adapter_contract",
+    "assert_definitive_failure_adapter_contract",
+    "assert_timeout_after_success_adapter_contract",
     "run_enquiry_to_completion",
 ]

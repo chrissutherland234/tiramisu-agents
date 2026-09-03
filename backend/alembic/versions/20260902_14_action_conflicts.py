@@ -40,6 +40,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The previous schema cannot represent a conflict. Preserve the terminal
+    # nature and human-readable error while translating populated rows before
+    # restoring its narrower constraints.
+    op.execute("UPDATE action_attempts SET status = 'failed' WHERE status = 'conflict'")
+    op.execute("UPDATE action_requests SET status = 'failed' WHERE status = 'conflict'")
     op.drop_column("action_attempts", "conflict")
     _replace_status_constraint(
         "action_attempts",

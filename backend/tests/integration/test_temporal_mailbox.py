@@ -1264,11 +1264,12 @@ async def test_conflicted_action_is_not_retried_and_drives_one_result_turn() -> 
             MailboxEvent(event_id=str(uuid4()), event_type="enquiry.created"),
         )
 
+        state = await handle.query(ProcessMailboxWorkflow.state)
         for _ in range(100):
-            state = await handle.query(ProcessMailboxWorkflow.state)
             if len(state.turn_records) == 2 and not state.turn_in_progress:
                 break
             await asyncio.sleep(0.01)
+            state = await handle.query(ProcessMailboxWorkflow.state)
 
         assert state.pending_action_request_ids == ()
         assert len(state.execution_records) == 1

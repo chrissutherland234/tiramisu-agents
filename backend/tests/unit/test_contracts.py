@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from tiramisu_agents.core.action_identity import action_payload_identity
 from tiramisu_agents.core.contracts.actions import ActionConflict
 from tiramisu_agents.core.contracts.decisions import (
     ActionProposal,
@@ -42,6 +43,43 @@ def test_conflict_facts_must_be_authoritative() -> None:
                     value=["2026-09-02T10:00:00+00:00"],
                 ),
             ),
+        )
+
+
+def test_conflict_fact_count_and_complete_payload_are_bounded() -> None:
+    fact = FactObservation(
+        key="booking.available_slots",
+        kind=FactKind.AUTHORITATIVE,
+        value="available",
+    )
+    with pytest.raises(ValidationError, match="action conflict facts exceeds platform limit"):
+        ActionConflict(
+            code="resource_unavailable",
+            message="too many observations",
+            facts=(fact,) * 51,
+        )
+
+    large_facts = tuple(
+        FactObservation(
+            key=f"booking.provider_value_{index}",
+            kind=FactKind.AUTHORITATIVE,
+            value="x" * 16_000,
+        )
+        for index in range(9)
+    )
+    with pytest.raises(ValidationError, match="action conflict exceeds platform limit"):
+        ActionConflict(
+            code="resource_unavailable",
+            message="too much combined provider data",
+            facts=large_facts,
+        )
+
+
+def test_conflict_message_is_bounded_by_encoded_size() -> None:
+    with pytest.raises(ValidationError, match="action conflict message exceeds platform limit"):
+        ActionConflict(
+            code="resource_unavailable",
+            message="😀" * 1_025,
         )
 
 
@@ -103,6 +141,35 @@ def test_policy_accepts_an_allowed_bounded_decision() -> None:
     )
 
     assert validate_decision(decision, policy, workflow_now=now) is decision
+
+
+def test_policy_rejects_an_unchanged_definitively_conflicted_action() -> None:
+    action = ActionProposal(
+        logical_action_key="try_same_slot_again",
+        action_type="propose_booking",
+        parameters={"slot": "2026-09-04T10:00:00+00:00"},
+        rationale="Retry the slot without changing anything.",
+    )
+    decision = AgentDecision(
+        based_on_event_ids=(),
+        based_on_action_attempt_ids=(uuid4(),),
+        status=DecisionStatus.ACTIVE,
+        actions=(action,),
+    )
+    policy = DecisionPolicy(
+        allowed_action_types=frozenset({"propose_booking"}),
+        allowed_wake_event_types=frozenset(),
+    )
+
+    with pytest.raises(DecisionRejected, match="just returned a definitive conflict"):
+        validate_decision(
+            decision,
+            policy,
+            workflow_now=datetime.now(UTC),
+            conflicted_action_payload_hashes=frozenset(
+                {action_payload_identity(action.action_type, action.parameters)}
+            ),
+        )
 
 
 def test_policy_rejects_an_active_decision_without_a_progress_path() -> None:

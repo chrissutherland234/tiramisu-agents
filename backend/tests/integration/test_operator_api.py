@@ -128,6 +128,12 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
                 parameters={"recipient": "customer@example.test", "body": "Hello"},
                 rationale="Reply to the customer enquiry.",
             ),
+            ActionProposal(
+                logical_action_key="availability_check",
+                action_type="find_available_slots",
+                parameters={"days": 7},
+                rationale="Exercise a separate autonomous provider conflict.",
+            ),
         ),
         wake_conditions=(HumanWakeCondition(interaction="approval"),),
         memory_update=MemoryUpdate(
@@ -228,13 +234,13 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             approval_request = await session.get(ApprovalRequest, actions[0].approval_request_id)
             assert approval_request is not None
             approval_request.required_role = "message_approver"
-            action_request = await session.get(ActionRequest, actions[0].action_request_id)
+            action_request = await session.get(ActionRequest, actions[1].action_request_id)
             assert action_request is not None
             action_request.status = "conflict"
             conflict_attempt = ActionAttempt(
                 tenant_id=tenant_id,
                 process_instance_id=process_id,
-                action_request_id=actions[0].action_request_id,
+                action_request_id=actions[1].action_request_id,
                 revision=1,
                 attempt_number=1,
                 idempotency_key="c" * 64,
@@ -335,7 +341,10 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
                 index for index, item in enumerate(timeline) if item["kind"] == "decision"
             )
             action_index = next(
-                index for index, item in enumerate(timeline) if item["kind"] == "action"
+                index
+                for index, item in enumerate(timeline)
+                if item["kind"] == "action"
+                and item["action_request_id"] == str(actions[0].action_request_id)
             )
             assert decision_index < action_index
             assert timeline[decision_index]["agent_turn_id"] == str(turn_id)
