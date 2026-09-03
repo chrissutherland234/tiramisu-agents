@@ -2,7 +2,12 @@
 
 from tiramisu_agents.builtin.fictional import (
     FictionalDeployment,
+    create_fictional_project,
     load_fictional_deployment,
 )
 
-__all__ = ["FictionalDeployment", "load_fictional_deployment"]
+__all__ = [
+    "FictionalDeployment",
+    "create_fictional_project",
+    "load_fictional_deployment",
+]

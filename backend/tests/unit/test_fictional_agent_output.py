@@ -1,11 +1,12 @@
 """Structured-output contracts for the bundled fictional process."""
 
+from typing import cast
 from uuid import uuid4
 
 import pytest
 from agents.agent_output import AgentOutputSchema
 from pydantic import ValidationError
-from tiramisu_agents.builtin.fictional_agent_output import FictionalAgentDecisionOutput
+from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.actions import ActionAttemptStatus
 from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.core.contracts.processes import (
@@ -13,6 +14,12 @@ from tiramisu_agents.core.contracts.processes import (
     AgentTurnInput,
     ProcessSnapshot,
     ProcessStatus,
+)
+from tiramisu_agents.projects import GeneratedAgentDecisionOutput
+
+FictionalAgentDecisionOutput = cast(
+    type[GeneratedAgentDecisionOutput],
+    load_fictional_deployment().agent_decision_output_type,
 )
 
 

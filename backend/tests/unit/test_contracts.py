@@ -143,6 +143,33 @@ def test_policy_accepts_an_allowed_bounded_decision() -> None:
     assert validate_decision(decision, policy, workflow_now=now) is decision
 
 
+def test_policy_rejects_completion_until_authoritative_requirements_match() -> None:
+    decision = AgentDecision(based_on_event_ids=(), status=DecisionStatus.COMPLETED)
+    policy = DecisionPolicy(
+        allowed_action_types=frozenset(),
+        allowed_wake_event_types=frozenset(),
+        completion_requirements={"payment.status": "completed"},
+    )
+
+    with pytest.raises(DecisionRejected, match="payment.status"):
+        validate_decision(
+            decision,
+            policy,
+            workflow_now=datetime.now(UTC),
+            current_authoritative_facts={"payment.status": "pending"},
+        )
+
+    assert (
+        validate_decision(
+            decision,
+            policy,
+            workflow_now=datetime.now(UTC),
+            current_authoritative_facts={"payment.status": "completed"},
+        )
+        is decision
+    )
+
+
 def test_policy_rejects_an_unchanged_definitively_conflicted_action() -> None:
     action = ActionProposal(
         logical_action_key="try_same_slot_again",

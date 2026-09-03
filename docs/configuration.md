@@ -42,7 +42,7 @@ The root `.env` is also the Vite environment directory, so frontend and backend 
 
 ## Fictional client pack
 
-`TIRAMISU_LOAD_FICTIONAL_EXAMPLE_PROCESSES=true` enables the bundled enquiry-to-booking pack. The API and worker load the same packaged, versioned definition and extension manifest. Composition fails before polling if Tiramisu compatibility, definition identity, integration IDs, policies, allowed actions, or concrete adapter registrations disagree.
+`TIRAMISU_LOAD_FICTIONAL_EXAMPLE_PROCESSES=true` enables the bundled enquiry-to-booking project. The API and worker compile the same packaged, versioned declarations into its definition, manifest, policy IDs, strict output schema, and bindings. Composition fails before polling if Tiramisu compatibility, definition identity, integration IDs, policies, allowed actions, business metadata, or concrete adapter registrations disagree.
 
 The API and model-backed worker require a nonblank `TIRAMISU_OPENAI_MODEL` because the model identity is part of the immutable release. Only the worker requires `OPENAI_API_KEY`. The key is passed explicitly to the OpenAI Agents SDK provider; it is not assumed to leak from dotenv parsing into the global process environment.
 

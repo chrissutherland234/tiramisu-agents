@@ -16,6 +16,7 @@ from tiramisu_agents.agents.runner import AgentTurnRunner, ProposalCorrection
 from tiramisu_agents.core.action_identity import action_payload_identity
 from tiramisu_agents.core.contracts.actions import ActionAttemptStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent
+from tiramisu_agents.core.contracts.knowledge import FactKind
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.extensions.runtime import DeploymentRelease
@@ -131,6 +132,13 @@ class AgentTurnActivities:
                 action_result.attempt_id for action_result in turn_input.action_results
             )
             expected_timer_ids = frozenset(turn_input.timer_ids)
+            prospective_authoritative_facts = dict(turn_input.process.authoritative_facts)
+            for source in (*turn_input.events, *turn_input.action_results):
+                for fact in source.facts:
+                    if fact.kind is FactKind.AUTHORITATIVE:
+                        prospective_authoritative_facts[fact.key] = fact.model_dump(mode="json")[
+                            "value"
+                        ]
             conflicted_action_payload_hashes = frozenset(
                 action_payload_identity(result.action_type, result.parameters)
                 for result in turn_input.action_results
@@ -158,6 +166,7 @@ class AgentTurnActivities:
                         expected_action_attempt_ids=expected_action_attempt_ids,
                         expected_timer_ids=expected_timer_ids,
                         conflicted_action_payload_hashes=conflicted_action_payload_hashes,
+                        current_authoritative_facts=prospective_authoritative_facts,
                     )
                 except DecisionRejected as error:
                     if proposal_attempt_count > _MAX_SEMANTIC_CORRECTIONS:

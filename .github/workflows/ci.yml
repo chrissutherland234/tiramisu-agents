@@ -49,6 +49,12 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run pyright
       - run: uv run pytest
+      - name: Validate standalone client project
+        working-directory: examples/support_client_pack
+        run: |
+          uv run --locked ruff check .
+          uv run --locked pyright
+          uv run --locked pytest
       - run: uv build
 
   frontend:

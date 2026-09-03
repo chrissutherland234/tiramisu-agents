@@ -151,6 +151,9 @@ class ProcessStateActivities:
                     UUID(value) for value in command.action_attempt_ids
                 ),
                 expected_timer_ids=frozenset(command.timer_ids),
+                # ProcessStateService checks completion against the authoritative
+                # projection it locks and updates in the transaction below.
+                enforce_completion_requirements=False,
             )
             async with self._session_factory.begin() as session:
                 if self._deployment_release is not None:
@@ -166,6 +169,7 @@ class ProcessStateActivities:
                     agent_turn_id=UUID(command.agent_turn_id),
                     decision=decision,
                     terminal_states=frozenset(definition.terminal_states),
+                    completion_requirements=dict(definition.completion_requirements),
                 )
         except (
             DecisionRejected,

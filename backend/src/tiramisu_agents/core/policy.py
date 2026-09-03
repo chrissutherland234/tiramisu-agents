@@ -1,7 +1,10 @@
 """Deterministic validation applied after an agent proposes a decision."""
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from types import MappingProxyType
+from typing import Any
 from uuid import UUID
 
 from tiramisu_agents.core.action_identity import action_payload_identity
@@ -24,6 +27,10 @@ class DecisionRejected(ValueError):
     """Raised when a proposal falls outside deterministic process policy."""
 
 
+def _empty_completion_requirements() -> Mapping[str, Any]:
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class DecisionPolicy:
     allowed_action_types: frozenset[str]
@@ -37,6 +44,9 @@ class DecisionPolicy:
     max_commitment_bytes: int = DEFAULT_PLATFORM_SAFETY_LIMITS.max_commitment_bytes
     max_open_commitments_bytes: int = DEFAULT_PLATFORM_SAFETY_LIMITS.max_open_commitments_bytes
     max_memory_summary_bytes: int = DEFAULT_PLATFORM_SAFETY_LIMITS.max_memory_summary_bytes
+    completion_requirements: Mapping[str, Any] = field(
+        default_factory=_empty_completion_requirements
+    )
 
     def __post_init__(self) -> None:
         if self.max_actions_per_turn < 0:
@@ -59,6 +69,11 @@ class DecisionPolicy:
                 raise ValueError(f"{name} cannot exceed the platform maximum")
         if not self.human_wake_action_types.issubset(self.allowed_action_types):
             raise ValueError("human wake action types must be allowed action types")
+        object.__setattr__(
+            self,
+            "completion_requirements",
+            MappingProxyType(dict(self.completion_requirements)),
+        )
 
 
 def validate_decision(
@@ -71,6 +86,8 @@ def validate_decision(
     expected_action_attempt_ids: frozenset[UUID] | None = None,
     expected_timer_ids: frozenset[str] | None = None,
     conflicted_action_payload_hashes: frozenset[str] = frozenset(),
+    current_authoritative_facts: Mapping[str, Any] | None = None,
+    enforce_completion_requirements: bool = True,
 ) -> AgentDecision:
     """Return the unchanged decision if it fits policy; otherwise fail closed."""
 
@@ -153,6 +170,23 @@ def validate_decision(
         raise DecisionRejected("decision exceeds the maximum actions per turn")
     if decision.status is DecisionStatus.COMPLETED and decision.actions:
         raise DecisionRejected("completed decision cannot propose unresolved actions")
+    if (
+        enforce_completion_requirements
+        and decision.status is DecisionStatus.COMPLETED
+        and policy.completion_requirements
+    ):
+        if current_authoritative_facts is None:
+            raise DecisionRejected("authoritative facts are required to validate completion")
+        unsatisfied = tuple(
+            key
+            for key, expected in sorted(policy.completion_requirements.items())
+            if key not in current_authoritative_facts
+            or current_authoritative_facts[key] != expected
+        )
+        if unsatisfied:
+            raise DecisionRejected(
+                "completion requirements are not satisfied: " + ", ".join(unsatisfied)
+            )
     if (
         decision.status is DecisionStatus.ACTIVE
         and not decision.actions

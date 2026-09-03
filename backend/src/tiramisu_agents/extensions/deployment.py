@@ -14,6 +14,7 @@ from tiramisu_agents import __version__
 from tiramisu_agents.core.ports.actions import ActionAdapter
 from tiramisu_agents.events.ingestion import ProcessBootstrap
 from tiramisu_agents.extensions.manifest import ExtensionManifest
+from tiramisu_agents.extensions.project_metadata import ProjectDescription
 from tiramisu_agents.extensions.runtime import DeploymentRelease
 from tiramisu_agents.processes.compatibility import DeploymentCompatibility
 from tiramisu_agents.processes.definitions import DefinitionStatus, ProcessDefinition
@@ -38,6 +39,7 @@ class ClientPack:
     bindings: Mapping[str, ActionAdapter]
     agent_decision_output_type: type[BaseModel]
     policy_ids: tuple[str, ...]
+    project: ProjectDescription | None = None
     registry: ProcessDefinitionRegistry = field(init=False, repr=False)
     compatibility: DeploymentCompatibility = field(init=False, repr=False)
     _fingerprint: str = field(init=False, repr=False)
@@ -70,6 +72,53 @@ class ClientPack:
         expected_definitions = {f"{item.id}.v{item.version}" for item in definitions}
         if set(self.manifest.process_definitions) != expected_definitions:
             raise ClientPackError("manifest and process definition identities disagree")
+        if self.project is not None:
+            if (
+                self.project.id != self.manifest.extension_id
+                or self.project.version != self.manifest.extension_version
+            ):
+                raise ClientPackError("project and manifest identities disagree")
+            project_journeys = {
+                (journey.id, journey.version): journey for journey in self.project.journeys
+            }
+            if set(project_journeys) != {
+                (definition.id, definition.version) for definition in definitions
+            }:
+                raise ClientPackError("project metadata and process definitions disagree")
+            for definition in definitions:
+                journey = project_journeys[(definition.id, definition.version)]
+                starts = {route.event_type for route in journey.routes if route.kind == "start"}
+                wakes = {route.event_type for route in journey.routes if route.kind == "wake"}
+                if starts != set(definition.trigger_events) or wakes != set(
+                    definition.allowed_wake_events
+                ):
+                    raise ClientPackError("project route metadata and process definitions disagree")
+                if journey.status != definition.status.value or journey.goals != definition.goals:
+                    raise ClientPackError("project journey metadata and definitions disagree")
+                if {item.action_type for item in journey.capabilities} != set(
+                    definition.allowed_actions
+                ):
+                    raise ClientPackError(
+                        "project capability metadata and process definitions disagree"
+                    )
+                if {
+                    item.action_type: item.adapter_id for item in journey.capabilities
+                } != definition.integrations:
+                    raise ClientPackError(
+                        "project adapter metadata and process definitions disagree"
+                    )
+                if journey.permissions != definition.action_permissions:
+                    raise ClientPackError(
+                        "project permission metadata and process definitions disagree"
+                    )
+                if journey.completion_requirements != definition.completion_requirements:
+                    raise ClientPackError(
+                        "project completion metadata and process definitions disagree"
+                    )
+                if [item.model_dump(mode="json") for item in journey.facts] != [
+                    item.model_dump(mode="json") for item in definition.facts
+                ]:
+                    raise ClientPackError("project fact metadata and process definitions disagree")
         expected_adapters = {
             adapter_id
             for definition in definitions
@@ -90,7 +139,7 @@ class ClientPack:
             raise ClientPackError("agent decision output type must implement to_agent_decision")
 
         canonical_composition = {
-            "schema_version": 1,
+            "schema_version": 2,
             "manifest": self.manifest.model_dump(mode="json"),
             "definitions": [
                 definition.model_dump(mode="json")
@@ -111,6 +160,7 @@ class ClientPack:
                 }
                 for action_type, adapter in sorted(bindings.items())
             },
+            "project": self.project.model_dump(mode="json") if self.project is not None else None,
         }
         canonical_json = json.dumps(
             canonical_composition,

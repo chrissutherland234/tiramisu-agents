@@ -7,10 +7,10 @@ from pydantic import ValidationError
 from tiramisu_agents.api.events import fictional_trigger_rules
 from tiramisu_agents.api.settings import Settings
 from tiramisu_agents.builtin import load_fictional_deployment
-from tiramisu_agents.builtin.fictional_agent_output import FictionalAgentDecisionOutput
-from tiramisu_agents.extensions import ClientPack
+from tiramisu_agents.extensions import ClientPack, ClientPackError
 from tiramisu_agents.processes.compatibility import DeploymentCompatibilityError
 from tiramisu_agents.processes.definitions import DefinitionStatus
+from tiramisu_agents.projects import GeneratedAgentDecisionOutput
 from tiramisu_agents.temporal import worker as worker_module
 from tiramisu_agents.temporal.worker import (
     compose_fictional_worker,
@@ -48,7 +48,7 @@ def test_fictional_deployment_is_cwd_independent_and_consistent(
 
     assert deployment.definition.id == "enquiry_to_booking"
     assert set(deployment.bindings) == set(deployment.definition.allowed_actions)
-    assert deployment.agent_decision_output_type is FictionalAgentDecisionOutput
+    assert issubclass(deployment.agent_decision_output_type, GeneratedAgentDecisionOutput)
     assert trigger.process_type == deployment.definition.id
     assert trigger.definition_version == deployment.definition.version
     assert trigger.extension_manifest_hash == deployment.manifest.fingerprint()
@@ -65,16 +65,23 @@ def test_client_pack_fingerprint_covers_runtime_composition_and_only_published_t
         bindings=dict(reversed(tuple(deployment.bindings.items()))),
         agent_decision_output_type=deployment.agent_decision_output_type,
         policy_ids=tuple(reversed(deployment.policy_ids)),
+        project=deployment.project,
     )
     changed_definition = deployment.definition.model_copy(
         update={"goals": (*deployment.definition.goals, "Exercise changed behavior.")}
     )
+    assert deployment.project is not None
+    changed_journey = deployment.project.journeys[0].model_copy(
+        update={"goals": changed_definition.goals}
+    )
+    changed_project = deployment.project.model_copy(update={"journeys": (changed_journey,)})
     changed = ClientPack(
         manifest=deployment.manifest,
         definitions=(changed_definition,),
         bindings=deployment.bindings,
         agent_decision_output_type=deployment.agent_decision_output_type,
         policy_ids=deployment.policy_ids,
+        project=changed_project,
     )
 
     assert equivalent.fingerprint() == deployment.fingerprint()
@@ -90,6 +97,21 @@ def test_client_pack_fingerprint_covers_runtime_composition_and_only_published_t
         )
         release = make_test_deployment_release(client_pack_fingerprint=disabled.fingerprint())
         assert disabled.trigger_rules(release) == {}
+
+
+def test_client_pack_rejects_business_metadata_that_disagrees_with_runtime() -> None:
+    deployment = load_fictional_deployment()
+    assert deployment.project is not None
+
+    with pytest.raises(ClientPackError, match="project and manifest"):
+        ClientPack(
+            manifest=deployment.manifest,
+            definitions=deployment.definitions,
+            bindings=deployment.bindings,
+            agent_decision_output_type=deployment.agent_decision_output_type,
+            policy_ids=deployment.policy_ids,
+            project=deployment.project.model_copy(update={"id": "different_project"}),
+        )
 
 
 def test_deployment_release_identity_is_deterministic_and_fails_closed() -> None:

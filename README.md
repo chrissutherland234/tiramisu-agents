@@ -13,6 +13,7 @@ The project is in its foundation phase. See [PLAN.md](PLAN.md), the [testing str
 - OpenAI Agents SDK behind a proposal-only boundary
 - Vue 3 and TypeScript operator interface
 - Provider-neutral ports with deterministic stubs
+- Opinionated Python client projects compiled into safe runtime packs
 
 ## Local setup
 
@@ -29,7 +30,7 @@ services and skip Docker Compose. The [local fictional demo guide](docs/local-de
 includes role setup, tenant bootstrap, the operator-console connection, and a
 sample enquiry event.
 
-The API uses a least-privilege `tiramisu_app` database role; Alembic uses the separate local admin role. Every application transaction must call `set_tenant_context` before accessing tenant-owned tables. The PostgreSQL integration test is opt-in locally with `TIRAMISU_RUN_DB_TESTS=1`. Temporal's mailbox test uses the official time-skipping test server. No test needs an OpenAI key. The bundled fictional definition and extension manifest are package resources, so API and worker composition does not depend on the launch directory.
+The API uses a least-privilege `tiramisu_app` database role; Alembic uses the separate local admin role. Every application transaction must call `set_tenant_context` before accessing tenant-owned tables. The PostgreSQL integration test is opt-in locally with `TIRAMISU_RUN_DB_TESTS=1`. Temporal's mailbox test uses the official time-skipping test server. No test needs an OpenAI key. The bundled fictional project is ordinary importable Python, so API and worker composition does not depend on the launch directory.
 
 The pure kernel and scripted-agent tests remain integration-free: they require no Docker, Temporal, PostgreSQL, network access, or provider credentials.
 
@@ -96,7 +97,17 @@ The runtime role cannot enumerate tenants. Signed provider-webhook verification,
 
 ## Public and private extensions
 
-The generic platform, test kit, stub adapters, and reusable provider adapters live here. Client-specific processes, prompts, policies, proprietary adapters, evaluations, and deployment composition belong in separate private client-pack repositories. Private packs return the public `tiramisu_agents.extensions.ClientPack` contract from an explicit zero-argument startup factory and should follow the same contract as the [bundled fictional pack](backend/src/tiramisu_agents/builtin/fictional.py).
+The generic platform, project framework, test kit, stub adapters, and reusable provider adapters live here. Client-specific processes, prompts, policies, proprietary adapters, evaluations, and deployment composition belong in separate private client-pack repositories. The normal authoring path uses `Project`, `Journey`, `Route`, `Capability`, `Fact`, and `Scenario`; Tiramisu generates the manifest, process definition, bindings, policy IDs, and strict OpenAI schema. See the [client-project guide](docs/client-packs.md), the [bundled fictional project](backend/src/tiramisu_agents/builtin/fictional.py), and the independently packaged [support example](examples/support_client_pack/README.md).
+
+Start and inspect a conventional package with:
+
+```bash
+uv run tiramisu startproject acme_service ../acme-service
+uv run tiramisu check tiramisu_agents.builtin:create_fictional_project
+uv run tiramisu describe tiramisu_agents.builtin:create_fictional_project
+```
+
+Compiled private packs return the stable `tiramisu_agents.extensions.ClientPack` from an explicit zero-argument startup factory. Direct construction of that low-level contract remains available for advanced cases.
 
 Install the core and a downstream pack as editable packages, then configure the exact same trusted factory path in the API and worker environment:
 

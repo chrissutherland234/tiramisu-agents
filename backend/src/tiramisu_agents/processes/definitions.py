@@ -5,13 +5,16 @@ import re
 from datetime import timedelta
 from enum import StrEnum
 from hashlib import sha256
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from tiramisu_agents.core.action_policy import ConfiguredActionPolicy
 from tiramisu_agents.core.contracts.actions import PermissionOutcome
+from tiramisu_agents.core.contracts.knowledge import FactKind
 from tiramisu_agents.core.contracts.processes import ProcessStatus
 from tiramisu_agents.core.contracts.reviews import ReviewCommandType
+from tiramisu_agents.core.limits import canonical_json_bytes
 from tiramisu_agents.core.policy import DecisionPolicy
 from tiramisu_agents.core.reserved_events import RESERVED_KERNEL_EVENT_TYPES
 
@@ -64,6 +67,26 @@ class CommunicationConfiguration(BaseModel):
     reply_event_types: tuple[str, ...] = ()
 
 
+class FactDefinition(BaseModel):
+    """Business-readable schema for one fact available to a journey."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$", max_length=200)
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=2_000)
+    kinds: tuple[FactKind, ...] = Field(min_length=1)
+    value_schema: dict[str, Any]
+    operator_editable: bool = False
+
+    @field_validator("kinds")
+    @classmethod
+    def validate_kinds(cls, values: tuple[FactKind, ...]) -> tuple[FactKind, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("fact kinds must be unique")
+        return values
+
+
 class ProcessDefinition(BaseModel):
     """Immutable source configuration for one process-definition version."""
 
@@ -84,6 +107,8 @@ class ProcessDefinition(BaseModel):
     review: ReviewConfiguration = Field(default_factory=ReviewConfiguration)
     communications: CommunicationConfiguration = Field(default_factory=CommunicationConfiguration)
     integrations: dict[str, str] = Field(default_factory=dict)
+    facts: tuple[FactDefinition, ...] = ()
+    completion_requirements: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("id")
     @classmethod
@@ -149,6 +174,15 @@ class ProcessDefinition(BaseModel):
             raise ValueError("goals cannot be blank")
         return values
 
+    @field_validator("completion_requirements")
+    @classmethod
+    def validate_completion_values(cls, values: dict[str, Any]) -> dict[str, Any]:
+        for key, value in values.items():
+            if not re.fullmatch(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$", key):
+                raise ValueError("completion requirement keys must be dotted lowercase facts")
+            canonical_json_bytes(value, label=f"completion requirement {key}")
+        return values
+
     @field_validator("terminal_states")
     @classmethod
     def validate_terminal_states(
@@ -175,6 +209,16 @@ class ProcessDefinition(BaseModel):
             raise ValueError("communication actions must be allowed actions")
         if not set(self.communications.reply_event_types).issubset(self.allowed_wake_events):
             raise ValueError("communication reply events must be allowed wake events")
+        fact_by_key = {fact.key: fact for fact in self.facts}
+        if len(fact_by_key) != len(self.facts):
+            raise ValueError("fact definitions must have unique keys")
+        if not set(self.completion_requirements).issubset(fact_by_key):
+            raise ValueError("completion requirements must reference declared facts")
+        if any(
+            FactKind.AUTHORITATIVE not in fact_by_key[key].kinds
+            for key in self.completion_requirements
+        ):
+            raise ValueError("completion requirements must use authoritative facts")
         return self
 
     def fingerprint(self) -> str:
@@ -192,6 +236,7 @@ class ProcessDefinition(BaseModel):
             ),
             max_actions_per_turn=self.limits.max_actions_per_turn,
             max_timer_horizon=timedelta(days=self.limits.maximum_timer_horizon_days),
+            completion_requirements=dict(self.completion_requirements),
         )
 
     def action_policy(self) -> ConfiguredActionPolicy:
@@ -216,6 +261,21 @@ class ProcessDefinition(BaseModel):
             decision_guidance = "- No additional decision guidance was declared."
         wakes = ", ".join(self.allowed_wake_events) or "none"
         terminal_states = ", ".join(state.value for state in self.terminal_states)
+        facts = (
+            "\n".join(
+                f"- {fact.key} ({fact.title}; {', '.join(kind.value for kind in fact.kinds)}): "
+                f"{fact.description}"
+                for fact in self.facts
+            )
+            or "- No business facts were declared."
+        )
+        completion = (
+            "\n".join(
+                f"- {key} must equal {json.dumps(value, sort_keys=True)}"
+                for key, value in sorted(self.completion_requirements.items())
+            )
+            or "- No additional fact requirements were declared."
+        )
         return (
             f"Process: {self.id} version {self.version}\n"
             f"Goals:\n{goals}\n"
@@ -223,6 +283,8 @@ class ProcessDefinition(BaseModel):
             f"Action parameter guidance:\n{action_guidance}\n"
             f"Decision guidance:\n{decision_guidance}\n"
             f"Allowed event wake types: {wakes}\n"
+            f"Business facts:\n{facts}\n"
+            f"Completion requirements:\n{completion}\n"
             f"Terminal states: {terminal_states}\n"
             "Propose only actions and wake conditions allowed above. "
             "Never claim that a proposed action has already executed."

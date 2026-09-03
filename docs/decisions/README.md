@@ -15,5 +15,6 @@ ADRs record durable architectural choices separately from the evolving project p
 | [009](009-autonomy-and-hitl.md) | Bounded autonomy and conversational HITL | Accepted for MVP |
 | [010](010-open-source-extensions.md) | Public core and private client packs | Accepted |
 | [011](011-client-pack-deployment-topology.md) | One deployment and task queue per client pack | Accepted |
+| [012](012-opinionated-project-authoring.md) | Opinionated client-project authoring | Accepted |
 
 Statuses apply to architectural direction. Numeric limits, provider choices, and operational parameters remain configuration decisions.

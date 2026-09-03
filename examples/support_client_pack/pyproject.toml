@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tiramisu-support-client-pack"
+version = "0.1.0"
+description = "Standalone support-case example for Tiramisu"
+readme = "README.md"
+requires-python = ">=3.13,<3.15"
+dependencies = ["tiramisu-workspace"]
+
+[dependency-groups]
+dev = [
+  "pyright>=1.1.405,<2",
+  "pytest>=8.4,<10",
+  "ruff>=0.12,<1",
+]
+
+[tool.uv.sources]
+tiramisu-workspace = { path = "../..", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/support_client_pack"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]

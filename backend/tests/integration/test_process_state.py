@@ -153,6 +153,21 @@ async def test_process_state_projects_sourced_knowledge_and_versioned_memory() -
             )
         assert retried == first
 
+        premature_completion = AgentDecision(
+            based_on_event_ids=(),
+            status=DecisionStatus.COMPLETED,
+        )
+        with pytest.raises(ProcessStateConflict, match="booking.status"):
+            async with runtime_factory.begin() as session:
+                await service.apply_decision(
+                    session,
+                    tenant_id=tenant_id,
+                    process_instance_id=process_id,
+                    agent_turn_id=uuid4(),
+                    decision=premature_completion,
+                    completion_requirements={"booking.status": "confirmed"},
+                )
+
         confirmation = CanonicalEvent(
             tenant_id=tenant_id,
             event_type="booking.confirmed",
@@ -181,6 +196,7 @@ async def test_process_state_projects_sourced_knowledge_and_versioned_memory() -
                 process_instance_id=process_id,
                 agent_turn_id=uuid4(),
                 decision=completed_decision,
+                completion_requirements={"booking.status": "confirmed"},
             )
         assert completed.version == 2
         assert completed.status is ProcessStatus.COMPLETED

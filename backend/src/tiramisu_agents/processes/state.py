@@ -1,6 +1,7 @@
 """Idempotent persistence of process knowledge, memory, and lifecycle state."""
 
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from pydantic import TypeAdapter
@@ -58,6 +59,7 @@ class ProcessStateService:
         agent_turn_id: UUID,
         decision: AgentDecision,
         terminal_states: frozenset[ProcessStatus] | None = None,
+        completion_requirements: dict[str, Any] | None = None,
     ) -> AppliedProcessState:
         await set_tenant_context(session, tenant_id)
         process = await session.scalar(
@@ -154,6 +156,8 @@ class ProcessStateService:
             decision=decision,
             open_actions=open_actions,
             terminal_states=terminal_states,
+            authoritative_facts=authoritative,
+            completion_requirements=completion_requirements or {},
         )
         memory = decision.memory_update
         try:
@@ -319,6 +323,8 @@ class ProcessStateService:
         decision: AgentDecision,
         open_actions: tuple[tuple[UUID, ActionRequestStatus], ...],
         terminal_states: frozenset[ProcessStatus] | None,
+        authoritative_facts: dict[str, object],
+        completion_requirements: dict[str, Any],
     ) -> ProcessStatus:
         open_statuses = {status for _, status in open_actions}
         if decision.status is DecisionStatus.COMPLETED and open_actions:
@@ -336,6 +342,15 @@ class ProcessStateService:
         if open_statuses:
             return ProcessStatus.ACTIVE
         if decision.status is DecisionStatus.COMPLETED:
+            unsatisfied = tuple(
+                key
+                for key, expected in sorted(completion_requirements.items())
+                if key not in authoritative_facts or authoritative_facts[key] != expected
+            )
+            if unsatisfied:
+                raise ProcessStateConflict(
+                    "completion requirements are not satisfied: " + ", ".join(unsatisfied)
+                )
             if terminal_states is not None and ProcessStatus.COMPLETED not in terminal_states:
                 raise ProcessStateConflict("completed is not a configured terminal state")
             return ProcessStatus.COMPLETED

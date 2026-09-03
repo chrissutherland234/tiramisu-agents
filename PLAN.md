@@ -1,7 +1,7 @@
 # Tiramisu — Long-Running Business Agents Project Plan
 
 Status: Draft  
-Last updated: 2026-08-31
+Last updated: 2026-09-04
 
 Working project name: **Tiramisu**  
 Name rationale: “Pick me up” reflects agents waking from durable waits and continuing with the same context. The layered dessert also reflects the platform's workflow, memory, policy, and integration layers.
@@ -566,7 +566,7 @@ An immutable process-definition version should describe:
 - Tenant-editable settings
 - Definition version and compatibility metadata
 
-The recommended authoring path is developer-authored YAML or JSON validated against Pydantic models, then compiled into an immutable database record. Generic examples live in the public repository; real client definitions live in their private client pack. The client UI should initially expose only safe, explicitly editable settings. A visual workflow builder is deferred until real client implementations show which abstractions are stable.
+The recommended authoring path is the opinionated, code-first project framework accepted in ADR-012. A client defines a `Project` containing `Journey`, `Route`, `Capability`, `Fact`, and `Scenario` objects. Tiramisu derives the low-level extension manifest, process definitions, action bindings, policy identities, business metadata, and strict OpenAI output schema into an immutable `ClientPack`. `tiramisu startproject`, `check`, and `describe` provide the conventional setup and inspection path. Direct `ClientPack` construction remains an advanced escape hatch. Generic examples live in the public repository; real client projects live in their private editable packages. The client UI should initially expose only safe, explicitly editable settings. A visual workflow builder is deferred until several real client implementations show which abstractions are stable.
 
 Definitions follow `DRAFT → VALIDATED → EVALUATED → APPROVED → PUBLISHED → RETIRED`. Publication requires schema validation, deterministic scenario tests, agent evaluations, permission review, and compatibility checks.
 
@@ -655,7 +655,7 @@ Avoid a generic JSON/EAV `business_objects` store unless a concrete client requi
 
 Testing is designed around an integration-free kernel, provider contracts, deterministic Temporal orchestration, and a separate layer of probabilistic agent evaluation.
 
-Current baseline: 140 backend tests (99 unit/contract, 38 PostgreSQL or Temporal integration, and 3 committed-history replay cases), 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exact approval/action fencing, typed provider-conflict recovery, tenant Activity authorization, workflow restart/rollover, manual reevaluation, interventions, and the scripted reference journey. Configuration evolution, cross-layer scenario reuse, the broader race matrix, agent behavior, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
+Current baseline: 155 backend tests (114 unit/contract, 38 PostgreSQL or Temporal integration, and 3 committed-history replay cases), 2 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exact approval/action fencing, typed provider-conflict recovery, tenant Activity authorization, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, and the scripted reference journey. Configuration evolution, executable cross-layer scenarios, the broader race matrix, agent behavior, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
 
 ### Layer 1 — Pure kernel tests
 
@@ -790,6 +790,7 @@ The public repository begins as one editable Python package in a monorepo:
 │   │   ├── approvals/
 │   │   ├── reconciliation/
 │   │   ├── extensions/
+│   │   ├── projects/
 │   │   ├── security/
 │   │   ├── observability/
 │   │   └── testkit/
@@ -803,6 +804,8 @@ The public repository begins as one editable Python package in a monorepo:
 ├── frontend/
 │   ├── src/
 │   └── tests/
+├── examples/
+│   └── support_client_pack/
 ├── docs/
 │   ├── architecture/
 │   └── decisions/
@@ -815,10 +818,7 @@ An actual client pack lives in a different private repository:
 tiramisu-client-acme/
 ├── pyproject.toml
 ├── src/acme_tiramisu/
-│   ├── extension_manifest.py
-│   ├── processes/
-│   ├── prompts/
-│   ├── policies/
+│   ├── project.py
 │   └── adapters/
 ├── tests/
 │   ├── contracts/
@@ -870,7 +870,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Initialize the public repository with MIT `LICENSE`, `README`, contribution, security-reporting, code-of-conduct, and third-party notice files.
 - [ ] Add secret scanning, dependency updates, lockfile review, SBOM generation, and safe CI behavior for untrusted public pull requests.
 - [x] Establish the `tiramisu_agents` namespace, editable `uv` package workflow, internal compatibility versioning, and initial extension-manifest contract without requiring PyPI publication.
-- [x] Bundle the fictional client-pack manifest, definition, output contract, and bindings as the local reference composition.
+- [x] Bundle the fictional project declarations and bindings as the local reference composition, with its manifest, definition, and output contract generated through the public compiler.
 - [x] Add PostgreSQL Compose service, SQLAlchemy models, and a reversible, drift-checked initial Alembic migration.
 - [x] Add and runtime-validate the local Temporal development service.
 - [x] Add forced PostgreSQL row-level security, composite tenant foreign keys, transaction-scoped tenant context, and separate local admin/runtime roles.
@@ -931,9 +931,10 @@ Recommended initial journey:
 
 ### Phase 4 — Configurable client processes
 
-- [x] Add immutable YAML process-definition contracts, validation, fingerprinting, trigger resolution, and deterministic policy/instruction compilation for the fictional process. Persistence and the authoring/publication lifecycle remain outstanding.
+- [x] Add immutable process-definition contracts, validation, fingerprinting, trigger resolution, and deterministic policy/instruction compilation.
+- [x] Add the opinionated `Project`/`Journey`/`Route`/`Capability`/`Fact`/`Scenario` authoring framework, derived manifests and strict output schemas, `startproject`/`check`/`describe`, a migrated fictional journey, and a separately editable support example in CI (ADR-012).
 - [ ] Add the process-definition draft, validation, evaluation, approval, publication, and retirement lifecycle.
-- [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition. Explicit `module:attribute` loading from an installed/editable package, the validated public `ClientPack` contract, a downstream editable-package example, shared API/worker composition, deterministic release identity/queues, and durable audited tenant assignment are complete. Persisted installation inventory, runtime enable/disable, provider credential resolution, ingress routing, and richer lifecycle controls remain.
+- [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition. Explicit `module:attribute` loading from an installed/editable package, the validated public `ClientPack` contract, conventional author tooling, an independently authored editable-package example, shared API/worker composition, deterministic release identity/queues, and durable audited tenant assignment are complete. Persisted installation inventory, runtime enable/disable, provider credential resolution, ingress routing, and richer lifecycle controls remain.
 - [x] Enforce published-only production process triggers and fingerprint-bound definition identities. Draft/retired definitions cannot install real triggers, and same-version behavior drift fails closed for active instances. An explicit draft simulation mode and audited active-instance migration remain separate work.
 - [ ] Add tenant prompt and policy configuration.
 - [ ] Add the tool and integration registry.
@@ -990,11 +991,13 @@ The first vertical slice is complete when:
 24. Revision feedback supersedes the original proposal; a late approval of the old revision cannot execute it.
 25. The operator can compare proposal revisions and approve only the exact final action payload.
 26. The public repository builds, tests, and runs the fictional reference journey without any private client package.
-27. The bundled fictional client pack owns its definition, manifest, output contract, and bindings in one package. Downstream client packages register through the same public manifest/factory contract and pass the same contract suites.
+27. The bundled fictional project owns its journey, route, capability, fact, scenario, and binding declarations in one package; its definition, manifest, and strict output contract are compiler-generated. Downstream client packages use the same public project/compiler/factory path and pass the same contract suites.
 28. The supported client-pack registration path cannot replace the workflow, action gateway, tenant checks, approval integrity, budgets, or audit path. Client-pack code is nevertheless a trusted executable artifact; isolation from malicious code is a deployment boundary, not a type-contract guarantee.
 29. Repository and release checks detect committed secrets, unsafe fixtures, generated credentials, and prohibited client/customer content.
 30. Wake and Resume each cause one durable reevaluation turn even when the current plan waits for another event; duplicate delivery and Continue-As-New do not repeat it.
 31. Operator reevaluation guidance is visible to the agent but cannot change an authoritative fact; a real provider event or typed, audited correction is required.
+32. A client implementer can scaffold, compile, and explain an independently installable project without hand-writing a manifest, policy registry, action union, or low-level process definition.
+33. A process cannot complete until its declared authoritative completion facts match at both the proposal-validation and state-persistence boundaries.
 
 ## 16. Open decisions
 
@@ -1055,9 +1058,9 @@ Status: Unconfirmed.
 
 ### D-007: Process authoring
 
-Recommended: developer-authored, version-controlled definitions with limited client-editable settings for the first release.
+Decision: use version-controlled, code-first `Project`, `Journey`, `Route`, `Capability`, `Fact`, and `Scenario` conventions that compile to the stable low-level client-pack contract. Expose limited typed client-editable settings later; defer a visual builder.
 
-Status: Unconfirmed.
+Status: Accepted in ADR-012.
 
 ### D-008: Journey identity and correlation
 

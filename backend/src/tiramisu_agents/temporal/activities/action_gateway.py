@@ -3,8 +3,10 @@
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
+from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -14,8 +16,14 @@ from tiramisu_agents.actions.gateway import (
     ActionPersistenceConflict,
     CommunicationPolicy,
 )
-from tiramisu_agents.core.contracts.decisions import AgentDecision
+from tiramisu_agents.core.contracts.decisions import AgentDecision, DecisionStatus
+from tiramisu_agents.core.contracts.events import CanonicalEvent
+from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.core.policy import DecisionRejected, validate_decision
+from tiramisu_agents.db.models.actions import ActionAttempt
+from tiramisu_agents.db.models.events import EventInbox
+from tiramisu_agents.db.models.processes import ProcessInstance
+from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.extensions.runtime import DeploymentRelease
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.security.tenancy import (
@@ -79,26 +87,41 @@ class ActionGatewayActivities:
         )
         decision = AgentDecision.model_validate_json(command.decision_json)
         try:
-            validate_decision(
-                decision,
-                definition.decision_policy(),
-                workflow_now=command.workflow_now,
-                expected_event_ids=frozenset(UUID(value) for value in command.event_ids),
-                expected_review_command_ids=frozenset(
-                    UUID(value) for value in command.review_command_ids
-                ),
-                expected_action_attempt_ids=frozenset(
-                    UUID(value) for value in command.action_attempt_ids
-                ),
-                expected_timer_ids=frozenset(command.timer_ids),
-            )
             async with self._session_factory.begin() as session:
+                await set_tenant_context(session, tenant_id)
                 if self._deployment_release is not None:
                     await require_active_tenant(
                         session,
                         tenant_id,
                         deployment_id=self._deployment_release.deployment_id,
                     )
+                authoritative_facts = (
+                    await self._completion_facts(
+                        session,
+                        tenant_id=tenant_id,
+                        process_instance_id=UUID(command.process_instance_id),
+                        event_ids=tuple(UUID(value) for value in command.event_ids),
+                        action_attempt_ids=tuple(
+                            UUID(value) for value in command.action_attempt_ids
+                        ),
+                    )
+                    if decision.status is DecisionStatus.COMPLETED
+                    else {}
+                )
+                validate_decision(
+                    decision,
+                    definition.decision_policy(),
+                    workflow_now=command.workflow_now,
+                    expected_event_ids=frozenset(UUID(value) for value in command.event_ids),
+                    expected_review_command_ids=frozenset(
+                        UUID(value) for value in command.review_command_ids
+                    ),
+                    expected_action_attempt_ids=frozenset(
+                        UUID(value) for value in command.action_attempt_ids
+                    ),
+                    expected_timer_ids=frozenset(command.timer_ids),
+                    current_authoritative_facts=authoritative_facts,
+                )
                 persisted = await self._gateway.persist_decision(
                     session,
                     tenant_id=tenant_id,
@@ -148,3 +171,53 @@ class ActionGatewayActivities:
         return PersistActionsResult(
             actions_json=json.dumps(serialized, sort_keys=True, separators=(",", ":"))
         )
+
+    @staticmethod
+    async def _completion_facts(
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+        process_instance_id: UUID,
+        event_ids: tuple[UUID, ...],
+        action_attempt_ids: tuple[UUID, ...],
+    ) -> dict[str, Any]:
+        stored = await session.scalar(
+            select(ProcessInstance.authoritative_facts).where(
+                ProcessInstance.tenant_id == tenant_id,
+                ProcessInstance.id == process_instance_id,
+            )
+        )
+        if stored is None:
+            raise ActionPersistenceConflict("process instance not found")
+        facts = dict(stored)
+        if event_ids:
+            event_documents = (
+                await session.scalars(
+                    select(EventInbox.event_data).where(
+                        EventInbox.tenant_id == tenant_id,
+                        EventInbox.process_instance_id == process_instance_id,
+                        EventInbox.id.in_(event_ids),
+                        EventInbox.correlation_status == "matched",
+                    )
+                )
+            ).all()
+            for document in event_documents:
+                for observation in CanonicalEvent.model_validate(document).facts:
+                    if observation.kind is FactKind.AUTHORITATIVE:
+                        facts[observation.key] = observation.model_dump(mode="json")["value"]
+        if action_attempt_ids:
+            attempt_fact_documents = (
+                await session.scalars(
+                    select(ActionAttempt.facts).where(
+                        ActionAttempt.tenant_id == tenant_id,
+                        ActionAttempt.process_instance_id == process_instance_id,
+                        ActionAttempt.id.in_(action_attempt_ids),
+                    )
+                )
+            ).all()
+            for documents in attempt_fact_documents:
+                for document in documents:
+                    observation = FactObservation.model_validate(document)
+                    if observation.kind is FactKind.AUTHORITATIVE:
+                        facts[observation.key] = observation.model_dump(mode="json")["value"]
+        return facts
