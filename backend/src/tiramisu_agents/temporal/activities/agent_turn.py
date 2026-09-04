@@ -111,6 +111,7 @@ class AgentTurnActivities:
                     tenant_id=tenant_id,
                     process_instance_id=UUID(command.process_instance_id),
                     turn_id=UUID(command.turn_id),
+                    workflow_now=command.workflow_now,
                     event_ids=tuple(UUID(event_id) for event_id in command.event_ids),
                     review_command_ids=tuple(
                         UUID(command_id) for command_id in command.review_command_ids

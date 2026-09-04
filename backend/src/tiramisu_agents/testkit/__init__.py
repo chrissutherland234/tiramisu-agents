@@ -10,11 +10,11 @@ from tiramisu_agents.testkit.deployment import (
     TEST_DEPLOYMENT_RELEASE,
     make_test_deployment_release,
 )
+from tiramisu_agents.testkit.scenario_script import ScenarioRunError
 from tiramisu_agents.testkit.scenarios import (
     KernelScenarioDriver,
     ScenarioDriver,
     ScenarioResult,
-    ScenarioRunError,
     ScenarioRunner,
     ScenarioTraceEntry,
     ScenarioTraceKind,
@@ -22,10 +22,12 @@ from tiramisu_agents.testkit.scenarios import (
     scenario_result_json,
 )
 from tiramisu_agents.testkit.scripted_agent import ScriptedAgent
+from tiramisu_agents.testkit.temporal_scenarios import PostgresTemporalScenarioDriver
 
 __all__ = [
     "MutatingActionAdapterContract",
     "KernelScenarioDriver",
+    "PostgresTemporalScenarioDriver",
     "ScenarioDriver",
     "ScenarioResult",
     "ScenarioRunError",

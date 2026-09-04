@@ -1,5 +1,6 @@
 """Load a bounded agent-turn context from authoritative application records."""
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import TypeAdapter
@@ -111,6 +112,7 @@ class PostgresAgentContextLoader:
         tenant_id: UUID,
         process_instance_id: UUID,
         turn_id: UUID,
+        workflow_now: datetime | None = None,
         event_ids: tuple[UUID, ...],
         review_command_ids: tuple[UUID, ...] = (),
         action_attempt_ids: tuple[UUID, ...] = (),
@@ -337,6 +339,7 @@ class PostgresAgentContextLoader:
         )
         turn_input = AgentTurnInput(
             turn_id=turn_id,
+            workflow_now=workflow_now,
             process=ProcessSnapshot(
                 tenant_id=tenant_id,
                 process_instance_id=process_instance_id,

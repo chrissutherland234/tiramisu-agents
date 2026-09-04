@@ -5,9 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Protocol, cast
-from uuid import UUID, uuid5
-
-from pydantic import ValidationError
+from uuid import UUID
 
 from tiramisu_agents.core.action_identity import (
     action_payload_identity,
@@ -19,14 +17,7 @@ from tiramisu_agents.core.contracts.actions import (
     ActionRequestStatus,
     PermissionOutcome,
 )
-from tiramisu_agents.core.contracts.decisions import (
-    AgentDecision,
-    DecisionStatus,
-    EventWakeCondition,
-    TimerWakeCondition,
-)
 from tiramisu_agents.core.contracts.events import CanonicalEvent
-from tiramisu_agents.core.contracts.knowledge import FactObservation
 from tiramisu_agents.core.contracts.processes import (
     ActionResultContext,
     AgentTurnInput,
@@ -42,24 +33,15 @@ from tiramisu_agents.core.transitions import (
     project_process_transition,
 )
 from tiramisu_agents.extensions import ClientPack
-from tiramisu_agents.extensions.project_metadata import (
-    JourneyDescription,
-    ScenarioDescription,
-    ScenarioStepDescription,
-)
+from tiramisu_agents.extensions.project_metadata import ScenarioStepDescription
 from tiramisu_agents.projects.contracts import (
     ScenarioAction,
-    ScenarioEvent,
-    ScenarioEventWait,
     ScenarioTimerWait,
 )
-from tiramisu_agents.projects.output import GeneratedAgentDecisionOutput
-
-_SCENARIO_NAMESPACE = UUID("9ed12c20-aac2-5cd2-9918-c484baa38938")
-
-
-class ScenarioRunError(ValueError):
-    """Raised when an executable scenario contradicts runtime behavior."""
+from tiramisu_agents.testkit.scenario_script import (
+    CompiledScenarioScript,
+    ScenarioRunError,
+)
 
 
 class ScenarioTraceKind(StrEnum):
@@ -154,11 +136,12 @@ class KernelScenarioDriver:
         self._pack = client_pack
 
     async def run(self, scenario_id: str) -> ScenarioResult:
-        journey, scenario = self._find_scenario(scenario_id)
-        definition = self._pack.registry.get(journey.id, journey.version)
-        identity = f"{self._pack.fingerprint()}:{journey.id}:{scenario.id}"
-        tenant_id = uuid5(_SCENARIO_NAMESPACE, f"{identity}:tenant")
-        process_id = uuid5(_SCENARIO_NAMESPACE, f"{identity}:process")
+        script = CompiledScenarioScript(self._pack, scenario_id)
+        journey = script.journey
+        scenario = script.scenario
+        definition = script.definition
+        tenant_id = script.deterministic_uuid("tenant")
+        process_id = script.deterministic_uuid("process")
         now = scenario.started_at
         snapshot = ProcessSnapshot(
             tenant_id=tenant_id,
@@ -180,9 +163,8 @@ class KernelScenarioDriver:
             if not (pending_events or pending_results or pending_timers):
                 step = scenario.steps[index]
                 if step.kind != "event":
-                    raise self._error(scenario, step, "expected a business event wake source")
-                event = self._build_event(
-                    scenario=scenario,
+                    raise script.error(step, "expected a business event wake source")
+                event = script.build_event(
                     step=step,
                     step_index=index,
                     tenant_id=tenant_id,
@@ -194,8 +176,7 @@ class KernelScenarioDriver:
                     getattr(wake, "event_type", None) == event.event_type
                     for wake in snapshot.current_wake_conditions
                 ):
-                    raise self._error(
-                        scenario,
+                    raise script.error(
                         step,
                         f"process is not waiting for {event.event_type}",
                     )
@@ -218,28 +199,26 @@ class KernelScenarioDriver:
 
             decision_step = scenario.steps[index]
             if decision_step.kind not in {"action", "wait", "complete"}:
-                raise self._error(
-                    scenario,
+                raise script.error(
                     decision_step,
                     "expected an action, wait, or completion decision",
                 )
             turn_number += 1
-            turn_id = uuid5(_SCENARIO_NAMESPACE, f"{identity}:turn:{turn_number}")
+            turn_id = script.deterministic_uuid(f"turn:{turn_number}")
             turn_input = AgentTurnInput(
                 turn_id=turn_id,
+                workflow_now=now,
                 process=snapshot,
                 events=pending_events,
                 action_results=pending_results,
                 timer_ids=pending_timers,
                 instructions=definition.compile_instructions(),
             )
-            decision = self._build_decision(
-                scenario=scenario,
+            decision = script.build_decision(
                 step=decision_step,
                 step_index=index,
                 turn_input=turn_input,
                 now=now,
-                identity=identity,
             )
             prospective_authoritative = dict(snapshot.authoritative_facts)
             for source in (*pending_events, *pending_results):
@@ -259,7 +238,7 @@ class KernelScenarioDriver:
                     current_authoritative_facts=prospective_authoritative,
                 )
             except DecisionRejected as error:
-                raise self._error(scenario, decision_step, str(error)) from error
+                raise script.error(decision_step, str(error)) from error
 
             action_spec = (
                 ScenarioAction.model_validate(decision_step.value)
@@ -269,23 +248,20 @@ class KernelScenarioDriver:
             if action_spec is not None:
                 expected_parameters = cast(
                     dict[str, Any],
-                    self._resolve(
+                    script.resolve(
                         action_spec.parameters,
-                        self._prospective_snapshot(turn_input),
-                        scenario=scenario,
+                        script.prospective_snapshot(turn_input),
                         step=decision_step,
                     ),
                 )
-                self._require_expected_action(
-                    scenario,
+                script.require_expected_action(
                     decision_step,
                     decision,
                     action_spec,
                     expected_parameters=expected_parameters,
                 )
             elif decision_step.kind == "wait":
-                self._require_expected_wait(
-                    scenario,
+                script.require_expected_wait(
                     decision_step,
                     decision,
                     now=now,
@@ -332,7 +308,7 @@ class KernelScenarioDriver:
                     fact_provenance=provenance,
                 )
             except ValueError as error:
-                raise self._error(scenario, decision_step, str(error)) from error
+                raise script.error(decision_step, str(error)) from error
 
             classified: list[tuple[Any, PermissionOutcome, ActionRequestStatus]] = []
             open_actions: list[tuple[UUID, ActionRequestStatus]] = []
@@ -361,7 +337,7 @@ class KernelScenarioDriver:
                     completion_requirements=definition.completion_requirements,
                 )
             except ProcessTransitionRejected as error:
-                raise self._error(scenario, decision_step, str(error)) from error
+                raise script.error(decision_step, str(error)) from error
 
             snapshot = snapshot.model_copy(
                 update={
@@ -388,7 +364,7 @@ class KernelScenarioDriver:
                 }
             )
             for assertion in assertions:
-                self._assert_fact(scenario, assertion, snapshot, trace, now)
+                self._assert_fact(script, assertion, snapshot, trace, now)
 
             pending_events = ()
             pending_results = ()
@@ -401,8 +377,7 @@ class KernelScenarioDriver:
                 for action, permission, _ in classified:
                     if permission is PermissionOutcome.REQUIRE_APPROVAL:
                         if not action_spec.approve:
-                            raise self._error(
-                                scenario,
+                            raise script.error(
                                 decision_step,
                                 f"{action.action_type} requires an explicit scenario approval",
                             )
@@ -415,14 +390,12 @@ class KernelScenarioDriver:
                             {"logical_action_key": action.logical_action_key},
                         )
                     elif action_spec.approve:
-                        raise self._error(
-                            scenario,
+                        raise script.error(
                             decision_step,
                             f"{action.action_type} does not require approval",
                         )
                     if permission is PermissionOutcome.DENY:
-                        raise self._error(
-                            scenario,
+                        raise script.error(
                             decision_step,
                             f"policy denied {action.action_type}",
                         )
@@ -432,7 +405,7 @@ class KernelScenarioDriver:
                         process_id=process_id,
                         authoritative_facts=authoritative,
                         turn_number=turn_number,
-                        identity=identity,
+                        script=script,
                     )
                     results.append(result)
                     action_types.append(action.action_type)
@@ -445,7 +418,7 @@ class KernelScenarioDriver:
                     )
                 pending_results = tuple(results)
             elif decision_step.kind == "wait":
-                wait = self._parse_wait(decision_step)
+                wait = script.parse_wait(decision_step)
                 self._append_trace(
                     trace,
                     now,
@@ -484,205 +457,6 @@ class KernelScenarioDriver:
             trace=tuple(trace),
         )
 
-    def _find_scenario(self, scenario_id: str) -> tuple[JourneyDescription, ScenarioDescription]:
-        assert self._pack.project is not None
-        matches = [
-            (journey, scenario)
-            for journey in self._pack.project.journeys
-            for scenario in journey.scenarios
-            if scenario.id == scenario_id
-        ]
-        if not matches:
-            available = sorted(
-                scenario.id
-                for journey in self._pack.project.journeys
-                for scenario in journey.scenarios
-            )
-            choices = ", ".join(available) or "none"
-            raise ScenarioRunError(
-                f"unknown scenario {scenario_id!r}; available scenarios: {choices}"
-            )
-        if len(matches) > 1:
-            raise ScenarioRunError(
-                f"scenario ID {scenario_id!r} is ambiguous across project journeys"
-            )
-        return matches[0]
-
-    def _build_event(
-        self,
-        *,
-        scenario: ScenarioDescription,
-        step: ScenarioStepDescription,
-        step_index: int,
-        tenant_id: UUID,
-        process_id: UUID,
-        occurred_at: datetime,
-        snapshot: ProcessSnapshot,
-    ) -> CanonicalEvent:
-        data = ScenarioEvent.model_validate(step.value)
-        facts = tuple(
-            FactObservation(
-                key=fact.key,
-                kind=fact.kind,
-                value=self._resolve(fact.value, snapshot, scenario=scenario, step=step),
-            )
-            for fact in data.facts
-        )
-        return CanonicalEvent(
-            event_id=uuid5(
-                _SCENARIO_NAMESPACE,
-                f"{scenario.id}:event:{step_index}:{step.reference}",
-            ),
-            tenant_id=tenant_id,
-            process_instance_id=process_id,
-            event_type=cast(str, step.reference),
-            source=data.source,
-            source_event_id=f"{scenario.id}:{step_index}:{step.reference}",
-            occurred_at=occurred_at,
-            received_at=occurred_at,
-            external_references=data.external_references,
-            facts=facts,
-            payload=cast(
-                dict[str, Any], self._resolve(data.payload, snapshot, scenario=scenario, step=step)
-            ),
-        )
-
-    def _build_decision(
-        self,
-        *,
-        scenario: ScenarioDescription,
-        step: ScenarioStepDescription,
-        step_index: int,
-        turn_input: AgentTurnInput,
-        now: datetime,
-        identity: str,
-    ) -> AgentDecision:
-        payload: dict[str, Any]
-        resolution_snapshot = self._prospective_snapshot(turn_input)
-        if step.kind == "action":
-            action = ScenarioAction.model_validate(step.value)
-            payload = {
-                "status": DecisionStatus.ACTIVE.value,
-                "actions": [
-                    {
-                        "logical_action_key": action.logical_action_key,
-                        "action_type": step.reference,
-                        "parameters": self._resolve(
-                            action.parameters,
-                            resolution_snapshot,
-                            scenario=scenario,
-                            step=step,
-                        ),
-                        "rationale": action.rationale,
-                    }
-                ],
-            }
-        elif step.kind == "wait":
-            wait = self._parse_wait(step)
-            wake: dict[str, Any]
-            if isinstance(wait, ScenarioEventWait):
-                wake = {"type": "event", "event_type": wait.event_type}
-            else:
-                wake = {
-                    "type": "timer",
-                    "at": (now + timedelta(seconds=wait.delay_seconds)).isoformat(),
-                }
-            payload = {"status": DecisionStatus.WAITING.value, "wake_conditions": [wake]}
-        else:
-            payload = {"status": DecisionStatus.COMPLETED.value}
-        try:
-            output = self._pack.agent_decision_output_type.model_validate(payload)
-        except ValidationError as error:
-            raise self._error(scenario, step, f"scripted decision is invalid: {error}") from error
-        if not isinstance(output, GeneratedAgentDecisionOutput):
-            raise ScenarioRunError("client pack output type is not a generated project output")
-        decision = output.to_agent_decision(turn_input)
-        actions = tuple(
-            action.model_copy(
-                update={
-                    "action_request_id": uuid5(
-                        _SCENARIO_NAMESPACE,
-                        f"{identity}:action:{step_index}:{position}:{action.logical_action_key}",
-                    )
-                }
-            )
-            for position, action in enumerate(decision.actions)
-        )
-        return decision.model_copy(
-            update={
-                "decision_id": uuid5(
-                    _SCENARIO_NAMESPACE,
-                    f"{identity}:decision:{step_index}",
-                ),
-                "actions": actions,
-            }
-        )
-
-    @staticmethod
-    def _prospective_snapshot(turn_input: AgentTurnInput) -> ProcessSnapshot:
-        """Expose current wake-source observations to the deterministic script."""
-
-        authoritative = dict(turn_input.process.authoritative_facts)
-        claims = dict(turn_input.process.customer_claims)
-        for source in (*turn_input.events, *turn_input.action_results):
-            for fact in source.facts:
-                target = authoritative if fact.kind.value == "authoritative" else claims
-                target[fact.key] = fact.model_dump(mode="json")["value"]
-        return turn_input.process.model_copy(
-            update={"authoritative_facts": authoritative, "customer_claims": claims}
-        )
-
-    @staticmethod
-    def _require_expected_action(
-        scenario: ScenarioDescription,
-        step: ScenarioStepDescription,
-        decision: AgentDecision,
-        expected: ScenarioAction,
-        *,
-        expected_parameters: dict[str, Any],
-    ) -> None:
-        if len(decision.actions) != 1:
-            raise ScenarioRunError(
-                f"scenario {scenario.id} step {step.description!r}: scripted decision produced "
-                f"{len(decision.actions)} actions; expected exactly one"
-            )
-        action = decision.actions[0]
-        if (
-            decision.status is not DecisionStatus.ACTIVE
-            or decision.wake_conditions
-            or action.action_type != step.reference
-            or action.logical_action_key != expected.logical_action_key
-            or action.parameters != expected_parameters
-            or action.rationale != expected.rationale
-        ):
-            raise ScenarioRunError(
-                f"scenario {scenario.id} step {step.description!r}: generated action changed "
-                "the scripted action identity"
-            )
-
-    @staticmethod
-    def _require_expected_wait(
-        scenario: ScenarioDescription,
-        step: ScenarioStepDescription,
-        decision: AgentDecision,
-        *,
-        now: datetime,
-    ) -> None:
-        wait = KernelScenarioDriver._parse_wait(step)
-        if isinstance(wait, ScenarioEventWait):
-            expected = EventWakeCondition(event_type=wait.event_type)
-        else:
-            expected = TimerWakeCondition(at=now + timedelta(seconds=wait.delay_seconds))
-        expected_document = expected.model_dump(mode="json")
-        actual_documents = tuple(wake.model_dump(mode="json") for wake in decision.wake_conditions)
-        if decision.status is not DecisionStatus.WAITING or actual_documents != (
-            expected_document,
-        ):
-            raise ScenarioRunError(
-                f"scenario {scenario.id} step {step.description!r}: generated wake plan "
-                "changed the scripted wait"
-            )
-
     async def _execute_action(
         self,
         *,
@@ -691,7 +465,7 @@ class KernelScenarioDriver:
         process_id: UUID,
         authoritative_facts: dict[str, Any],
         turn_number: int,
-        identity: str,
+        script: CompiledScenarioScript,
     ) -> ActionResultContext:
         try:
             adapter = self._pack.simulation_bindings[action.action_type]
@@ -723,9 +497,8 @@ class KernelScenarioDriver:
                 f"scenario provider rejected {action.action_type}: {type(error).__name__}: {error}"
             ) from error
         return ActionResultContext(
-            attempt_id=uuid5(
-                _SCENARIO_NAMESPACE,
-                f"{identity}:attempt:{turn_number}:{action.logical_action_key}",
+            attempt_id=script.deterministic_uuid(
+                f"attempt:{turn_number}:{action.logical_action_key}"
             ),
             action_request_id=action.action_request_id,
             revision=1,
@@ -739,74 +512,16 @@ class KernelScenarioDriver:
             facts=provider_result.facts,
         )
 
-    @staticmethod
-    def _parse_wait(step: ScenarioStepDescription) -> ScenarioEventWait | ScenarioTimerWait:
-        value = cast(dict[str, Any], step.value)
-        if value.get("type") == "event":
-            return ScenarioEventWait.model_validate(value)
-        return ScenarioTimerWait.model_validate(value)
-
-    def _resolve(
-        self,
-        value: Any,
-        snapshot: ProcessSnapshot,
-        *,
-        scenario: ScenarioDescription,
-        step: ScenarioStepDescription,
-    ) -> Any:
-        if isinstance(value, dict):
-            document = cast(dict[str, Any], value)
-            if document.get("type") == "fact" and set(document).issubset(
-                {"type", "fact_key", "path"}
-            ):
-                key = cast(str, document.get("fact_key"))
-                if key in snapshot.authoritative_facts:
-                    resolved: Any = snapshot.authoritative_facts[key]
-                elif key in snapshot.customer_claims:
-                    resolved = snapshot.customer_claims[key]
-                else:
-                    raise self._error(scenario, step, f"fact is not available yet: {key}")
-                path = cast(list[str | int], document.get("path", []))
-                for part in path:
-                    try:
-                        resolved = resolved[part]
-                    except (KeyError, IndexError, TypeError) as error:
-                        raise self._error(
-                            scenario,
-                            step,
-                            f"fact path is unavailable: {key} {path}",
-                        ) from error
-                return resolved
-            return {
-                key: self._resolve(item, snapshot, scenario=scenario, step=step)
-                for key, item in document.items()
-            }
-        if isinstance(value, list):
-            items = cast(list[Any], value)
-            return [self._resolve(item, snapshot, scenario=scenario, step=step) for item in items]
-        return value
-
     def _assert_fact(
         self,
-        scenario: ScenarioDescription,
+        script: CompiledScenarioScript,
         step: ScenarioStepDescription,
         snapshot: ProcessSnapshot,
         trace: list[ScenarioTraceEntry],
         now: datetime,
     ) -> None:
         key = cast(str, step.reference)
-        if key in snapshot.authoritative_facts:
-            actual = snapshot.authoritative_facts[key]
-        elif key in snapshot.customer_claims:
-            actual = snapshot.customer_claims[key]
-        else:
-            raise self._error(scenario, step, f"expected fact is absent: {key}")
-        if actual != step.value:
-            raise self._error(
-                scenario,
-                step,
-                f"fact {key} is {actual!r}; expected {step.value!r}",
-            )
+        actual = script.assert_fact_value(step, snapshot)
         self._append_trace(
             trace,
             now,
@@ -832,14 +547,6 @@ class KernelScenarioDriver:
                 details=details,
             )
         )
-
-    @staticmethod
-    def _error(
-        scenario: ScenarioDescription,
-        step: ScenarioStepDescription,
-        message: str,
-    ) -> ScenarioRunError:
-        return ScenarioRunError(f"scenario {scenario.id} step {step.description!r}: {message}")
 
 
 class ScenarioRunner:

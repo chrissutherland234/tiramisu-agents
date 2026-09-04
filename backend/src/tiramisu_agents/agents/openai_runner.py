@@ -186,6 +186,9 @@ class OpenAIAgentsTurnRunner:
     ) -> str:
         payload = {
             "turn_id": str(turn_input.turn_id),
+            "workflow_now": (
+                turn_input.workflow_now.isoformat() if turn_input.workflow_now is not None else None
+            ),
             "process": turn_input.process.model_dump(mode="json"),
             "events": [event.model_dump(mode="json") for event in turn_input.events],
             "reviews": [review.model_dump(mode="json") for review in turn_input.reviews],

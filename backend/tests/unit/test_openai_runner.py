@@ -55,6 +55,7 @@ async def test_openai_runner_is_structured_proposal_only_and_bounded() -> None:
 
     tenant_id = uuid4()
     process_id = uuid4()
+    workflow_now = datetime(2026, 9, 4, 12, tzinfo=UTC)
     runner = OpenAIAgentsTurnRunner(
         model="test-model",
         executor=cast(AgentsSDKExecutor, execute),
@@ -62,6 +63,7 @@ async def test_openai_runner_is_structured_proposal_only_and_bounded() -> None:
     result = await runner.run_turn(
         AgentTurnInput(
             turn_id=uuid4(),
+            workflow_now=workflow_now,
             process=ProcessSnapshot(
                 tenant_id=tenant_id,
                 process_instance_id=process_id,
@@ -112,6 +114,7 @@ async def test_openai_runner_is_structured_proposal_only_and_bounded() -> None:
     assert "source-1" in cast(str, captured["prompt"])
     assert "message-123" in cast(str, captured["prompt"])
     assert "Provider support confirmed delivery." in cast(str, captured["prompt"])
+    assert workflow_now.isoformat() in cast(str, captured["prompt"])
     assert '"decision_provenance"' in cast(str, captured["prompt"])
     assert str(attempt_id) in cast(str, captured["prompt"])
 

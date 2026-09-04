@@ -1,10 +1,11 @@
 """Process state exposed to a bounded agent turn."""
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from tiramisu_agents.core.contracts.actions import ActionAttemptStatus, ActionConflict
 from tiramisu_agents.core.contracts.decisions import WakeCondition
@@ -86,9 +87,17 @@ class AgentTurnInput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     turn_id: UUID
+    workflow_now: datetime | None = None
     process: ProcessSnapshot
     events: tuple[CanonicalEvent, ...]
     reviews: tuple[ReviewTurnContext, ...] = ()
     action_results: tuple[ActionResultContext, ...] = ()
     timer_ids: tuple[str, ...] = ()
     instructions: str = Field(min_length=1)
+
+    @field_validator("workflow_now")
+    @classmethod
+    def require_workflow_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("agent workflow time must be timezone-aware")
+        return value

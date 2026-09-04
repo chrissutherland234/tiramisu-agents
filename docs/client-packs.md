@@ -208,8 +208,15 @@ decision policy, classifies actions through the production permission policy, de
 identities, calls only explicitly safe simulation adapters, and projects facts, process status,
 wakes, and completion through the same infrastructure-free transition functions used by PostgreSQL
 persistence. Its trace shows every event, decision, approval, provider result, wait, fact assertion,
-and completion. A pluggable driver boundary is retained so the same compiled scenario can next be
-run through the PostgreSQL/Temporal stack.
+and completion.
+
+Integration suites can pass the same pack to `PostgresTemporalScenarioDriver`. That driver creates
+an isolated test tenant, sends event steps through real ingestion and outbox delivery, runs the
+real Temporal mailbox and Activities, applies authored approvals through the review service,
+executes only `simulation_bindings`, and checks durable facts, actions, approvals, wake records,
+audit revisions, and completion. It restarts the worker composition at external checkpoints and
+uses Temporal time skipping for timer steps. This is the slower cross-layer acceptance test; keep
+the integration-free driver as the default author feedback loop.
 
 If a capability's deployment adapter is real, bind a separate safe adapter for scenarios:
 

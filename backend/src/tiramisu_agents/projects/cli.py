@@ -14,11 +14,8 @@ from agents.agent_output import AgentOutputSchema
 from tiramisu_agents.extensions import ClientPack, ClientPackError
 from tiramisu_agents.projects.contracts import Project, ProjectConfigurationError
 from tiramisu_agents.projects.scaffold import create_project_scaffold
-from tiramisu_agents.testkit.scenarios import (
-    ScenarioRunError,
-    ScenarioRunner,
-    scenario_result_json,
-)
+from tiramisu_agents.testkit.scenario_script import ScenarioRunError
+from tiramisu_agents.testkit.scenarios import ScenarioRunner, scenario_result_json
 
 
 def build_parser() -> argparse.ArgumentParser:

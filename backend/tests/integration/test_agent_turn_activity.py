@@ -174,6 +174,7 @@ async def test_activity_repairs_then_rejects_out_of_policy_decisions_with_one_sn
             scripted_agent.turn_inputs[0].events[0].process_instance_id
             == ingested.process_instance_id
         )
+        assert scripted_agent.turn_inputs[0].workflow_now == command.workflow_now
         assert "Allowed action types" in scripted_agent.turn_inputs[0].instructions
 
         repaired = await activities.run_agent_turn(command)

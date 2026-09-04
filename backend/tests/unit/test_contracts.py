@@ -16,6 +16,7 @@ from tiramisu_agents.core.contracts.decisions import (
 )
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
+from tiramisu_agents.core.contracts.processes import AgentTurnInput, ProcessSnapshot, ProcessStatus
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
 from tiramisu_agents.core.policy import DecisionPolicy, DecisionRejected, validate_decision
 
@@ -28,6 +29,25 @@ def test_canonical_event_requires_timezone_aware_timestamps() -> None:
             source="website",
             source_event_id="enquiry-1",
             occurred_at=datetime(2026, 8, 29),
+        )
+
+
+def test_agent_turn_workflow_clock_must_be_timezone_aware() -> None:
+    tenant_id = uuid4()
+    with pytest.raises(ValidationError, match="workflow time must be timezone-aware"):
+        AgentTurnInput(
+            turn_id=uuid4(),
+            workflow_now=datetime(2026, 9, 4, 9),
+            process=ProcessSnapshot(
+                tenant_id=tenant_id,
+                process_instance_id=uuid4(),
+                process_type="test_process",
+                process_definition_version="1",
+                status=ProcessStatus.ACTIVE,
+            ),
+            events=(),
+            timer_ids=("follow-up",),
+            instructions="Handle the follow-up.",
         )
 
 

@@ -35,10 +35,11 @@ Provide `tiramisu startproject`, `tiramisu check`, `tiramisu describe`, and `tir
 Executable scenarios declare typed event facts, scripted action proposals and approvals, event or
 timer waits, fact expectations, and terminal completion. They compile into immutable project
 metadata and run first against an infrastructure-free driver that shares production decision,
-permission, action-identity, fact-projection, status, wake, and completion rules. Keep a driver
-boundary so the identical scenario can be exercised through PostgreSQL and Temporal next. Keep
-projects as separate editable Python packages until the distribution strategy is decided. Maintain
-a materially different standalone example in public CI.
+permission, action-identity, fact-projection, status, wake, and completion rules. A second driver
+runs the identical compiled scenario through PostgreSQL ingestion/outbox persistence, Temporal's
+real mailbox and Activity chain, exact-payload reviews, safe adapters, worker restarts, and
+time-skipped timers. Keep projects as separate editable Python packages until the distribution
+strategy is decided. Maintain a materially different standalone example in public CI.
 
 Simulation side effects use an explicit binding map. Tiramisu's stubs declare themselves safe for
 simulation; an ordinary production adapter is never used as an implicit fallback. A capability
@@ -64,8 +65,9 @@ forms without inventing another configuration model.
 
 The framework is intentionally opinionated and does not model every possible workflow topology.
 Advanced deterministic behavior still requires reviewed Python. Client code remains trusted
-executable code, and compilation does not sandbox adapters or prove model quality. The current
-scenario driver proves deterministic kernel behavior, not PostgreSQL transactions or Temporal
-ordering. The cross-layer scenario driver, publication workflow, model evaluation, provider
+executable code, and compilation does not sandbox adapters or prove model quality. The two
+scenario drivers now prove the deterministic kernel path and the ordinary PostgreSQL/Temporal
+happy path with safe providers; they do not prove probabilistic model quality, all concurrency
+orderings, or real-provider behavior. The publication workflow, model evaluation, provider
 credentials, generated ingress transforms, and the full typed fact editor remain later lifecycle
 work.

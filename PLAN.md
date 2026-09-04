@@ -655,7 +655,7 @@ Avoid a generic JSON/EAV `business_objects` store unless a concrete client requi
 
 Testing is designed around an integration-free kernel, provider contracts, deterministic Temporal orchestration, and a separate layer of probabilistic agent evaluation.
 
-Current baseline: 162 backend tests (121 unit/contract, 38 PostgreSQL or Temporal integration, and 3 committed-history replay cases), 3 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exact approval/action fencing, typed provider-conflict recovery, tenant Activity authorization, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, executable safe-adapter scenarios through shared kernel transitions, and the scripted reference journey. Configuration evolution, a scenario driver through the PostgreSQL/Temporal stack, the broader race matrix, agent behavior, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
+Current baseline: 165 backend tests (122 unit/contract, 40 PostgreSQL or Temporal integration, and 3 committed-history replay cases), 3 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exact approval/action fencing, typed provider-conflict recovery, tenant Activity authorization, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, and identical compiled safe-adapter scenarios through both shared kernel transitions and the real PostgreSQL/Temporal path. Configuration evolution, the broader race matrix, agent behavior, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
 
 ### Layer 1 — Pure kernel tests
 
@@ -923,9 +923,9 @@ Recommended initial journey:
 - [x] Add provider-neutral calendar primitives with a stateful stub adapter.
 - [x] Add validated follow-up timers to the process mailbox.
 - [x] Add manual approval, conversational revision, rejection, expiry, and takeover paths using the test driver and a minimal API surface.
-- [x] Run the complete integration-free journey and a full PostgreSQL + Temporal journey with stub messaging, booking, payment, and calendar providers.
+- [x] Run the same compiled complete journey through both the integration-free kernel and the full PostgreSQL + Temporal path with stub messaging, booking, payment, and calendar providers.
 - [ ] Run agent behavior evaluations against the same stubbed journey.
-- [x] Demonstrate recovery after worker restarts during the reference journey's provider/wait boundaries, including fresh reconstructed stub-provider state.
+- [x] Demonstrate recovery after fresh worker and Activity compositions restart at the reference journey's review/wait boundaries.
 - [ ] Demonstrate quarantine resolution, ambiguous provider reconciliation, opt-out, message-loop prevention, and budget exhaustion.
 - [ ] Only after the stubbed journey passes, add one real provider integration and run the shared contract and sandbox suites.
 
@@ -939,7 +939,7 @@ Recommended initial journey:
 - [ ] Add tenant prompt and policy configuration.
 - [ ] Add the tool and integration registry.
 - [ ] Add safe client-editable settings.
-- [ ] Add process simulation and validation before publication. Compiled scenarios now execute without infrastructure through generated strict decision schemas, production decision/permission/action-identity rules, explicitly safe stub bindings, a fake clock, and fact/status/wake/completion transitions shared with persistence. The same scenario still needs a PostgreSQL/Temporal driver plus draft isolation, evaluation records, and publication gates.
+- [ ] Add process simulation and validation before publication. Compiled scenarios now execute both without infrastructure and through a reusable PostgreSQL/Temporal driver using generated strict decision schemas, production decision/permission/action-identity rules, explicitly safe stub bindings, exact reviews, virtual time, durable audits, and shared fact/status/wake/completion behavior. Draft isolation, evaluation records, and publication gates remain.
 - [x] Add the initial tenant process list/detail API and operator instance timeline, durable wake-condition, sourced-fact/claim, memory, and commitment UI.
 - [ ] Add the full approval, proposal-diff, review-chat, revision-lineage, and manual-intervention UI. Exact-payload approve/reject/comment/request-revision and intervention retry/wake/takeover/resume controls are complete; Wake is explicitly presented as non-authoritative reevaluation. Diffs, complete thread history, expiry management, typed fact-correction controls, and richer intervention diagnostics remain.
 - [ ] Add event-quarantine, unknown-action, and reconciliation UI.
@@ -1156,8 +1156,9 @@ The initial executable milestone—fictional enquiry through booking, payment, c
 
 1. Complete the autonomy and communication safety envelope: opt-out, quiet hours, auto-responder/loop detection, rate, cost, token, and process-lifetime budgets. Semantic ingress/context byte and count bounds are complete; raw transport and provider-response limits remain part of production hardening.
 2. Implement quarantine resolution and replay with operator visibility.
-3. Extend the executable scenario kit from its completed production-policy/kernel driver into the PostgreSQL/Temporal stack using the same compiled scenario data, alongside the ordered RLS/migration and Temporal-race gaps in [`docs/testing.md`](docs/testing.md).
-4. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
+3. Close the ordered full-table RLS/migration and Temporal race-matrix gaps in [`docs/testing.md`](docs/testing.md).
+4. Add isolated draft simulation, evaluation records, and publication gates on top of the shared scenario drivers.
+5. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
 
 D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), and D-012 (data/compliance requirements) remain explicit gates before production integrations. D-014 is implemented as ADR-011. A GitHub-issue triage/Codex handoff pack is a useful later validation of that boundary once the communication safety envelope is in place.
 

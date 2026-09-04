@@ -10,7 +10,6 @@ import pytest
 from temporalio import activity
 from temporalio.client import WorkflowFailureError
 from temporalio.exceptions import ApplicationError
-from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from tiramisu_agents.core.reserved_events import OPERATOR_MANUAL_WAKE_EVENT_TYPE
 from tiramisu_agents.temporal.workflows.mailbox import (
@@ -23,6 +22,7 @@ from tiramisu_agents.temporal.workflows.mailbox import (
     ProcessMailboxWorkflow,
     WakePlan,
 )
+from tiramisu_agents.testkit.temporal_environment import start_time_skipping_environment
 
 
 @activity.defn(name="persist_process_state")
@@ -35,7 +35,7 @@ async def persist_process_state(_command: dict[str, Any]) -> dict[str, Any]:
 async def test_mailbox_deduplicates_events_and_wakes_for_events_and_timers() -> None:
     task_queue = f"mailbox-test-{uuid4()}"
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -126,7 +126,7 @@ async def test_mailbox_closes_completed_decision_with_stale_wake() -> None:
         return {"actions_json": "[]"}
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -188,7 +188,7 @@ async def test_manual_wake_bypasses_the_plan_once_across_continue_as_new() -> No
         return {"actions_json": "[]"}
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -295,7 +295,7 @@ async def test_manual_wake_precedes_a_matching_business_event_and_old_timer() ->
         return {"actions_json": "[]"}
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -344,7 +344,7 @@ async def test_mailbox_recovers_buffered_events_and_wait_after_worker_restart() 
     payment = MailboxEvent(event_id="event-before-restart", event_type="payment.received")
     email = MailboxEvent(event_id="event-after-restart", event_type="email.received")
 
-    async with await WorkflowEnvironment.start_time_skipping() as environment:
+    async with await start_time_skipping_environment() as environment:
         async with Worker(
             environment.client,
             task_queue=task_queue,
@@ -426,7 +426,7 @@ async def test_persistence_retries_do_not_rerun_the_model_activity() -> None:
         return {"actions_json": "[]"}
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -528,7 +528,7 @@ async def test_tenant_suspension_durably_retries_model_and_action_without_losing
         }
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -607,7 +607,7 @@ async def test_failed_turn_enters_intervention_and_operator_retry_replays_same_s
         intervention_recorded.set()
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -719,7 +719,7 @@ async def test_provider_compatibility_failure_enters_intervention_without_being_
         intervention_recorded.set()
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -769,7 +769,7 @@ async def test_provider_compatibility_failure_enters_intervention_without_being_
 async def test_unknown_continuation_schema_fails_closed() -> None:
     task_queue = f"continuation-schema-test-{uuid4()}"
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -927,7 +927,7 @@ async def test_mailbox_runs_event_timer_and_review_turns_single_flight() -> None
         }
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -1095,7 +1095,7 @@ async def test_mailbox_runs_result_turn_after_approved_action_executes() -> None
         }
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -1235,7 +1235,7 @@ async def test_conflicted_action_is_not_retried_and_drives_one_result_turn() -> 
         }
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -1353,7 +1353,7 @@ async def test_autonomous_result_cannot_arm_a_timer_while_an_approval_is_pending
         }
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,
@@ -1488,7 +1488,7 @@ async def test_continue_as_new_preserves_mailbox_approval_deduplication_and_time
         }
 
     async with (
-        await WorkflowEnvironment.start_time_skipping() as environment,
+        await start_time_skipping_environment() as environment,
         Worker(
             environment.client,
             task_queue=task_queue,

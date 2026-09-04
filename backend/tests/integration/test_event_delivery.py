@@ -11,7 +11,6 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.client import Client
-from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from tiramisu_agents.api.main import create_app
 from tiramisu_agents.api.settings import Settings
@@ -37,6 +36,7 @@ from tiramisu_agents.testkit.deployment import (
     TEST_DEPLOYMENT_RELEASE,
     make_test_deployment_release,
 )
+from tiramisu_agents.testkit.temporal_environment import start_time_skipping_environment
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TIRAMISU_RUN_DB_TESTS") != "1",
@@ -741,7 +741,7 @@ async def test_outbox_signal_with_start_is_safe_to_redeliver() -> None:
 
         task_queue = TEST_DEPLOYMENT_RELEASE.temporal_task_queue
         async with (
-            await WorkflowEnvironment.start_time_skipping() as environment,
+            await start_time_skipping_environment() as environment,
             Worker(
                 environment.client,
                 task_queue=task_queue,
