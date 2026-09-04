@@ -655,7 +655,7 @@ Avoid a generic JSON/EAV `business_objects` store unless a concrete client requi
 
 Testing is designed around an integration-free kernel, provider contracts, deterministic Temporal orchestration, and a separate layer of probabilistic agent evaluation.
 
-Current baseline: 165 backend tests (122 unit/contract, 40 PostgreSQL or Temporal integration, and 3 committed-history replay cases), 3 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exact approval/action fencing, typed provider-conflict recovery, tenant Activity authorization, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, and identical compiled safe-adapter scenarios through both shared kernel transitions and the real PostgreSQL/Temporal path. Configuration evolution, the broader race matrix, agent behavior, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
+Current baseline: 176 backend tests (122 unit/contract, 50 PostgreSQL or Temporal integration, and 4 committed-history replay cases), 3 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exhaustive tenant-table RLS/grant enforcement, exact approval/action fencing, typed provider-conflict recovery, tenant Activity authorization, deterministic Temporal race ordering, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, and identical compiled safe-adapter scenarios through both shared kernel transitions and the real PostgreSQL/Temporal path. Configuration evolution, agent behavior, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
 
 ### Layer 1 — Pure kernel tests
 
@@ -894,7 +894,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Implement canonical event ingestion and source-event deduplication.
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
 - [ ] Implement quarantine resolution, late correlation, and replay.
-- [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Automatic single-flight event, timer, priority-review, action-resolution, and exactly-once logical manual-reevaluation turns are complete; reserved manual wakes supersede the old plan and precede ordinary matching events/timers. Batching, cancellation/takeover priority, and the remaining tie rules remain.
+- [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Automatic single-flight event, timer, priority-review, action-resolution, and exactly-once logical manual-reevaluation turns are complete; reserved manual wakes supersede the old plan and precede ordinary matching events/timers. The core event/timer, lifecycle-control/turn, review/turn, action-result/event, manual-wake, and Continue-As-New tie rules now have live race coverage. Explicit event batching and richer cancellation semantics remain.
 - [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, at-most-two validator-guided semantic corrections against one trusted snapshot, bounded PostgreSQL event/review/action-result context loader, deterministic scripted-runner path, and automatic workflow consumption through the action gateway.
 - [x] Implement bounded context assembly, sourced authoritative-fact/customer-claim projection, provenance-checked summaries and commitments, immutable state revisions, and deterministic lifecycle projection.
 - [ ] Implement application-owned conversation/message history, memory compaction, and compaction lineage.
@@ -907,7 +907,7 @@ The following architecture decision records are gates for the durable kernel:
 - [ ] Implement budget, communication-policy, and safety-boundary enforcement. Initial follow-up count/interval policy, configured reply resets, deployment-tenant Activity authorization, lifecycle fencing, approval expiry, tenant suspension, and hard semantic data/context ceilings are enforced; durable budgets, raw transport limits, and platform/capability circuit breakers remain.
 - [ ] Implement Continue-As-New with complete mailbox, wait, version, approval, and budget carry-forward. Versioned rollover now preserves active mailbox buffers, delivery deduplication, recent diagnostics, pending approvals, absolute timers, process-definition identity, and lifetime counters; budget carry-forward awaits the budget model.
 - [x] Add Temporal replay and failure-recovery tests. Committed signal/wait and Activity-backed Continue-As-New histories replay in CI; worker restart, rollover carry-forward, and retry-isolation tests cover the initial recovery surface. The broader failure matrix in the testing strategy remains ongoing.
-- [ ] Add committed replay histories for approval/revision, reconciliation, intervention/retry, takeover, suspension, and terminal closure, plus the timer/event, control/turn, review/turn, and event/action-result race matrix. A reserved manual-wake ordering history is now committed alongside the original and Continue-As-New histories.
+- [ ] Add committed replay histories for approval/revision, reconciliation, intervention/retry, takeover, suspension, and terminal closure, plus the timer/event, control/turn, review/turn, and event/action-result race matrix. Reserved manual-wake ordering and takeover-during-turn histories are now committed alongside the original and Continue-As-New histories; the complete matrix also runs live against the time-skipping server.
 - [ ] Run the optional Temporal/OpenAI SDK integration spike and record the decision without blocking the proposal-only path.
 
 ### Phase 3 — Reference journey
@@ -955,7 +955,7 @@ Recommended initial journey:
 - [ ] Expand agent quality, regression, adversarial, and safety evals.
 - [ ] Add failure injection and load testing.
 - [ ] Add shared adapter contract suites and provider sandbox tests. Initial reusable checks cover success idempotency, timeout-after-success recovery, definitive failure, lookup-recoverable definitive conflict, and hold expiry; malformed responses, rate limits, credential selection, domain suites, and real sandboxes remain.
-- [ ] Add migration-from-previous-release, supported downgrade/upgrade, data-preservation, and full tenant-table RLS/grant audit gates. The conflict migration has an isolated populated downgrade/upgrade test; generalized release fixtures and the full RLS/grant audit remain.
+- [ ] Add migration-from-previous-release, supported downgrade/upgrade, data-preservation, and full tenant-table RLS/grant audit gates. The conflict migration has an isolated populated downgrade/upgrade test; the runtime-role boundary is round-tripped in CI, and every mapped tenant table now has an exact policy/grant/filter/pool-context audit. Generalized data-bearing release fixtures remain.
 - [ ] Expand Playwright beyond the single smoke to live review revision, stale proposal, dead-letter recovery, intervention, and partial-scope credential journeys.
 - [ ] Add token and cost reporting per tenant and process.
 - [ ] Add backup, disaster recovery, and audit export procedures.
@@ -1156,9 +1156,9 @@ The initial executable milestone—fictional enquiry through booking, payment, c
 
 1. Complete the autonomy and communication safety envelope: opt-out, quiet hours, auto-responder/loop detection, rate, cost, token, and process-lifetime budgets. Semantic ingress/context byte and count bounds are complete; raw transport and provider-response limits remain part of production hardening.
 2. Implement quarantine resolution and replay with operator visibility.
-3. Close the ordered full-table RLS/migration and Temporal race-matrix gaps in [`docs/testing.md`](docs/testing.md).
-4. Add isolated draft simulation, evaluation records, and publication gates on top of the shared scenario drivers.
-5. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
+3. Add isolated draft simulation, evaluation records, and publication gates on top of the shared scenario drivers.
+4. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
+5. Expand committed operational histories and generalized data-bearing migration fixtures as described in [`docs/testing.md`](docs/testing.md).
 
 D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), and D-012 (data/compliance requirements) remain explicit gates before production integrations. D-014 is implemented as ADR-011. A GitHub-issue triage/Codex handoff pack is a useful later validation of that boundary once the communication safety envelope is in place.
 

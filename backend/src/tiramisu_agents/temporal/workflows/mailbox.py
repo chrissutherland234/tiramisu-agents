@@ -13,6 +13,7 @@ from temporalio.exceptions import ActivityError, ApplicationError
 from tiramisu_agents.core.reserved_events import OPERATOR_MANUAL_WAKE_EVENT_TYPE
 
 _SUSPENSION_RECHECK_DELAY = timedelta(minutes=1)
+_LIFECYCLE_PREEMPTION_ERROR = "turn superseded by operator lifecycle control"
 
 
 def _is_activity_error_type(error: ActivityError, expected_type: str) -> bool:
@@ -224,6 +225,9 @@ class ProcessMailboxWorkflow:
                 await self._run_turn(event_ids=(event.event_id,))
                 continue
 
+            # Ordering contract after process start: persisted review, action
+            # resolution, lifecycle control, manual reevaluation, matching
+            # business event, then timer. Each source remains single-flight.
             if self._buffered_reviews:
                 review = self._buffered_reviews.pop(0)
                 self._started = True
@@ -661,6 +665,41 @@ class ProcessMailboxWorkflow:
         self._timer_due_at = None
         self._plan_revision += 1
 
+    def _lifecycle_preemption_pending(self) -> bool:
+        return self._closed or any(
+            control.command_type == "takeover" for control in self._buffered_controls
+        )
+
+    def _record_preempted_turn(
+        self,
+        *,
+        turn_id: str,
+        event_ids: tuple[str, ...],
+        review_command_ids: tuple[str, ...],
+        action_attempt_ids: tuple[str, ...],
+        timer_ids: tuple[str, ...],
+        decision_json: str | None,
+        actions_json: str | None,
+        execution_results: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self._turn_records.append(
+            TurnRecord(
+                turn_id=turn_id,
+                event_ids=event_ids,
+                review_command_ids=review_command_ids,
+                action_attempt_ids=action_attempt_ids,
+                timer_ids=timer_ids,
+                decision_json=decision_json,
+                actions_json=actions_json,
+                execution_results_json=(
+                    json.dumps(execution_results, sort_keys=True, separators=(",", ":"))
+                    if execution_results is not None
+                    else None
+                ),
+                error=_LIFECYCLE_PREEMPTION_ERROR,
+            )
+        )
+
     def _initial_event_index(self) -> int | None:
         return next(
             (
@@ -712,6 +751,9 @@ class ProcessMailboxWorkflow:
             return
         turn_id = str(workflow.uuid4())
         workflow_now = workflow.now()
+        decision_json: str | None = None
+        actions_json: str | None = None
+        execution_results: list[dict[str, Any]] = []
         self._turn_in_progress = True
         try:
             while True:
@@ -744,6 +786,17 @@ class ProcessMailboxWorkflow:
                     if self._closed:
                         return
             decision_json = str(turn_result["decision_json"])
+            if self._lifecycle_preemption_pending():
+                self._record_preempted_turn(
+                    turn_id=turn_id,
+                    event_ids=event_ids,
+                    review_command_ids=review_command_ids,
+                    action_attempt_ids=action_attempt_ids,
+                    timer_ids=timer_ids,
+                    decision_json=decision_json,
+                    actions_json=None,
+                )
+                return
             action_result = cast(
                 dict[str, Any],
                 await workflow.execute_activity(
@@ -766,6 +819,17 @@ class ProcessMailboxWorkflow:
                 ),
             )
             actions_json = str(action_result["actions_json"])
+            if self._lifecycle_preemption_pending():
+                self._record_preempted_turn(
+                    turn_id=turn_id,
+                    event_ids=event_ids,
+                    review_command_ids=review_command_ids,
+                    action_attempt_ids=action_attempt_ids,
+                    timer_ids=timer_ids,
+                    decision_json=decision_json,
+                    actions_json=actions_json,
+                )
+                return
             process_state_result = cast(
                 dict[str, Any],
                 await workflow.execute_activity(
@@ -788,9 +852,20 @@ class ProcessMailboxWorkflow:
                 ),
             )
             actions = cast(list[dict[str, Any]], json.loads(actions_json))
-            execution_results: list[dict[str, Any]] = []
             requires_approval = False
             for item in actions:
+                if self._lifecycle_preemption_pending():
+                    self._record_preempted_turn(
+                        turn_id=turn_id,
+                        event_ids=event_ids,
+                        review_command_ids=review_command_ids,
+                        action_attempt_ids=action_attempt_ids,
+                        timer_ids=timer_ids,
+                        decision_json=decision_json,
+                        actions_json=actions_json,
+                        execution_results=execution_results,
+                    )
+                    return
                 action_request_id = str(item["action_request_id"])
                 if item["outcome"] == "allow":
                     execution = await self._execute_pending_action(
@@ -801,6 +876,18 @@ class ProcessMailboxWorkflow:
                 elif item["outcome"] == "require_approval":
                     self._add_pending_action(action_request_id)
                     requires_approval = True
+            if self._lifecycle_preemption_pending():
+                self._record_preempted_turn(
+                    turn_id=turn_id,
+                    event_ids=event_ids,
+                    review_command_ids=review_command_ids,
+                    action_attempt_ids=action_attempt_ids,
+                    timer_ids=timer_ids,
+                    decision_json=decision_json,
+                    actions_json=actions_json,
+                    execution_results=execution_results,
+                )
+                return
             result_attempt_ids = tuple(str(result["attempt_id"]) for result in execution_results)
             chain_limit_reached = bool(result_attempt_ids) and chain_depth >= 5
             self._turn_records.append(
@@ -855,6 +942,18 @@ class ProcessMailboxWorkflow:
             else:
                 self._apply_turn_outcome(process_state_result, decision_json=decision_json)
         except ActivityError as error:
+            if self._lifecycle_preemption_pending():
+                self._record_preempted_turn(
+                    turn_id=turn_id,
+                    event_ids=event_ids,
+                    review_command_ids=review_command_ids,
+                    action_attempt_ids=action_attempt_ids,
+                    timer_ids=timer_ids,
+                    decision_json=decision_json,
+                    actions_json=actions_json,
+                    execution_results=execution_results,
+                )
+                return
             self._turn_records.append(
                 TurnRecord(
                     turn_id=turn_id,

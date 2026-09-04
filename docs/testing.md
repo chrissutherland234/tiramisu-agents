@@ -1,6 +1,6 @@
 # Testing strategy and gap plan
 
-Last reviewed: 2026-09-04
+Last reviewed: 2026-09-05
 
 Tiramisu's tests must prove durable business invariants across boundaries, not merely achieve line coverage. The highest-risk failures happen between PostgreSQL, Temporal, model execution, operator commands, and external providers, where no shared transaction exists.
 
@@ -8,15 +8,15 @@ Tiramisu's tests must prove durable business invariants across boundaries, not m
 
 The repository currently has:
 
-- 165 backend tests: 122 unit/contract cases, 40 PostgreSQL or Temporal integration cases, and 3 committed-history replay cases.
+- 176 backend tests: 122 unit/contract cases, 50 PostgreSQL or Temporal integration cases, and 4 committed-history replay cases.
 - 3 tests in the independently installable support client project, run from its own locked editable environment.
 - 5 Vue component cases across 2 files covering the operator journey/review/intervention/dead-letter surface, permission degradation, polling, and Wake authority wording.
 - 1 Playwright live-stack journey covering real event ingestion, process inspection, takeover, resume, and the delivery-operations shell.
 - CI gates for locked dependency installation, Alembic drift, Ruff, Pyright, backend tests with PostgreSQL, conventional project compilation and generated OpenAI schemas, the standalone client project's own lint/type/test checks, Python package builds, Vue unit/type/build checks, the Playwright smoke, Compose startup, PostgreSQL runtime-role access, and Temporal health.
 
-Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, typed conflict lookup recovery and unchanged-conflict re-proposal rejection, pinned deployment-release/queue/pack/definition compatibility before model and provider I/O, audited tenant assignment, old/new release dispatch fencing, published-only triggers, byte/count boundaries for event/fact/review/proposal/conflict data, pre-model context and prospective-fact limits, pre-provider prompt limits, bounded semantic proposal repair with unchanged-snapshot and exhaustion checks, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, reserved manual reevaluation, generated capability and wake schemas, authoritative completion gates, a populated conflict-migration downgrade/upgrade, and identical compiled client-project scenarios running through both the integration-free kernel and the PostgreSQL/Temporal stack with safe adapters, exact approvals, durable audit assertions, worker restarts, time-skipped timers, and step-specific failures.
+Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, exhaustive tenant-table RLS/grant enforcement and pooled-connection context reset, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, typed conflict lookup recovery and unchanged-conflict re-proposal rejection, pinned deployment-release/queue/pack/definition compatibility before model and provider I/O, audited tenant assignment, old/new release dispatch fencing, published-only triggers, byte/count boundaries for event/fact/review/proposal/conflict data, pre-model context and prospective-fact limits, pre-provider prompt limits, bounded semantic proposal repair with unchanged-snapshot and exhaustion checks, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, reserved manual reevaluation, deterministic event/timer, lifecycle-control/turn, review, action-result, and rollover races, generated capability and wake schemas, authoritative completion gates, populated migration downgrade/upgrade checks, and identical compiled client-project scenarios running through both the integration-free kernel and the PostgreSQL/Temporal stack with safe adapters, exact approvals, durable audit assertions, worker restarts, time-skipped timers, and step-specific failures.
 
-The count is not itself a release signal. Agent evaluation, provider contracts, load behavior, security automation, migration upgrade paths, and several concurrency combinations remain absent or shallow.
+The count is not itself a release signal. Agent evaluation, broader provider contracts, load behavior, security automation, historical release migrations, and committed replay coverage for several operational commands remain absent or shallow.
 
 ## Test layers and required gates
 
@@ -32,7 +32,7 @@ Next additions:
 - Add table-driven lifecycle tests for every process status × action/review/control operation.
 - Add generated/state-machine tests for decision provenance, logical action identity, and wake-plan invariants once the core transitions are factored into a genuinely infrastructure-free kernel.
 
-The former fictional-only driver has been removed. `ScenarioRunner` validates scripted decisions through generated output and production decision policy, uses production permission and action-identity rules, invokes only explicitly safe simulation bindings, and shares fact/status/wake/completion transitions with `ProcessStateService`. `PostgresTemporalScenarioDriver` consumes the same immutable compiled steps and runs them through real ingestion, outbox dispatch, mailbox and Activity orchestration, review approval, provider execution, persistence, and Temporal time skipping. Its final audit checks the durable event/action/approval/fact/wake/turn/completion record, while its test tenant is isolated and removed by default. This covers the ordinary cross-layer acceptance path; draft publication isolation, richer failure scenarios, the full race matrix, and model evaluation remain.
+The former fictional-only driver has been removed. `ScenarioRunner` validates scripted decisions through generated output and production decision policy, uses production permission and action-identity rules, invokes only explicitly safe simulation bindings, and shares fact/status/wake/completion transitions with `ProcessStateService`. `PostgresTemporalScenarioDriver` consumes the same immutable compiled steps and runs them through real ingestion, outbox dispatch, mailbox and Activity orchestration, review approval, provider execution, persistence, and Temporal time skipping. Its final audit checks the durable event/action/approval/fact/wake/turn/completion record, while its test tenant is isolated and removed by default. This covers the ordinary cross-layer acceptance path; draft publication isolation, richer failure scenarios, and model evaluation remain.
 
 ### 2. PostgreSQL and API integration tests
 
@@ -40,11 +40,10 @@ Run against the migrated least-privilege runtime role in CI. Verify transaction 
 
 Next additions:
 
-- Enumerate every tenant-owned table and prove forced RLS, the expected policy, runtime-role grants, and cross-tenant denial; the current direct RLS test samples only `tenants`.
 - Cover every credential scope and role against every operator endpoint, including read-only UI degradation.
 - Exercise conflicting correlations, event-ID/source-ID collisions, late reference assignment, quarantine resolution, and replay once that feature exists.
 - Exercise dispatcher backoff timestamps, exhaustion, concurrent requeue/claim, retention boundaries, and bulk backlog pagination.
-- Generalize the populated migration fixture across each released schema boundary and representative business records. The conflict migration now has an isolated data-bearing downgrade/upgrade test, while CI also round-trips migration 13 down to 12 and back on the main empty test database.
+- Generalize the populated migration fixture across each released schema boundary and representative business records. The conflict migration has an isolated data-bearing downgrade/upgrade test; CI round-trips both the runtime-role hardening boundary and migration 13 down to 12 on the main test database. The runtime role's grants, forced policies, non-owner flags, schema privileges, tenant filtering, and transaction-local pool context are exhaustively audited against every mapped tenant table.
 - Add request-size and malformed-JSON limits before production ingress is exposed.
 
 ### 3. Temporal workflow and replay tests
@@ -63,7 +62,9 @@ Priority race matrix:
 | Continue-As-New with each pending command type | Every buffer, dedupe key, absolute timer, approval, intervention, and counter survives |
 | Old/new worker releases overlap | Each dispatcher claims only its process-pinned release queue; incompatible work fails closed before model or provider I/O |
 
-The committed histories cover the original signal/wait path, Activity-backed Continue-As-New, and reserved manual-wake ordering. Expand them further to include approval/revision, action reconciliation, intervention/retry, takeover, tenant suspension, and terminal closure. Release identity, queue derivation, and concurrent old/new dispatch are covered outside workflow history; add deployment rollback and drain tests to a future live deployment harness.
+The matrix above is covered by real time-skipping workflow tests and PostgreSQL serialization tests. Lifecycle controls now supersede an in-flight model result at the next durable Activity boundary; an external action already underway remains protected by the final PostgreSQL lifecycle fence. Review commands serialize at the database row lock, buffered review/action/control sources retain deterministic priority, and duplicated commands remain exactly once across Continue-As-New.
+
+The committed histories cover the original signal/wait path, Activity-backed Continue-As-New, reserved manual-wake ordering, and takeover during an active model turn. Expand them further to include approval/revision, action reconciliation, intervention/retry, tenant suspension, and terminal closure. Release identity, queue derivation, and concurrent old/new dispatch are covered outside workflow history; add deployment rollback and drain tests to a future live deployment harness.
 
 ### 4. End-to-end operator tests
 
@@ -122,10 +123,10 @@ Before a public deployment:
 
 Implement these in order:
 
-1. Full tenant-table RLS/grant audit plus migration upgrade/round-trip CI.
-2. The Temporal race matrix for timer/event, takeover, review, result, and Continue-As-New combinations.
-3. Live-stack Playwright coverage for review revision, dead-letter recovery, intervention, and partial scopes.
-4. The first deterministic agent-evaluation corpus and shared messaging adapter contract.
+1. Live-stack Playwright coverage for review revision, dead-letter recovery, intervention, and partial scopes.
+2. The first deterministic agent-evaluation corpus and shared messaging adapter contract.
+3. Additional committed histories for approval/revision, reconciliation, intervention/retry, suspension, and terminal closure.
+4. Generalized data-bearing migration fixtures across supported release boundaries.
 5. Load, fault-injection, security, and provider-sandbox suites after communication safety and real integrations exist.
 
 ## Definition of done for a feature

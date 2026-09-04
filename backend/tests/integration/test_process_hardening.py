@@ -21,6 +21,7 @@ from tiramisu_agents.adapters.registry import ActionAdapterRegistry
 from tiramisu_agents.builtin import load_fictional_deployment
 from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision, DecisionStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
+from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
 from tiramisu_agents.core.ports.actions import ProviderActionRequest, ProviderActionResult
 from tiramisu_agents.core.reserved_events import OPERATOR_MANUAL_WAKE_EVENT_TYPE
 from tiramisu_agents.db.models.actions import (
@@ -54,6 +55,7 @@ from tiramisu_agents.processes.control import (
     ProcessControlType,
 )
 from tiramisu_agents.processes.state import ProcessStateService
+from tiramisu_agents.reviews.service import ReviewConflict, ReviewService
 from tiramisu_agents.testkit.deployment import TEST_DEPLOYMENT_RELEASE
 
 pytestmark = pytest.mark.skipif(
@@ -489,6 +491,131 @@ async def test_takeover_serializes_with_the_final_provider_execution_fence() -> 
             process = await session.get(ProcessInstance, context.process_id)
             assert process is not None
             assert process.status == "paused"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_approval_and_revision_serialize_to_one_workflow_command() -> None:
+    async with _process_context() as context:
+        definition = load_fictional_deployment().definition
+        decision = AgentDecision(
+            based_on_event_ids=(context.enquiry.event_id,),
+            status=DecisionStatus.ACTIVE,
+            actions=(
+                ActionProposal(
+                    logical_action_key="booking_review_race",
+                    action_type="propose_booking",
+                    parameters={"slot": "2026-09-06T10:00:00+00:00"},
+                    rationale="Create one exact proposal for the review race.",
+                ),
+            ),
+        )
+        async with context.runtime_factory.begin() as session:
+            persisted = await ActionGateway().persist_decision(
+                session,
+                tenant_id=context.tenant_id,
+                process_instance_id=context.process_id,
+                agent_turn_id=uuid4(),
+                process_definition_version=definition.version,
+                decision=decision,
+                policy=definition.action_policy(),
+            )
+        proposal = persisted[0]
+        assert proposal.review_thread_id is not None
+        assert proposal.approval_request_id is not None
+
+        actor_id = uuid4()
+        approve = ReviewCommand(
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            review_thread_id=proposal.review_thread_id,
+            action_request_id=proposal.action_request_id,
+            proposal_revision=proposal.revision,
+            actor_id=actor_id,
+            command_type=ReviewCommandType.APPROVE,
+            expected_payload_hash=proposal.payload_hash,
+        )
+        revise = ReviewCommand(
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            review_thread_id=proposal.review_thread_id,
+            action_request_id=proposal.action_request_id,
+            proposal_revision=proposal.revision,
+            actor_id=actor_id,
+            command_type=ReviewCommandType.REQUEST_REVISION,
+            message="Use a different time before this can be approved.",
+        )
+        start = asyncio.Event()
+        review_service = ReviewService()
+
+        async def apply(command: ReviewCommand) -> str:
+            await start.wait()
+            try:
+                async with context.runtime_factory.begin() as session:
+                    await review_service.apply(session, command)
+            except ReviewConflict:
+                return f"conflict:{command.command_type.value}"
+            return f"applied:{command.command_type.value}"
+
+        tasks = (asyncio.create_task(apply(approve)), asyncio.create_task(apply(revise)))
+        start.set()
+        outcomes = await asyncio.gather(*tasks)
+        assert sum(outcome.startswith("applied:") for outcome in outcomes) == 1
+        assert sum(outcome.startswith("conflict:") for outcome in outcomes) == 1
+        winner = next(
+            outcome.removeprefix("applied:")
+            for outcome in outcomes
+            if outcome.startswith("applied:")
+        )
+        winning_command = approve if winner == "approve" else revise
+
+        async with context.runtime_factory.begin() as session:
+            await set_tenant_context(session, context.tenant_id)
+            approval = await session.get(ApprovalRequest, proposal.approval_request_id)
+            action = await session.get(ActionRequest, proposal.action_request_id)
+            thread = await session.get(ReviewThread, proposal.review_thread_id)
+            messages = (
+                await session.scalars(
+                    select(ReviewMessage).where(
+                        ReviewMessage.review_thread_id == proposal.review_thread_id
+                    )
+                )
+            ).all()
+            decisions = (
+                await session.scalars(
+                    select(ApprovalDecision).where(
+                        ApprovalDecision.approval_request_id == proposal.approval_request_id
+                    )
+                )
+            ).all()
+            deliveries = (
+                await session.scalars(
+                    select(OutboxMessage).where(
+                        OutboxMessage.process_instance_id == context.process_id,
+                        OutboxMessage.message_type == "temporal.process_review",
+                    )
+                )
+            ).all()
+
+        assert approval is not None
+        assert action is not None
+        assert thread is not None
+        assert [message.id for message in messages] == [winning_command.command_id]
+        assert len(deliveries) == 1
+        assert deliveries[0].payload["command_id"] == str(winning_command.command_id)
+        if winner == "approve":
+            assert (approval.status, action.status, thread.status) == (
+                "approved",
+                "approved",
+                "approved",
+            )
+            assert [item.id for item in decisions] == [approve.command_id]
+        else:
+            assert (approval.status, action.status, thread.status) == (
+                "superseded",
+                "superseded",
+                "revision_requested",
+            )
+            assert decisions == []
 
 
 @pytest.mark.asyncio

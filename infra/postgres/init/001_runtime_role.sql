@@ -10,5 +10,8 @@ BEGIN
 END
 $grant_database$;
 GRANT USAGE ON SCHEMA public TO tiramisu_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public
-    GRANT SELECT ON TABLES TO tiramisu_app;
+REVOKE CREATE ON SCHEMA public FROM tiramisu_app;
+
+-- Application migrations grant each table privilege explicitly. Do not use
+-- default privileges here: a newly created table must remain inaccessible
+-- until its migration deliberately adds it to the runtime-role contract.

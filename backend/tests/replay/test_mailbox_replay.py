@@ -15,6 +15,7 @@ from tiramisu_agents.temporal.workflows.mailbox import ProcessMailboxWorkflow
         ("mailbox-replay-v1", "mailbox_v1.json"),
         ("mailbox-continue-replay-v1", "mailbox_continue_as_new_v1.json"),
         ("mailbox-manual-wake-replay-v1", "mailbox_manual_wake_v1.json"),
+        ("mailbox-takeover-race-replay-v1", "mailbox_takeover_race_v1.json"),
     ),
 )
 async def test_mailbox_v1_histories_replay_with_current_workflow(
