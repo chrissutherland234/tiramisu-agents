@@ -8,13 +8,13 @@ Tiramisu's tests must prove durable business invariants across boundaries, not m
 
 The repository currently has:
 
-- 155 backend tests: 114 unit/contract cases, 38 PostgreSQL or Temporal integration cases, and 3 committed-history replay cases.
-- 2 tests in the independently installable support client project, run from its own locked editable environment.
+- 162 backend tests: 121 unit/contract cases, 38 PostgreSQL or Temporal integration cases, and 3 committed-history replay cases.
+- 3 tests in the independently installable support client project, run from its own locked editable environment.
 - 5 Vue component cases across 2 files covering the operator journey/review/intervention/dead-letter surface, permission degradation, polling, and Wake authority wording.
 - 1 Playwright live-stack journey covering real event ingestion, process inspection, takeover, resume, and the delivery-operations shell.
 - CI gates for locked dependency installation, Alembic drift, Ruff, Pyright, backend tests with PostgreSQL, conventional project compilation and generated OpenAI schemas, the standalone client project's own lint/type/test checks, Python package builds, Vue unit/type/build checks, the Playwright smoke, Compose startup, PostgreSQL runtime-role access, and Temporal health.
 
-Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, typed conflict lookup recovery and unchanged-conflict re-proposal rejection, pinned deployment-release/queue/pack/definition compatibility before model and provider I/O, audited tenant assignment, old/new release dispatch fencing, published-only triggers, byte/count boundaries for event/fact/review/proposal/conflict data, pre-model context and prospective-fact limits, pre-provider prompt limits, bounded semantic proposal repair with unchanged-snapshot and exhaustion checks, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, reserved manual reevaluation, generated capability and wake schemas, authoritative completion gates, a populated conflict-migration downgrade/upgrade, and a complete scripted enquiry-to-booking journey that proves Wake guidance cannot manufacture completed payment.
+Strong current coverage includes concurrent initiating-event deduplication, correlation persistence, outbox claim ownership and dead-letter recovery, tenant-scoped credentials and Activities, exact-payload approvals, provider execution fencing, typed conflict lookup recovery and unchanged-conflict re-proposal rejection, pinned deployment-release/queue/pack/definition compatibility before model and provider I/O, audited tenant assignment, old/new release dispatch fencing, published-only triggers, byte/count boundaries for event/fact/review/proposal/conflict data, pre-model context and prospective-fact limits, pre-provider prompt limits, bounded semantic proposal repair with unchanged-snapshot and exhaustion checks, intervention/retry controls, single-flight mailbox turns, worker restart, Continue-As-New, reserved manual reevaluation, generated capability and wake schemas, authoritative completion gates, a populated conflict-migration downgrade/upgrade, an executable client-project scenario runner with safe simulation bindings and virtual timers, and a complete enquiry-to-booking journey that proves Wake guidance cannot manufacture completed payment.
 
 The count is not itself a release signal. Agent evaluation, provider contracts, load behavior, security automation, migration upgrade paths, and several concurrency combinations remain absent or shallow.
 
@@ -27,12 +27,12 @@ Run on every change without PostgreSQL, Temporal, OpenAI, or network access. Cov
 Next additions:
 
 - Add the full immutable definition publication lifecycle and an explicit isolated draft simulation mode.
-- Turn compiler-validated `Scenario` descriptions into one reusable runner that can target pure services and Temporal without creating a parallel lifecycle.
+- Extend the compiled executable `Scenario` specification from its production-policy/kernel driver to a PostgreSQL/Temporal driver without changing scenario data.
 - Add table-driven coverage for every platform limit and future tenant-configured lower ceiling; current tests cover representative exact-byte, one-over, no-persistence, prospective-projection, and no-provider-I/O boundaries.
 - Add table-driven lifecycle tests for every process status × action/review/control operation.
 - Add generated/state-machine tests for decision provenance, logical action identity, and wake-plan invariants once the core transitions are factored into a genuinely infrastructure-free kernel.
 
-The current `FictionalJourneyDriver` is useful as a provider/policy demonstration, but it implements a second simplified action lifecycle. It must not be treated as proof of the production action gateway. Replace or supplement it with a reusable scenario description whose assertions can drive both the production kernel services and the Temporal stack.
+The former fictional-only driver has been removed. `ScenarioRunner` now validates scripted decisions through generated output and production decision policy, uses production permission and action-identity rules, invokes only explicitly safe simulation bindings, and shares fact/status/wake/completion transitions with `ProcessStateService`. This proves the integration-free layer; it does not yet prove PostgreSQL transaction behavior or Temporal ordering. A Temporal driver must consume the same compiled scenario steps rather than re-encode the happy path.
 
 ### 2. PostgreSQL and API integration tests
 
@@ -124,7 +124,7 @@ Implement these in order:
 
 1. Full tenant-table RLS/grant audit plus migration upgrade/round-trip CI.
 2. The Temporal race matrix for timer/event, takeover, review, result, and Continue-As-New combinations.
-3. A reusable scenario specification that runs through production kernel services and Temporal, replacing duplicate happy-path logic.
+3. A PostgreSQL/Temporal driver for the reusable executable scenario specification; the integration-free production-policy/kernel driver and duplicate-driver removal are complete.
 4. Live-stack Playwright coverage for review revision, dead-letter recovery, intervention, and partial scopes.
 5. The first deterministic agent-evaluation corpus and shared messaging adapter contract.
 6. Load, fault-injection, security, and provider-sandbox suites after communication safety and real integrations exist.

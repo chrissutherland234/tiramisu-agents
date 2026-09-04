@@ -9,7 +9,13 @@ from tiramisu_agents.projects.contracts import (
     ProjectConfigurationError,
     Route,
     Scenario,
+    ScenarioAction,
+    ScenarioEvent,
+    ScenarioEventWait,
+    ScenarioFact,
     ScenarioStep,
+    ScenarioTimerWait,
+    ScenarioValue,
 )
 from tiramisu_agents.projects.output import (
     GeneratedActionProposalOutput,
@@ -28,6 +34,12 @@ __all__ = [
     "ProjectConfigurationError",
     "Route",
     "Scenario",
+    "ScenarioAction",
+    "ScenarioEvent",
+    "ScenarioEventWait",
+    "ScenarioFact",
     "ScenarioStep",
+    "ScenarioTimerWait",
+    "ScenarioValue",
     "generate_agent_decision_output_type",
 ]

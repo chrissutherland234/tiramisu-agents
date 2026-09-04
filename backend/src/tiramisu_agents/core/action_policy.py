@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from tiramisu_agents.core.contracts.actions import PermissionOutcome
+from tiramisu_agents.core.contracts.actions import ActionRequestStatus, PermissionOutcome
 from tiramisu_agents.core.contracts.decisions import ActionProposal
 
 
@@ -25,3 +25,13 @@ class ConfiguredActionPolicy:
             f"by policy {self.version}"
         )
         return ActionPolicyDecision(outcome=outcome, policy_version=self.version, reason=reason)
+
+
+def initial_action_request_status(outcome: PermissionOutcome) -> ActionRequestStatus:
+    """Map a policy outcome to the initial durable action state."""
+
+    return {
+        PermissionOutcome.ALLOW: ActionRequestStatus.ALLOWED,
+        PermissionOutcome.DENY: ActionRequestStatus.DENIED,
+        PermissionOutcome.REQUIRE_APPROVAL: ActionRequestStatus.PENDING_APPROVAL,
+    }[outcome]

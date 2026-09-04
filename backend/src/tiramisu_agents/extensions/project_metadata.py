@@ -1,5 +1,6 @@
 """Business-readable metadata retained on a compiled client pack."""
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -44,7 +45,7 @@ class RouteDescription(BaseModel):
 class ScenarioStepDescription(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    kind: Literal["event", "action", "fact", "complete"]
+    kind: Literal["event", "action", "wait", "fact", "complete"]
     description: str
     reference: str | None = None
     value: Any = None
@@ -57,6 +58,7 @@ class ScenarioDescription(BaseModel):
     title: str
     description: str
     steps: tuple[ScenarioStepDescription, ...]
+    started_at: datetime
 
 
 class JourneyDescription(BaseModel):

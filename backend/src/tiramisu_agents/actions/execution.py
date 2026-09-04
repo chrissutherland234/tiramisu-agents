@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from hashlib import sha256
 from uuid import UUID
 
 from sqlalchemy import select
@@ -10,6 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
+from tiramisu_agents.core.action_identity import execution_idempotency_key
 from tiramisu_agents.core.contracts.actions import (
     ActionAttemptStatus,
     ActionConflict,
@@ -65,17 +65,6 @@ class ActionExecutionResult:
     facts: tuple[FactObservation, ...]
     error: str | None
     conflict: ActionConflict | None = None
-
-
-def execution_idempotency_key(
-    tenant_id: UUID,
-    process_instance_id: UUID,
-    action_request_id: UUID,
-    revision: int,
-    payload_hash: str,
-) -> str:
-    identity = f"{tenant_id}:{process_instance_id}:{action_request_id}:{revision}:{payload_hash}"
-    return sha256(identity.encode()).hexdigest()
 
 
 class ActionExecutor:

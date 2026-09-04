@@ -88,6 +88,13 @@ def _project() -> Project:
                 description="Wakes the case when its customer replies.",
                 provides=(CUSTOMER_MESSAGE,),
             ),
+            Route.wake(
+                "case.resolved",
+                journey=journey.id,
+                title="Case resolved",
+                description="Wakes the case on authoritative resolution.",
+                provides=(CASE_STATUS,),
+            ),
         ),
         capabilities=(capability,),
         facts=(CASE_STATUS, CUSTOMER_MESSAGE),
@@ -98,8 +105,28 @@ def _project() -> Project:
                 title="Case resolved",
                 description="A customer gets an answer and the case is resolved.",
                 steps=(
-                    ScenarioStep.event("case.created", "A support case is created."),
-                    ScenarioStep.action("send_reply", "The agent sends a reviewed reply."),
+                    ScenarioStep.event(
+                        "case.created",
+                        "A support case is created.",
+                        facts=(CASE_STATUS.observed("open"),),
+                    ),
+                    ScenarioStep.action(
+                        "send_reply",
+                        "The agent sends a reviewed reply.",
+                        parameters={
+                            "recipient": "person@example.test",
+                            "message": "We are looking into this.",
+                        },
+                        approve=True,
+                    ),
+                    ScenarioStep.wait_for_event(
+                        "case.resolved", "The agent waits for authoritative resolution."
+                    ),
+                    ScenarioStep.event(
+                        "case.resolved",
+                        "The support system resolves the case.",
+                        facts=(CASE_STATUS.observed("resolved"),),
+                    ),
                     ScenarioStep.fact(CASE_STATUS, "resolved", "The case is resolved."),
                     ScenarioStep.complete("The agent completes the journey."),
                 ),
@@ -115,7 +142,7 @@ def test_project_compiles_all_runtime_and_business_metadata() -> None:
     assert pack.manifest.process_definitions == ("support_case.v1",)
     assert pack.policy_ids == ("support_demo.support_case.policy.v1",)
     assert pack.definition.trigger_events == ("case.created",)
-    assert pack.definition.allowed_wake_events == ("customer.replied",)
+    assert pack.definition.allowed_wake_events == ("customer.replied", "case.resolved")
     assert pack.definition.completion_requirements == {"case.status": "resolved"}
     assert pack.definition.integrations == {"send_reply": "stub.actions.v1"}
     assert pack.project is not None

@@ -124,14 +124,46 @@ def create_project() -> Project:
                 title="Answer the customer and resolve the case",
                 description="A reviewed answer is sent before the support system closes the case.",
                 steps=(
-                    ScenarioStep.event("case.created", "A customer opens a support case."),
+                    ScenarioStep.event(
+                        "case.created",
+                        "A customer opens a support case.",
+                        facts=(
+                            CASE_STATUS.observed("open"),
+                            CUSTOMER_EMAIL.observed("customer@example.test"),
+                            CASE_SUBJECT.observed("Invoice total looks wrong"),
+                        ),
+                    ),
                     ScenarioStep.action(
-                        "send_customer_reply", "An operator approves a useful response."
+                        "send_customer_reply",
+                        "An operator approves a useful response.",
+                        parameters={
+                            "recipient": "customer@example.test",
+                            "body": "Could you send us the invoice number?",
+                        },
+                        approve=True,
+                    ),
+                    ScenarioStep.wait_for_event(
+                        "customer.email_received",
+                        "The agent waits for the customer's invoice number.",
                     ),
                     ScenarioStep.event(
-                        "customer.email_received", "The customer provides the requested detail."
+                        "customer.email_received",
+                        "The customer provides the requested detail.",
+                        facts=(
+                            CUSTOMER_MESSAGE.observed(
+                                "The invoice number is INV-1042.",
+                                kind=FactKind.CUSTOMER_CLAIM,
+                            ),
+                        ),
                     ),
-                    ScenarioStep.event("case.resolved", "The support system resolves the case."),
+                    ScenarioStep.wait_for_event(
+                        "case.resolved", "The agent waits for authoritative resolution."
+                    ),
+                    ScenarioStep.event(
+                        "case.resolved",
+                        "The support system resolves the case.",
+                        facts=(CASE_STATUS.observed("resolved"),),
+                    ),
                     ScenarioStep.fact(CASE_STATUS, "resolved", "Resolution is now authoritative."),
                     ScenarioStep.complete("The relationship agent completes."),
                 ),

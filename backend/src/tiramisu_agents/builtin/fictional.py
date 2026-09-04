@@ -1,5 +1,6 @@
 """Bundled fictional project expressed through the public authoring framework."""
 
+from datetime import UTC, datetime
 from typing import Literal
 
 from tiramisu_agents.adapters.stubs import StubBusinessState, stub_business_bindings
@@ -22,6 +23,7 @@ from tiramisu_agents.projects import (
     Route,
     Scenario,
     ScenarioStep,
+    ScenarioValue,
 )
 
 
@@ -30,6 +32,7 @@ class FictionalDeploymentError(ClientPackError):
 
 
 FictionalDeployment = ClientPack
+FICTIONAL_SCENARIO_STARTED_AT = datetime(2026, 1, 1, 9, tzinfo=UTC)
 
 
 CUSTOMER_EMAIL = Fact(
@@ -120,6 +123,11 @@ def create_fictional_project(*, state: StubBusinessState | None = None) -> Proje
     """Build the example project with adapters bound to one deterministic provider state."""
 
     bindings = stub_business_bindings(state or StubBusinessState())
+    simulation_bindings = (
+        bindings
+        if state is not None
+        else stub_business_bindings(StubBusinessState(now=FICTIONAL_SCENARIO_STARTED_AT))
+    )
     capabilities = (
         Capability(
             action_type="send_message",
@@ -127,6 +135,7 @@ def create_fictional_project(*, state: StubBusinessState | None = None) -> Proje
             description="Send a plain-text message through the configured messaging provider.",
             parameters_model=SendMessageParameters,
             adapter=bindings["send_message"],
+            simulation_adapter=simulation_bindings["send_message"],
             guidance=(
                 "Use the exact keys recipient and body. Both values must be nonblank, and body "
                 "must be customer-ready plain text."
@@ -140,6 +149,7 @@ def create_fictional_project(*, state: StubBusinessState | None = None) -> Proje
             description="Ask the booking provider for open appointment times.",
             parameters_model=FindAvailableSlotsParameters,
             adapter=bindings["find_available_slots"],
+            simulation_adapter=simulation_bindings["find_available_slots"],
             guidance="Use a positive integer days parameter describing the search horizon.",
             default_permission=PermissionOutcome.ALLOW,
             produces=(AVAILABLE_SLOTS,),
@@ -150,6 +160,7 @@ def create_fictional_project(*, state: StubBusinessState | None = None) -> Proje
             description="Book an authoritative available slot for the customer.",
             parameters_model=ProposeBookingParameters,
             adapter=bindings["propose_booking"],
+            simulation_adapter=simulation_bindings["propose_booking"],
             guidance=(
                 "Use nonblank customer_id and slot values. slot must be present in the current "
                 "authoritative booking.available_slots fact. This fictional provider confirms an "
@@ -164,6 +175,7 @@ def create_fictional_project(*, state: StubBusinessState | None = None) -> Proje
             description="Create a payment request for a confirmed booking.",
             parameters_model=RequestPaymentParameters,
             adapter=bindings["request_payment"],
+            simulation_adapter=simulation_bindings["request_payment"],
             guidance=(
                 "Use the confirmed booking_reference and the configured demo amount of 12500 "
                 "minor units in NZD."
@@ -182,6 +194,7 @@ def create_fictional_project(*, state: StubBusinessState | None = None) -> Proje
             description="Add a paid, confirmed booking to the configured calendar.",
             parameters_model=CreateCalendarEventParameters,
             adapter=bindings["create_calendar_event"],
+            simulation_adapter=simulation_bindings["create_calendar_event"],
             guidance=(
                 "Use the confirmed booking_reference and booking.slot plus a nonblank "
                 "customer-facing title. Propose this only after payment.status is completed."
@@ -267,18 +280,93 @@ def create_fictional_project(*, state: StubBusinessState | None = None) -> Proje
         title="A customer books and pays",
         description="The normal journey from website enquiry to a paid calendar booking.",
         steps=(
-            ScenarioStep.event("enquiry.created", "A customer submits a website enquiry."),
-            ScenarioStep.action("send_message", "The agent asks for the missing details."),
-            ScenarioStep.event("customer.email_received", "The customer selects a slot."),
-            ScenarioStep.action("propose_booking", "The booking is approved and confirmed."),
-            ScenarioStep.action("request_payment", "The customer receives a payment request."),
-            ScenarioStep.event("payment.completed", "The provider confirms payment."),
-            ScenarioStep.action(
-                "create_calendar_event", "The paid appointment is added to the calendar."
+            ScenarioStep.event(
+                "enquiry.created",
+                "A customer submits a website enquiry.",
+                facts=(CUSTOMER_EMAIL.observed("customer@example.test"),),
+                payload={
+                    "email": "customer@example.test",
+                    "message": "I would like a 60-minute appointment next week.",
+                },
             ),
+            ScenarioStep.action(
+                "find_available_slots",
+                "The agent checks authoritative availability.",
+                parameters={"days": 7},
+            ),
+            ScenarioStep.action(
+                "send_message",
+                "The agent asks the customer to select an available time.",
+                parameters={
+                    "recipient": ScenarioValue.fact(CUSTOMER_EMAIL),
+                    "body": "We have appointments available. Which time suits you?",
+                },
+                approve=True,
+            ),
+            ScenarioStep.wait_for_event(
+                "customer.email_received", "The agent sleeps until the customer replies."
+            ),
+            ScenarioStep.event(
+                "customer.email_received",
+                "The customer selects the first available slot.",
+                facts=(
+                    CUSTOMER_LAST_MESSAGE.observed(
+                        "The first time works for me.", kind=FactKind.CUSTOMER_CLAIM
+                    ),
+                ),
+                payload={"content": "The first time works for me."},
+            ),
+            ScenarioStep.action(
+                "propose_booking",
+                "The booking is approved and confirmed.",
+                parameters={
+                    "customer_id": ScenarioValue.fact(CUSTOMER_EMAIL),
+                    "slot": ScenarioValue.fact(AVAILABLE_SLOTS, 0),
+                },
+                approve=True,
+            ),
+            ScenarioStep.action(
+                "request_payment",
+                "The customer receives an approved payment request.",
+                parameters={
+                    "booking_reference": ScenarioValue.fact(BOOKING_REFERENCE),
+                    "amount_minor": 12_500,
+                    "currency": "NZD",
+                },
+                approve=True,
+            ),
+            ScenarioStep.wait_for_event(
+                "payment.completed", "The agent sleeps until the payment provider responds."
+            ),
+            ScenarioStep.event(
+                "payment.completed",
+                "The provider confirms payment.",
+                facts=(
+                    PAYMENT_REFERENCE.observed(ScenarioValue.fact(PAYMENT_REFERENCE)),
+                    PAYMENT_STATUS.observed("completed"),
+                    PAYMENT_AMOUNT_MINOR.observed(12_500),
+                    PAYMENT_CURRENCY.observed("NZD"),
+                ),
+                payload={
+                    "payment_reference": ScenarioValue.fact(PAYMENT_REFERENCE),
+                    "booking_reference": ScenarioValue.fact(BOOKING_REFERENCE),
+                },
+            ),
+            ScenarioStep.action(
+                "create_calendar_event",
+                "The paid appointment is added to the calendar.",
+                parameters={
+                    "booking_reference": ScenarioValue.fact(BOOKING_REFERENCE),
+                    "starts_at": ScenarioValue.fact(BOOKING_SLOT),
+                    "title": "Customer appointment",
+                },
+            ),
+            ScenarioStep.fact(BOOKING_STATUS, "confirmed", "The booking is authoritative."),
+            ScenarioStep.fact(PAYMENT_STATUS, "completed", "Payment is authoritative."),
             ScenarioStep.fact(CALENDAR_STATUS, "created", "The calendar event is authoritative."),
             ScenarioStep.complete("The journey completes with no open work."),
         ),
+        started_at=FICTIONAL_SCENARIO_STARTED_AT,
     )
     return Project(
         id="fictional_booking",

@@ -3,13 +3,15 @@
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from tiramisu_agents.core.contracts.actions import PermissionOutcome
 from tiramisu_agents.core.contracts.decisions import AgentDecision
+from tiramisu_agents.core.contracts.events import ExternalReference
 from tiramisu_agents.core.contracts.knowledge import FactKind
 from tiramisu_agents.core.contracts.processes import AgentTurnInput, ProcessStatus
 from tiramisu_agents.core.contracts.reviews import ReviewCommandType
@@ -46,6 +48,67 @@ def _require_parameter_model(value: object, *, action_type: str) -> type[BaseMod
             f"capability {action_type} parameters_model must be a Pydantic model"
         )
     return value
+
+
+class ScenarioValue(BaseModel):
+    """A value read from the scenario's current trusted fact projection."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["fact"] = "fact"
+    fact_key: str = Field(pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+    path: tuple[str | int, ...] = ()
+
+    @classmethod
+    def fact(cls, fact: "Fact", *path: str | int) -> "ScenarioValue":
+        return cls(fact_key=fact.key, path=path)
+
+
+class ScenarioFact(BaseModel):
+    """One typed fact supplied by a scenario event."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+    kind: FactKind
+    value: Any
+
+
+class ScenarioEvent(BaseModel):
+    """Deterministic canonical-event content with runtime identities omitted."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source: str = Field(default="scenario", min_length=1, max_length=100)
+    external_references: tuple[ExternalReference, ...] = ()
+    facts: tuple[ScenarioFact, ...] = ()
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScenarioAction(BaseModel):
+    """One scripted agent proposal plus its explicit human-approval response."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    logical_action_key: str = Field(min_length=1, max_length=200)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    rationale: str = Field(min_length=1, max_length=1_000)
+    approve: bool = False
+
+
+class ScenarioEventWait(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["event"] = "event"
+    event_type: str = Field(pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+
+
+class ScenarioTimerWait(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["timer"] = "timer"
+    timer_id: str = Field(min_length=1, max_length=200)
+    delay_seconds: int = Field(ge=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +153,26 @@ class Fact:
         encoded = TypeAdapter(self.value_type).dump_python(validated, mode="json")
         return FactRequirement(fact_key=self.key, expected_value=encoded)
 
+    def observed(
+        self,
+        value: Any,
+        *,
+        kind: FactKind = FactKind.AUTHORITATIVE,
+    ) -> ScenarioFact:
+        """Supply a typed event observation in an executable scenario."""
+
+        if kind not in self.kinds:
+            raise ProjectConfigurationError(
+                f"fact {self.key} does not permit {kind.value} observations"
+            )
+        encoded: Any
+        if isinstance(value, ScenarioValue):
+            encoded = value.model_dump(mode="json")
+        else:
+            validated = TypeAdapter(self.value_type).validate_python(value)
+            encoded = TypeAdapter(self.value_type).dump_python(validated, mode="json")
+        return ScenarioFact(key=self.key, kind=kind, value=encoded)
+
 
 @dataclass(frozen=True, slots=True)
 class Capability:
@@ -103,6 +186,7 @@ class Capability:
     guidance: str
     default_permission: PermissionOutcome = PermissionOutcome.REQUIRE_APPROVAL
     produces: tuple[Fact, ...] = ()
+    simulation_adapter: Any | None = None
 
     def __post_init__(self) -> None:
         _require_identifier(self.action_type, label="capability action type")
@@ -132,6 +216,24 @@ class Capability:
             raise ProjectConfigurationError(
                 f"capability {self.action_type} adapter must implement execute and lookup"
             )
+        if self.simulation_adapter is not None:
+            simulation_id = getattr(self.simulation_adapter, "id", None)
+            if not isinstance(simulation_id, str) or not simulation_id.strip():
+                raise ProjectConfigurationError(
+                    f"capability {self.action_type} simulation adapter must expose a nonblank id"
+                )
+            if getattr(self.simulation_adapter, "is_simulation_adapter", False) is not True:
+                raise ProjectConfigurationError(
+                    f"capability {self.action_type} simulation adapter must be explicitly "
+                    "marked safe"
+                )
+            if not callable(getattr(self.simulation_adapter, "execute", None)) or not callable(
+                getattr(self.simulation_adapter, "lookup", None)
+            ):
+                raise ProjectConfigurationError(
+                    f"capability {self.action_type} simulation adapter must implement execute "
+                    "and lookup"
+                )
         if len({fact.key for fact in self.produces}) != len(self.produces):
             raise ProjectConfigurationError(
                 f"capability {self.action_type} declares a fact more than once"
@@ -188,7 +290,7 @@ class Route:
         return cls("wake", event_type, journey, title, description, provides)
 
 
-ScenarioStepKind = Literal["event", "action", "fact", "complete"]
+ScenarioStepKind = Literal["event", "action", "wait", "fact", "complete"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,15 +306,96 @@ class ScenarioStep:
         _require_nonblank(self.description, label="scenario step description")
         if self.kind != "complete" and not self.reference:
             raise ProjectConfigurationError(f"scenario {self.kind} step requires a reference")
-        canonical_json_bytes(self.value, label="scenario step value")
+        expected_types: dict[str, type[BaseModel]] = {
+            "event": ScenarioEvent,
+            "action": ScenarioAction,
+        }
+        expected = expected_types.get(self.kind)
+        if expected is not None and not isinstance(self.value, expected):
+            raise ProjectConfigurationError(
+                f"scenario {self.kind} step requires executable {expected.__name__} data"
+            )
+        if self.kind == "wait" and not isinstance(
+            self.value, (ScenarioEventWait, ScenarioTimerWait)
+        ):
+            raise ProjectConfigurationError("scenario wait step requires an event or timer wait")
+        if isinstance(self.value, ScenarioEventWait) and self.reference != self.value.event_type:
+            raise ProjectConfigurationError("scenario event wait reference does not match its data")
+        if isinstance(self.value, ScenarioTimerWait) and self.reference != self.value.timer_id:
+            raise ProjectConfigurationError("scenario timer wait reference does not match its data")
+        if self.kind == "complete" and self.value is not None:
+            raise ProjectConfigurationError("scenario complete step cannot carry a value")
+        value = (
+            self.value.model_dump(mode="json") if isinstance(self.value, BaseModel) else self.value
+        )
+        canonical_json_bytes(value, label="scenario step value")
 
     @classmethod
-    def event(cls, event_type: str, description: str) -> "ScenarioStep":
-        return cls("event", description, event_type)
+    def event(
+        cls,
+        event_type: str,
+        description: str,
+        *,
+        facts: tuple[ScenarioFact, ...] = (),
+        payload: Mapping[str, Any] | None = None,
+        source: str = "scenario",
+        external_references: tuple[ExternalReference, ...] = (),
+    ) -> "ScenarioStep":
+        return cls(
+            "event",
+            description,
+            event_type,
+            ScenarioEvent(
+                source=source,
+                external_references=external_references,
+                facts=facts,
+                payload=dict(payload or {}),
+            ),
+        )
 
     @classmethod
-    def action(cls, action_type: str, description: str) -> "ScenarioStep":
-        return cls("action", description, action_type)
+    def action(
+        cls,
+        action_type: str,
+        description: str,
+        *,
+        parameters: Mapping[str, Any],
+        logical_action_key: str | None = None,
+        rationale: str | None = None,
+        approve: bool = False,
+    ) -> "ScenarioStep":
+        return cls(
+            "action",
+            description,
+            action_type,
+            ScenarioAction(
+                logical_action_key=logical_action_key or action_type,
+                parameters=dict(parameters),
+                rationale=rationale or description,
+                approve=approve,
+            ),
+        )
+
+    @classmethod
+    def wait_for_event(cls, event_type: str, description: str) -> "ScenarioStep":
+        return cls("wait", description, event_type, ScenarioEventWait(event_type=event_type))
+
+    @classmethod
+    def wait_for_timer(
+        cls,
+        timer_id: str,
+        after: timedelta,
+        description: str,
+    ) -> "ScenarioStep":
+        seconds = int(after.total_seconds())
+        if after != timedelta(seconds=seconds) or seconds < 1:
+            raise ProjectConfigurationError("scenario timer delay must be whole positive seconds")
+        return cls(
+            "wait",
+            description,
+            timer_id,
+            ScenarioTimerWait(timer_id=timer_id, delay_seconds=seconds),
+        )
 
     @classmethod
     def fact(cls, fact: Fact, value: Any, description: str) -> "ScenarioStep":
@@ -230,6 +413,7 @@ class Scenario:
     title: str
     description: str
     steps: tuple[ScenarioStep, ...]
+    started_at: datetime = datetime(2026, 1, 1, 9, tzinfo=UTC)
 
     def __post_init__(self) -> None:
         _require_identifier(self.id, label="scenario ID")
@@ -238,6 +422,8 @@ class Scenario:
         _require_nonblank(self.description, label=f"scenario {self.id} description")
         if not self.steps:
             raise ProjectConfigurationError(f"scenario {self.id} requires at least one step")
+        if self.started_at.tzinfo is None or self.started_at.utcoffset() is None:
+            raise ProjectConfigurationError(f"scenario {self.id} start time must be timezone-aware")
 
 
 def _default_limits() -> ProcessLimits:

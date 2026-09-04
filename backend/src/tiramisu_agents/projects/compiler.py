@@ -1,8 +1,9 @@
 """Compile conventional projects into the existing safety-fenced ClientPack runtime."""
 
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, cast
 
+from tiramisu_agents.core.contracts.actions import PermissionOutcome
 from tiramisu_agents.core.contracts.knowledge import FactKind
 from tiramisu_agents.extensions import ClientPack, ExtensionManifest
 from tiramisu_agents.extensions.project_metadata import (
@@ -29,6 +30,11 @@ from tiramisu_agents.projects.contracts import (
     ProjectConfigurationError,
     Route,
     Scenario,
+    ScenarioAction,
+    ScenarioEvent,
+    ScenarioEventWait,
+    ScenarioTimerWait,
+    ScenarioValue,
 )
 from tiramisu_agents.projects.output import generate_agent_decision_output_type
 
@@ -90,10 +96,15 @@ def _scenario_description(scenario: Scenario) -> ScenarioDescription:
                 kind=step.kind,
                 description=step.description,
                 reference=step.reference,
-                value=step.value,
+                value=(
+                    step.value.model_dump(mode="json")
+                    if hasattr(step.value, "model_dump")
+                    else step.value
+                ),
             )
             for step in scenario.steps
         ),
+        started_at=scenario.started_at,
     )
 
 
@@ -119,22 +130,184 @@ def _validate_scenario(
     journey: Journey,
     routes: tuple[Route, ...],
     facts: dict[str, Fact],
+    capabilities: dict[str, Capability],
 ) -> None:
-    route_events = {route.event_type for route in routes}
-    for step in scenario.steps:
-        if step.kind == "event" and step.reference not in route_events:
+    starts = {route.event_type for route in routes if route.kind == "start"}
+    wakes = {route.event_type for route in routes if route.kind == "wake"}
+    routes_by_event = {route.event_type: route for route in routes}
+    if scenario.steps[0].kind != "event" or scenario.steps[0].reference not in starts:
+        raise ProjectConfigurationError(
+            f"scenario {scenario.id} must begin with a start event for journey {journey.id}"
+        )
+    if scenario.steps[-1].kind != "complete":
+        raise ProjectConfigurationError(f"scenario {scenario.id} must end with completion")
+
+    expected_event: str | None = None
+    turn_ready = False
+    for index, step in enumerate(scenario.steps):
+        if step.kind == "event" and step.reference not in routes_by_event:
             raise ProjectConfigurationError(
                 f"scenario {scenario.id} references an event outside journey {journey.id}: "
                 f"{step.reference}"
             )
-        if step.kind == "action" and step.reference not in journey.capabilities:
-            raise ProjectConfigurationError(
-                f"scenario {scenario.id} references an unavailable action: {step.reference}"
+        if step.kind == "event":
+            event_type = cast(str, step.reference)
+            event = ScenarioEvent.model_validate(step.value)
+            if index > 0 and expected_event != step.reference:
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} event {step.reference} must follow a matching wait"
+                )
+            expected_event = None
+            turn_ready = True
+            route = routes_by_event[event_type]
+            provided = {fact.key: fact for fact in route.provides}
+            if len({item.key for item in event.facts}) != len(event.facts):
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} event {step.reference} repeats a fact"
+                )
+            for observation in event.facts:
+                fact = facts.get(observation.key)
+                if fact is None or observation.key not in provided:
+                    raise ProjectConfigurationError(
+                        f"scenario {scenario.id} event {step.reference} supplies an undeclared "
+                        f"fact: {observation.key}"
+                    )
+                if observation.kind not in fact.kinds:
+                    raise ProjectConfigurationError(
+                        f"scenario {scenario.id} event {step.reference} supplies {observation.key} "
+                        f"with an unsupported authority kind"
+                    )
+                _validate_scenario_value_references(
+                    observation.value,
+                    scenario=scenario,
+                    facts=facts,
+                )
+            _validate_scenario_value_references(event.payload, scenario=scenario, facts=facts)
+        elif step.kind == "action":
+            action_type = cast(str, step.reference)
+            if not turn_ready:
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} action {step.reference} has no wake source"
+                )
+            if step.reference not in journey.capabilities:
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} references an unavailable action: {step.reference}"
+                )
+            action = ScenarioAction.model_validate(step.value)
+            capability = capabilities[action_type]
+            has_references = _validate_scenario_value_references(
+                action.parameters,
+                scenario=scenario,
+                facts=facts,
             )
-        if step.kind == "fact" and step.reference not in facts:
-            raise ProjectConfigurationError(
-                f"scenario {scenario.id} references an unknown fact: {step.reference}"
+            if not has_references:
+                try:
+                    capability.parameters_model.model_validate(action.parameters)
+                except ValueError as error:
+                    raise ProjectConfigurationError(
+                        f"scenario {scenario.id} has invalid {step.reference} parameters: {error}"
+                    ) from error
+            permission = journey.permission_overrides.get(
+                step.reference, capability.default_permission
             )
+            if action.approve and permission is not PermissionOutcome.REQUIRE_APPROVAL:
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} approves {step.reference}, but policy does not "
+                    "require approval"
+                )
+            if permission is PermissionOutcome.REQUIRE_APPROVAL and not action.approve:
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} must explicitly approve {step.reference}"
+                )
+            if permission is PermissionOutcome.DENY:
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} cannot execute denied action {step.reference}"
+                )
+            # A successful action result is the next turn's wake source.
+            turn_ready = True
+        elif step.kind == "wait":
+            if not turn_ready:
+                raise ProjectConfigurationError(f"scenario {scenario.id} wait has no wake source")
+            wait = step.value
+            if isinstance(wait, ScenarioEventWait):
+                if wait.event_type not in wakes:
+                    raise ProjectConfigurationError(
+                        f"scenario {scenario.id} waits for an unavailable event: {wait.event_type}"
+                    )
+                expected_event = wait.event_type
+                turn_ready = False
+            elif isinstance(wait, ScenarioTimerWait):
+                # The deterministic runner advances its fake clock and opens the next turn.
+                turn_ready = True
+            else:
+                raise ProjectConfigurationError(f"scenario {scenario.id} has an invalid wait")
+        if step.kind == "fact":
+            if not turn_ready:
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} fact assertion has no pending wake source"
+                )
+            if step.reference not in facts:
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} references an unknown fact: {step.reference}"
+                )
+        if step.kind == "complete":
+            if not turn_ready:
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} completion has no wake source"
+                )
+            if index != len(scenario.steps) - 1:
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} completion must be the final step"
+                )
+            turn_ready = False
+    if expected_event is not None:
+        raise ProjectConfigurationError(
+            f"scenario {scenario.id} never supplies awaited event {expected_event}"
+        )
+
+
+def _validate_scenario_value_references(
+    value: Any,
+    *,
+    scenario: Scenario,
+    facts: dict[str, Fact],
+) -> bool:
+    """Validate fact references recursively and report whether any were present."""
+
+    if isinstance(value, ScenarioValue):
+        if value.fact_key not in facts:
+            raise ProjectConfigurationError(
+                f"scenario {scenario.id} reads an unknown fact: {value.fact_key}"
+            )
+        return True
+    if hasattr(value, "model_dump"):
+        return _validate_scenario_value_references(
+            value.model_dump(mode="json"), scenario=scenario, facts=facts
+        )
+    if isinstance(value, dict):
+        document = cast(dict[str, Any], value)
+        if document.get("type") == "fact" and set(document).issubset({"type", "fact_key", "path"}):
+            fact_key = document.get("fact_key")
+            if fact_key not in facts:
+                raise ProjectConfigurationError(
+                    f"scenario {scenario.id} reads an unknown fact: {fact_key}"
+                )
+            return True
+        found = False
+        for item in document.values():
+            found = (
+                _validate_scenario_value_references(item, scenario=scenario, facts=facts) or found
+            )
+        return found
+    if isinstance(value, (list, tuple)):
+        items = cast(list[Any] | tuple[Any, ...], value)
+        found = False
+        for item in items:
+            found = (
+                _validate_scenario_value_references(item, scenario=scenario, facts=facts) or found
+            )
+        return found
+    return False
 
 
 def compile_project(project: Project) -> ClientPack:
@@ -286,7 +459,8 @@ def compile_project(project: Project) -> ClientPack:
                 scenario,
                 journey=journey,
                 routes=journey_routes,
-                facts=facts,
+                facts={fact.key: fact for fact in relevant_facts},
+                capabilities=capabilities,
             )
         journey_descriptions.append(
             JourneyDescription(
@@ -318,6 +492,28 @@ def compile_project(project: Project) -> ClientPack:
         for capability in project.capabilities
         if capability.action_type in used_action_types
     )
+    scenario_action_types = {
+        step.reference
+        for scenario in project.scenarios
+        for step in scenario.steps
+        if step.kind == "action"
+    }
+    simulation_bindings: dict[str, Any] = {}
+    for capability in used_capabilities:
+        if capability.action_type not in scenario_action_types:
+            continue
+        simulation_adapter = capability.simulation_adapter
+        if (
+            simulation_adapter is None
+            and getattr(capability.adapter, "is_simulation_adapter", False) is True
+        ):
+            simulation_adapter = capability.adapter
+        if simulation_adapter is None:
+            raise ProjectConfigurationError(
+                f"scenario action {capability.action_type} requires an explicitly safe "
+                "simulation adapter"
+            )
+        simulation_bindings[capability.action_type] = simulation_adapter
     output_type = generate_agent_decision_output_type(
         project_id=project.id,
         project_version=project.version,
@@ -351,4 +547,5 @@ def compile_project(project: Project) -> ClientPack:
         agent_decision_output_type=output_type,
         policy_ids=tuple(policy_ids),
         project=project_description,
+        simulation_bindings=simulation_bindings,
     )

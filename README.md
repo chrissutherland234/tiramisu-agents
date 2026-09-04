@@ -62,7 +62,7 @@ The provider-neutral execution stage writes an action attempt before calling the
 
 Temporal outbox delivery uses claim tokens, exponential retries, and an explicit dead-letter state after bounded exhaustion. Credentials with `outbox:read` can inspect dead letters and recovery history; `outbox:requeue` authorizes an attributed, idempotent requeue. Requeue starts a fresh bounded attempt cycle while preserving the prior attempt count, error, timestamp, reason, and actor in immutable recovery history.
 
-The fictional client path includes stateful messaging, availability/booking, payment, and calendar adapters. The integration-free scenario driver exercises enquiry, approved correspondence, customer reply, autonomous availability lookup, approved booking (which the fictional adapter immediately confirms), approved payment request, payment completion, calendar creation, and terminal completion without Docker, network access, provider credentials, or an OpenAI key. A separate PostgreSQL + Temporal scripted journey exercises the same lifecycle across fresh worker and reconstructed provider deployments at its business boundaries, including a manual “paid cash” reevaluation that correctly leaves payment pending until the authoritative provider event arrives. The fictional worker uses these same action bindings.
+The fictional client path includes stateful messaging, availability/booking, payment, and calendar adapters. Its compiled executable scenario exercises enquiry, approved correspondence, customer reply, autonomous availability lookup, approved booking (which the fictional adapter immediately confirms), approved payment request, payment completion, calendar creation, and terminal completion without Docker, network access, provider credentials, or an OpenAI key. `tiramisu simulate tiramisu_agents.builtin:create_fictional_project --scenario happy_path` runs it through generated strict decision validation, production policies, explicitly safe adapters, and process transitions shared with persistence. A separate PostgreSQL + Temporal scripted journey exercises the same lifecycle across fresh worker and reconstructed provider deployments at its business boundaries, including a manual “paid cash” reevaluation that correctly leaves payment pending until the authoritative provider event arrives. Converting that live path into a second driver for the same compiled scenario is the remaining cross-layer testing step.
 
 ## Development event path
 
@@ -105,6 +105,7 @@ Start and inspect a conventional package with:
 uv run tiramisu startproject acme_service ../acme-service
 uv run tiramisu check tiramisu_agents.builtin:create_fictional_project
 uv run tiramisu describe tiramisu_agents.builtin:create_fictional_project
+uv run tiramisu simulate tiramisu_agents.builtin:create_fictional_project --scenario happy_path
 ```
 
 Compiled private packs return the stable `tiramisu_agents.extensions.ClientPack` from an explicit zero-argument startup factory. Direct construction of that low-level contract remains available for advanced cases.

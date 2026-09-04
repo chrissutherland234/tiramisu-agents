@@ -52,7 +52,7 @@ The files follow one convention:
 - `Route` says which business events start or wake the journey.
 - `Capability` binds one typed business action to an adapter and permission.
 - `Fact` names trusted business knowledge.
-- `Scenario` records an example in business language.
+- `Scenario` records an executable acceptance example in business language.
 
 During local development, install Tiramisu and this project into the same environment:
 
@@ -61,10 +61,12 @@ uv pip install -e /path/to/tiramisu
 uv pip install -e .
 tiramisu check {name}:create_project
 tiramisu describe {name}:create_project
+tiramisu simulate {name}:create_project --scenario happy_path
 pytest
 ```
 
-Replace the stub adapter with your provider adapter before deployment.
+When replacing the stub with a real provider adapter, retain a separate explicitly safe
+`simulation_adapter` for executable scenarios.
 """
 
 
@@ -95,6 +97,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from tiramisu_agents.adapters.stubs import StubActionAdapter
+from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
+from tiramisu_agents.core.ports.actions import ProviderActionResult
 from tiramisu_agents.extensions import ClientPack
 from tiramisu_agents.projects import (
     Capability,
@@ -128,7 +132,21 @@ def create_project() -> Project:
         title="Perform task",
         description="Ask the configured business provider to perform the task.",
         parameters_model=PerformTaskParameters,
-        adapter=StubActionAdapter(),
+        adapter=StubActionAdapter(
+            (
+                ProviderActionResult(
+                    provider_reference="scenario-work-1",
+                    result={{"completed": True}},
+                    facts=(
+                        FactObservation(
+                            key=WORK_STATUS.key,
+                            kind=FactKind.AUTHORITATIVE,
+                            value="completed",
+                        ),
+                    ),
+                ),
+            )
+        ),
         guidance="Use one concrete, bounded instruction.",
     )
     journey = Journey(
@@ -171,9 +189,28 @@ def create_project() -> Project:
                 title="Work is completed",
                 description="The normal path through the journey.",
                 steps=(
-                    ScenarioStep.event("work.created", "A new item starts the journey."),
-                    ScenarioStep.action("perform_task", "The agent proposes the business task."),
-                    ScenarioStep.event("work.completed", "The provider confirms completion."),
+                    ScenarioStep.event(
+                        "work.created",
+                        "A new item starts the journey.",
+                        facts=(WORK_STATUS.observed("open"),),
+                    ),
+                    ScenarioStep.action(
+                        "perform_task",
+                        "The agent proposes the business task.",
+                        parameters={{"instruction": "Complete the requested work"}},
+                        approve=True,
+                    ),
+                    ScenarioStep.wait_for_event(
+                        "work.completed", "The agent waits for provider confirmation."
+                    ),
+                    ScenarioStep.event(
+                        "work.completed",
+                        "The provider confirms completion.",
+                        facts=(WORK_STATUS.observed("completed"),),
+                    ),
+                    ScenarioStep.fact(
+                        WORK_STATUS, "completed", "Completion is authoritative."
+                    ),
                     ScenarioStep.complete("The journey completes."),
                 ),
             ),
@@ -187,7 +224,9 @@ def create_client_pack() -> ClientPack:
 
 
 def _test_module(name: str) -> str:
-    return f"""from {name} import create_project
+    return f"""import asyncio
+from {name} import create_project
+from tiramisu_agents.testkit import run_scenario
 
 
 def test_project_compiles() -> None:
@@ -196,4 +235,10 @@ def test_project_compiles() -> None:
     assert pack.definition.id == "manage_work"
     assert pack.definition.trigger_events == ("work.created",)
     assert pack.definition.completion_requirements == {{"work.status": "completed"}}
+
+
+def test_happy_path() -> None:
+    result = asyncio.run(run_scenario(create_project().compile(), "happy_path"))
+
+    assert result.passed is True
 """

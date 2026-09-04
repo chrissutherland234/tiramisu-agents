@@ -9,7 +9,10 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tiramisu_agents.core.action_identity import action_payload_identity
-from tiramisu_agents.core.action_policy import ConfiguredActionPolicy
+from tiramisu_agents.core.action_policy import (
+    ConfiguredActionPolicy,
+    initial_action_request_status,
+)
 from tiramisu_agents.core.contracts.actions import (
     ActionAttemptStatus,
     ActionRequestStatus,
@@ -290,11 +293,7 @@ class ActionGateway:
         except ValueError as error:
             raise ActionPersistenceConflict(str(error)) from error
         policy_decision = policy.evaluate(action)
-        status = {
-            PermissionOutcome.ALLOW: ActionRequestStatus.ALLOWED,
-            PermissionOutcome.DENY: ActionRequestStatus.DENIED,
-            PermissionOutcome.REQUIRE_APPROVAL: ActionRequestStatus.PENDING_APPROVAL,
-        }[policy_decision.outcome]
+        status = initial_action_request_status(policy_decision.outcome)
         inserted_id = await session.scalar(
             insert(ActionRequest)
             .values(

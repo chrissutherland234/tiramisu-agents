@@ -307,6 +307,7 @@ class StubBusinessState:
 
 class _StatefulActionAdapter:
     guarantees_idempotency = True
+    is_simulation_adapter = True
 
     def __init__(self, state: StubBusinessState) -> None:
         self.state = state

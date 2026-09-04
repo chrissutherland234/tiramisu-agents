@@ -32,6 +32,7 @@ uv pip install -e /path/to/tiramisu
 uv pip install -e .
 tiramisu check acme_service:create_project
 tiramisu describe acme_service:create_project
+tiramisu simulate acme_service:create_project --scenario happy_path
 pytest
 ```
 
@@ -145,8 +146,85 @@ cannot manufacture resolution or payment.
 - A `decision_transformer` is an advanced, versioned escape hatch for a small deterministic
   transition after structured output conversion. It cannot bypass the downstream policy or action
   gateway. Most projects should not need one.
-- Scenarios are business-readable specifications today. The next testing increment will make the
-  same scenario data executable at multiple runtime layers; they are not yet a visual workflow DSL.
+- Scenarios are executable, business-readable acceptance specifications. Event steps supply typed
+  integration facts, action steps are deterministic scripted agent decisions, wait steps assert the
+  wake plan, fact steps assert the resulting projection, and completion still passes through the
+  production decision and lifecycle rules. They are intentionally not a visual workflow DSL.
+
+## Executing a scenario
+
+An executable scenario uses the same names as the journey rather than recreating its lifecycle:
+
+```python
+from tiramisu_agents.projects import Scenario, ScenarioStep, ScenarioValue
+
+Scenario(
+    id="happy_path",
+    journey_id="support_case",
+    title="Answer and resolve a case",
+    description="A reviewed reply is sent before authoritative resolution.",
+    steps=(
+        ScenarioStep.event(
+            "case.created",
+            "A customer opens a case.",
+            facts=(CASE_STATUS.observed("open"),),
+        ),
+        ScenarioStep.action(
+            "send_reply",
+            "An operator approves the reply.",
+            parameters={
+                "recipient": ScenarioValue.fact(CUSTOMER_EMAIL),
+                "body": "We are looking into this.",
+            },
+            approve=True,
+        ),
+        ScenarioStep.wait_for_event(
+            "case.resolved", "The agent sleeps until the support system resolves the case."
+        ),
+        ScenarioStep.event(
+            "case.resolved",
+            "The support system resolves the case.",
+            facts=(CASE_STATUS.observed("resolved"),),
+        ),
+        ScenarioStep.fact(CASE_STATUS, "resolved", "Resolution is authoritative."),
+        ScenarioStep.complete("The relationship agent completes."),
+    ),
+)
+```
+
+`ScenarioValue.fact(...)` reads a fact established by an earlier event or action result; an optional
+path such as `ScenarioValue.fact(AVAILABLE_SLOTS, 0)` selects a nested value. Timer waits use
+`ScenarioStep.wait_for_timer(...)` and advance the deterministic scenario clock instantly.
+
+Run a named scenario with no PostgreSQL, Temporal, OpenAI, network, or credentials:
+
+```console
+tiramisu simulate acme_service:create_project --scenario happy_path
+tiramisu simulate acme_service:create_project --scenario happy_path --json
+```
+
+The runner validates scripted decisions through the generated strict output schema and production
+decision policy, classifies actions through the production permission policy, derives exact action
+identities, calls only explicitly safe simulation adapters, and projects facts, process status,
+wakes, and completion through the same infrastructure-free transition functions used by PostgreSQL
+persistence. Its trace shows every event, decision, approval, provider result, wait, fact assertion,
+and completion. A pluggable driver boundary is retained so the same compiled scenario can next be
+run through the PostgreSQL/Temporal stack.
+
+If a capability's deployment adapter is real, bind a separate safe adapter for scenarios:
+
+```python
+Capability(
+    # ...
+    adapter=real_email_adapter,
+    simulation_adapter=StubActionAdapter(),
+)
+```
+
+Stub adapters supplied by Tiramisu are marked as simulation-safe. `simulate` refuses to use an
+ordinary production binding merely because it implements the same methods.
+Scenario fixtures must be synthetic and safe to retain in version control; do not embed client
+credentials or real customer content in compiled project metadata or traces.
 
 Use a real adapter only after its side-effect and reconciliation behavior fits the public
 `ActionAdapter` contract. An adapter ID is an immutable release identity: change it when provider
@@ -158,11 +236,13 @@ behavior changes incompatibly.
 tiramisu check acme_service:create_project
 tiramisu describe acme_service:create_project
 tiramisu describe acme_service:create_project --json
+tiramisu simulate acme_service:create_project --scenario happy_path
 ```
 
 `check` constructs the complete pack and validates the generated OpenAI schema. `describe` prints
 routes, capabilities, permissions, completion facts, and scenarios. JSON output exposes the compiled
-business metadata for future tooling and admin forms.
+business metadata for future tooling and admin forms. `simulate` executes one scenario using its
+safe adapter bindings and returns a readable or JSON trace.
 
 The compiler still produces the stable `tiramisu_agents.extensions.ClientPack` runtime contract.
 Advanced packages may construct that low-level contract directly, but then they own the manifest,

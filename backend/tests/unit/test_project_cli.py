@@ -1,12 +1,13 @@
 """Command-line authoring workflow tests."""
 
+import asyncio
 import importlib
 import json
 import sys
 from pathlib import Path
 
 import pytest
-from tiramisu_agents.projects.cli import check_project, describe_project, main
+from tiramisu_agents.projects.cli import check_project, describe_project, main, simulate_project
 
 
 def test_startproject_creates_a_compilable_conventional_package(
@@ -27,6 +28,9 @@ def test_startproject_creates_a_compilable_conventional_package(
         importlib.invalidate_caches()
         result = check_project("acme_service:create_project")
         description = describe_project("acme_service:create_project")
+        simulation = asyncio.run(
+            simulate_project("acme_service:create_project", scenario_id="happy_path")
+        )
     finally:
         sys.path.remove(source_path)
 
@@ -35,6 +39,7 @@ def test_startproject_creates_a_compilable_conventional_package(
     assert "[work.created]" in description
     assert 'Work status is "completed"' in description
     assert "1. A new item starts the journey." in description
+    assert simulation.startswith("PASS: Work is completed [happy_path]")
 
 
 def test_startproject_refuses_to_overwrite_an_existing_project(
@@ -75,3 +80,30 @@ def test_describe_can_emit_machine_readable_compiled_metadata() -> None:
         "calendar.status": "created",
         "payment.status": "completed",
     }
+
+
+@pytest.mark.asyncio
+async def test_simulate_runs_a_named_scenario_and_can_emit_json() -> None:
+    rendered = await simulate_project(
+        "tiramisu_agents.builtin:create_fictional_project",
+        scenario_id="happy_path",
+    )
+    document = json.loads(
+        await simulate_project(
+            "tiramisu_agents.builtin:create_fictional_project",
+            scenario_id="happy_path",
+            as_json=True,
+        )
+    )
+
+    assert rendered.startswith("PASS: A customer books and pays [happy_path]")
+    assert "approval: Approved request_payment" in rendered
+    assert document["passed"] is True
+    assert document["final_status"] == "completed"
+    assert document["action_types"] == [
+        "find_available_slots",
+        "send_message",
+        "propose_booking",
+        "request_payment",
+        "create_calendar_event",
+    ]

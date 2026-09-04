@@ -25,6 +25,10 @@ class ClientPackError(ValueError):
     """Raised when a client pack cannot safely be composed at startup."""
 
 
+def _empty_action_bindings() -> dict[str, ActionAdapter]:
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class ClientPack:
     """A complete, immutable API/worker deployment unit supplied by one package.
@@ -40,6 +44,7 @@ class ClientPack:
     agent_decision_output_type: type[BaseModel]
     policy_ids: tuple[str, ...]
     project: ProjectDescription | None = None
+    simulation_bindings: Mapping[str, ActionAdapter] = field(default_factory=_empty_action_bindings)
     registry: ProcessDefinitionRegistry = field(init=False, repr=False)
     compatibility: DeploymentCompatibility = field(init=False, repr=False)
     _fingerprint: str = field(init=False, repr=False)
@@ -48,9 +53,11 @@ class ClientPack:
         definitions = tuple(self.definitions)
         bindings = MappingProxyType(dict(self.bindings))
         policy_ids = tuple(self.policy_ids)
+        simulation_bindings = MappingProxyType(dict(self.simulation_bindings))
         object.__setattr__(self, "definitions", definitions)
         object.__setattr__(self, "bindings", bindings)
         object.__setattr__(self, "policy_ids", policy_ids)
+        object.__setattr__(self, "simulation_bindings", simulation_bindings)
 
         if not definitions:
             raise ClientPackError("a client pack must register at least one process definition")
@@ -119,6 +126,30 @@ class ClientPack:
                     item.model_dump(mode="json") for item in definition.facts
                 ]:
                     raise ClientPackError("project fact metadata and process definitions disagree")
+            scenario_action_types = {
+                step.reference
+                for journey in self.project.journeys
+                for scenario in journey.scenarios
+                for step in scenario.steps
+                if step.kind == "action"
+            }
+            if set(simulation_bindings) != scenario_action_types:
+                raise ClientPackError(
+                    "simulation bindings do not cover the executable scenario actions"
+                )
+            if any(
+                getattr(adapter, "is_simulation_adapter", False) is not True
+                for adapter in simulation_bindings.values()
+            ):
+                raise ClientPackError("simulation bindings must be explicitly marked safe")
+            if any(
+                not isinstance(getattr(adapter, "id", None), str)
+                or not isinstance(getattr(adapter, "guarantees_idempotency", None), bool)
+                or not callable(getattr(adapter, "execute", None))
+                or not callable(getattr(adapter, "lookup", None))
+                for adapter in simulation_bindings.values()
+            ):
+                raise ClientPackError("simulation bindings must implement the action adapter port")
         expected_adapters = {
             adapter_id
             for definition in definitions
@@ -139,7 +170,7 @@ class ClientPack:
             raise ClientPackError("agent decision output type must implement to_agent_decision")
 
         canonical_composition = {
-            "schema_version": 2,
+            "schema_version": 3,
             "manifest": self.manifest.model_dump(mode="json"),
             "definitions": [
                 definition.model_dump(mode="json")
@@ -159,6 +190,13 @@ class ClientPack:
                     "guarantees_idempotency": adapter.guarantees_idempotency,
                 }
                 for action_type, adapter in sorted(bindings.items())
+            },
+            "simulation_bindings": {
+                action_type: {
+                    "adapter_id": adapter.id,
+                    "guarantees_idempotency": adapter.guarantees_idempotency,
+                }
+                for action_type, adapter in sorted(simulation_bindings.items())
             },
             "project": self.project.model_dump(mode="json") if self.project is not None else None,
         }

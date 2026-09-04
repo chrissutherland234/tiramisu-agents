@@ -566,7 +566,7 @@ An immutable process-definition version should describe:
 - Tenant-editable settings
 - Definition version and compatibility metadata
 
-The recommended authoring path is the opinionated, code-first project framework accepted in ADR-012. A client defines a `Project` containing `Journey`, `Route`, `Capability`, `Fact`, and `Scenario` objects. Tiramisu derives the low-level extension manifest, process definitions, action bindings, policy identities, business metadata, and strict OpenAI output schema into an immutable `ClientPack`. `tiramisu startproject`, `check`, and `describe` provide the conventional setup and inspection path. Direct `ClientPack` construction remains an advanced escape hatch. Generic examples live in the public repository; real client projects live in their private editable packages. The client UI should initially expose only safe, explicitly editable settings. A visual workflow builder is deferred until several real client implementations show which abstractions are stable.
+The recommended authoring path is the opinionated, code-first project framework accepted in ADR-012. A client defines a `Project` containing `Journey`, `Route`, `Capability`, `Fact`, and `Scenario` objects. Tiramisu derives the low-level extension manifest, process definitions, action bindings, policy identities, business metadata, and strict OpenAI output schema into an immutable `ClientPack`. `tiramisu startproject`, `check`, `describe`, and `simulate` provide the conventional setup, inspection, and deterministic acceptance-test path. Simulation bindings are explicit and fail closed so author tooling cannot call a production provider accidentally. Direct `ClientPack` construction remains an advanced escape hatch. Generic examples live in the public repository; real client projects live in their private editable packages. The client UI should initially expose only safe, explicitly editable settings. A visual workflow builder is deferred until several real client implementations show which abstractions are stable.
 
 Definitions follow `DRAFT → VALIDATED → EVALUATED → APPROVED → PUBLISHED → RETIRED`. Publication requires schema validation, deterministic scenario tests, agent evaluations, permission review, and compatibility checks.
 
@@ -655,7 +655,7 @@ Avoid a generic JSON/EAV `business_objects` store unless a concrete client requi
 
 Testing is designed around an integration-free kernel, provider contracts, deterministic Temporal orchestration, and a separate layer of probabilistic agent evaluation.
 
-Current baseline: 155 backend tests (114 unit/contract, 38 PostgreSQL or Temporal integration, and 3 committed-history replay cases), 2 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exact approval/action fencing, typed provider-conflict recovery, tenant Activity authorization, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, and the scripted reference journey. Configuration evolution, executable cross-layer scenarios, the broader race matrix, agent behavior, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
+Current baseline: 162 backend tests (121 unit/contract, 38 PostgreSQL or Temporal integration, and 3 committed-history replay cases), 3 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exact approval/action fencing, typed provider-conflict recovery, tenant Activity authorization, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, executable safe-adapter scenarios through shared kernel transitions, and the scripted reference journey. Configuration evolution, a scenario driver through the PostgreSQL/Temporal stack, the broader race matrix, agent behavior, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
 
 ### Layer 1 — Pure kernel tests
 
@@ -939,7 +939,7 @@ Recommended initial journey:
 - [ ] Add tenant prompt and policy configuration.
 - [ ] Add the tool and integration registry.
 - [ ] Add safe client-editable settings.
-- [ ] Add process simulation and validation before publication.
+- [ ] Add process simulation and validation before publication. Compiled scenarios now execute without infrastructure through generated strict decision schemas, production decision/permission/action-identity rules, explicitly safe stub bindings, a fake clock, and fact/status/wake/completion transitions shared with persistence. The same scenario still needs a PostgreSQL/Temporal driver plus draft isolation, evaluation records, and publication gates.
 - [x] Add the initial tenant process list/detail API and operator instance timeline, durable wake-condition, sourced-fact/claim, memory, and commitment UI.
 - [ ] Add the full approval, proposal-diff, review-chat, revision-lineage, and manual-intervention UI. Exact-payload approve/reject/comment/request-revision and intervention retry/wake/takeover/resume controls are complete; Wake is explicitly presented as non-authoritative reevaluation. Diffs, complete thread history, expiry management, typed fact-correction controls, and richer intervention diagnostics remain.
 - [ ] Add event-quarantine, unknown-action, and reconciliation UI.
@@ -1156,7 +1156,7 @@ The initial executable milestone—fictional enquiry through booking, payment, c
 
 1. Complete the autonomy and communication safety envelope: opt-out, quiet hours, auto-responder/loop detection, rate, cost, token, and process-lifetime budgets. Semantic ingress/context byte and count bounds are complete; raw transport and provider-response limits remain part of production hardening.
 2. Implement quarantine resolution and replay with operator visibility.
-3. Refactor the scenario kit to drive production kernel services and complete the ordered gaps in [`docs/testing.md`](docs/testing.md), beginning with RLS/migration audits and Temporal races.
+3. Extend the executable scenario kit from its completed production-policy/kernel driver into the PostgreSQL/Temporal stack using the same compiled scenario data, alongside the ordered RLS/migration and Temporal-race gaps in [`docs/testing.md`](docs/testing.md).
 4. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
 
 D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), and D-012 (data/compliance requirements) remain explicit gates before production integrations. D-014 is implemented as ADR-011. A GitHub-issue triage/Codex handoff pack is a useful later validation of that boundary once the communication safety envelope is in place.

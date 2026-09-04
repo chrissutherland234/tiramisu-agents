@@ -1,6 +1,7 @@
 """Author commands for creating, validating, and explaining client projects."""
 
 import argparse
+import asyncio
 import json
 import sys
 from collections.abc import Sequence
@@ -13,6 +14,11 @@ from agents.agent_output import AgentOutputSchema
 from tiramisu_agents.extensions import ClientPack, ClientPackError
 from tiramisu_agents.projects.contracts import Project, ProjectConfigurationError
 from tiramisu_agents.projects.scaffold import create_project_scaffold
+from tiramisu_agents.testkit.scenarios import (
+    ScenarioRunError,
+    ScenarioRunner,
+    scenario_result_json,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +40,12 @@ def build_parser() -> argparse.ArgumentParser:
     describe = commands.add_parser("describe", help="explain a project in business terms")
     describe.add_argument("target", help="Project, ClientPack, or factory as module:attribute")
     describe.add_argument("--json", action="store_true", help="emit compiled metadata as JSON")
+    simulate = commands.add_parser(
+        "simulate", help="run a deterministic executable project scenario"
+    )
+    simulate.add_argument("target", help="Project, ClientPack, or factory as module:attribute")
+    simulate.add_argument("--scenario", required=True, help="scenario ID to execute")
+    simulate.add_argument("--json", action="store_true", help="emit the result and trace as JSON")
     return parser
 
 
@@ -119,6 +131,16 @@ def describe_project(target: str, *, as_json: bool = False) -> str:
     return "\n".join(lines)
 
 
+async def simulate_project(
+    target: str,
+    *,
+    scenario_id: str,
+    as_json: bool = False,
+) -> str:
+    result = await ScenarioRunner(load_project_target(target)).run(scenario_id)
+    return scenario_result_json(result) if as_json else result.render()
+
+
 def _describe_low_level_pack(pack: ClientPack, *, as_json: bool) -> str:
     document = {
         "id": pack.manifest.extension_id,
@@ -145,9 +167,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "check":
             print(check_project(arguments.target))
             return 0
-        print(describe_project(arguments.target, as_json=arguments.json))
+        if arguments.command == "describe":
+            print(describe_project(arguments.target, as_json=arguments.json))
+            return 0
+        print(
+            asyncio.run(
+                simulate_project(
+                    arguments.target,
+                    scenario_id=arguments.scenario,
+                    as_json=arguments.json,
+                )
+            )
+        )
         return 0
-    except (ClientPackError, ProjectConfigurationError, OSError, ValueError) as error:
+    except (
+        ClientPackError,
+        ProjectConfigurationError,
+        ScenarioRunError,
+        OSError,
+        ValueError,
+    ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 

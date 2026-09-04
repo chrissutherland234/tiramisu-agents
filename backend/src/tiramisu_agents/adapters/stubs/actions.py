@@ -23,6 +23,7 @@ class StubAmbiguousSuccess:
 class StubActionAdapter:
     id = "stub.actions.v1"
     guarantees_idempotency = True
+    is_simulation_adapter = True
 
     def __init__(
         self,

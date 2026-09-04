@@ -1,8 +1,11 @@
 """The standalone package compiles without relying on the booking example."""
 
+import asyncio
+
 import pytest
 from agents.agent_output import AgentOutputSchema
 from pydantic import ValidationError
+from tiramisu_agents.testkit import run_scenario
 
 from support_client_pack import create_client_pack
 
@@ -56,3 +59,12 @@ def test_support_output_only_accepts_its_registered_capability() -> None:
                 ],
             }
         )
+
+
+def test_support_scenario_executes_to_authoritative_resolution() -> None:
+    result = asyncio.run(run_scenario(create_client_pack(), "answer_then_resolve"))
+
+    assert result.passed is True
+    assert result.action_types == ("send_customer_reply",)
+    assert result.approval_count == 1
+    assert result.authoritative_facts["case.status"] == "resolved"

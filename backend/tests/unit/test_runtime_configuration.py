@@ -66,6 +66,7 @@ def test_client_pack_fingerprint_covers_runtime_composition_and_only_published_t
         agent_decision_output_type=deployment.agent_decision_output_type,
         policy_ids=tuple(reversed(deployment.policy_ids)),
         project=deployment.project,
+        simulation_bindings=deployment.simulation_bindings,
     )
     changed_definition = deployment.definition.model_copy(
         update={"goals": (*deployment.definition.goals, "Exercise changed behavior.")}
@@ -82,6 +83,7 @@ def test_client_pack_fingerprint_covers_runtime_composition_and_only_published_t
         agent_decision_output_type=deployment.agent_decision_output_type,
         policy_ids=deployment.policy_ids,
         project=changed_project,
+        simulation_bindings=deployment.simulation_bindings,
     )
 
     assert equivalent.fingerprint() == deployment.fingerprint()
