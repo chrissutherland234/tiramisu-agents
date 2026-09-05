@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -11,11 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from tiramisu_agents.actions.gateway import (
-    ActionGateway,
-    ActionPersistenceConflict,
-    CommunicationPolicy,
-)
+from tiramisu_agents.actions.gateway import ActionGateway, ActionPersistenceConflict
+from tiramisu_agents.communications import CommunicationPolicy
 from tiramisu_agents.core.contracts.decisions import AgentDecision, DecisionStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent
 from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
@@ -130,18 +127,7 @@ class ActionGatewayActivities:
                     process_definition_version=definition.version,
                     decision=decision,
                     policy=definition.action_policy(),
-                    communication_policy=CommunicationPolicy(
-                        outbound_action_types=frozenset(
-                            definition.communications.outbound_action_types
-                        ),
-                        reply_event_types=frozenset(definition.communications.reply_event_types),
-                        max_follow_ups_without_reply=(
-                            definition.limits.max_follow_ups_without_reply
-                        ),
-                        minimum_follow_up_interval=timedelta(
-                            hours=definition.limits.minimum_follow_up_interval_hours
-                        ),
-                    ),
+                    communication_policy=CommunicationPolicy.from_definition(definition),
                     workflow_now=command.workflow_now,
                 )
         except (

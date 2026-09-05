@@ -40,6 +40,14 @@ Versioned process definitions under `process_definitions/` are validated and com
 
 Hard platform byte and count ceilings now reject oversized canonical events before persistence, bound every source included in a turn, preflight the prospective fact projection and complete context before model I/O, and check the final rendered prompt before provider I/O. Action parameters and persistent memory are checked again at their persistence boundaries. Unsafe turn construction fails closed into durable operator intervention; model-proposed excess receives the same bounded semantic-repair opportunity as other deterministic policy errors. Exact limits and remaining raw-transport/token-budget work are documented in the [platform safety limits](docs/safety-limits.md).
 
+Customer-contact actions are explicitly classified by each client journey. Deterministic policy
+enforces process-local opt-out, automated-response suppression until a genuine human reply, local
+quiet hours, rolling and process-lifetime message budgets, follow-up spacing, and maximum process
+lifetime. Accepted action requests form the durable reservation ledger, so limits survive retries,
+worker restarts, and Continue-As-New. The action executor repeats the check at the provider boundary;
+human approval does not bypass it. The operator process view explains every current block and its
+next eligible time where one exists.
+
 The OpenAI adapter has no tools or handoffs, permits exactly one SDK invocation per proposal, and requests a strict structured output. Provider-specific action parameters cross that SDK boundary as encoded JSON and are converted back into the kernel's typed `AgentDecision`; deterministic policy then checks event lineage, allowed actions, wake events, action limits, and timer bounds. If policy rejects a typed proposal, the Activity can request at most two complete replacements using the exact validator error and rejected proposal while retaining the same loaded trusted snapshot. Only a validated proposal leaves the Activity; exhaustion follows the existing operator-intervention path.
 
 Process definitions explicitly classify every proposed action as `allow`, `deny`, or `require_approval`; omitted actions fail closed. Retry-safe persistence records the stable action identity, immutable payload revision and hash, deterministic policy result, and—when required—an approval request bound by a database foreign key to that exact payload. A separate Temporal Activity performs this persistence after the model Activity, so retrying database work never reruns the model call.

@@ -38,6 +38,7 @@ def test_startproject_creates_a_compilable_conventional_package(
     assert "Journey: Manage one piece of work" in description
     assert "[work.created]" in description
     assert 'Work status is "completed"' in description
+    assert "Maximum journey lifetime: 90 days" in description
     assert "1. A new item starts the journey." in description
     assert simulation.startswith("PASS: Work is completed [happy_path]")
 
@@ -80,6 +81,21 @@ def test_describe_can_emit_machine_readable_compiled_metadata() -> None:
         "calendar.status": "created",
         "payment.status": "completed",
     }
+    assert document["journeys"][0]["communications"]["opt_out_event_types"] == [
+        "customer.email_opted_out"
+    ]
+    assert document["journeys"][0]["limits"]["max_outbound_messages_per_window"] == 5
+
+
+def test_describe_explains_customer_contact_rules_in_business_terms() -> None:
+    description = describe_project("tiramisu_agents.builtin:create_fictional_project")
+
+    assert "Customer-contact safety:" in description
+    assert "Contact actions: send_message" in description
+    assert "Genuine replies: customer.email_received" in description
+    assert "Opt-outs: customer.email_opted_out" in description
+    assert "Automated responses: customer.email_auto_replied" in description
+    assert "Contact budget: 5 per 24 hours; 50 for the whole journey" in description
 
 
 @pytest.mark.asyncio

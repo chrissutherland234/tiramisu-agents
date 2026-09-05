@@ -1,7 +1,13 @@
+from datetime import time
+
 import pytest
 from pydantic import ValidationError
 from tiramisu_agents.builtin import load_fictional_deployment
-from tiramisu_agents.processes.definitions import DefinitionStatus, ProcessDefinition
+from tiramisu_agents.processes.definitions import (
+    DailyQuietHours,
+    DefinitionStatus,
+    ProcessDefinition,
+)
 from tiramisu_agents.processes.registry import AmbiguousTrigger, ProcessDefinitionRegistry
 
 
@@ -23,6 +29,37 @@ def test_example_process_definition_compiles_to_policy_and_instructions() -> Non
     )
     assert len(definition.fingerprint()) == 64
     assert "Never claim" in definition.compile_instructions()
+    assert "Maximum process lifetime: 90 days" in definition.compile_instructions()
+    assert definition.communications.opt_out_event_types == ("customer.email_opted_out",)
+    assert definition.communications.automated_response_event_types == (
+        "customer.email_auto_replied",
+    )
+
+
+def test_quiet_hours_and_communication_event_roles_are_validated() -> None:
+    with pytest.raises(ValidationError, match="valid IANA timezone"):
+        DailyQuietHours(
+            timezone="Somewhere/Imaginary",
+            start_local=time(20),
+            end_local=time(8),
+        )
+
+    definition = load_fictional_deployment().definition
+    document = definition.model_dump(mode="json")
+    document["communications"]["reply_event_types"] = ["customer.email_received"]
+    document["communications"]["opt_out_event_types"] = ["customer.email_received"]
+    with pytest.raises(ValidationError, match="one unambiguous role"):
+        ProcessDefinition.model_validate(document)
+
+    document = definition.model_dump(mode="json")
+    document["communications"]["quiet_hours"] = {
+        "timezone": "Pacific/Auckland",
+        "start_local": "20:00",
+        "end_local": "08:00",
+    }
+    configured = ProcessDefinition.model_validate(document)
+    assert configured.communications.quiet_hours is not None
+    assert "Pacific/Auckland" in configured.compile_instructions()
 
 
 def test_invalid_event_type_is_rejected() -> None:

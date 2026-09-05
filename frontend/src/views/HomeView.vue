@@ -690,6 +690,49 @@ function customerClaimLabel(key: string) {
           </div>
         </section>
 
+        <section
+          v-if="selected.communication_safety"
+          class="state-card communication-safety-card"
+          data-testid="communication-safety"
+        >
+          <div class="section-heading">
+            <div><p class="eyebrow">Customer contact</p><h3>Communication safety</h3></div>
+            <span :class="selected.communication_safety.outbound_allowed_now ? 'status-active' : 'status-review'">
+              {{ selected.communication_safety.outbound_allowed_now ? "Send permitted" : "Contact blocked" }}
+            </span>
+          </div>
+          <ul v-if="selected.communication_safety.blocks.length" class="safety-block-list">
+            <li v-for="block in selected.communication_safety.blocks" :key="block.code">
+              <strong>{{ block.code.replaceAll('_', ' ') }}</strong>
+              <span>{{ block.message }}</span>
+              <small v-if="block.next_allowed_at" class="muted">
+                Next eligible: {{ formatDate(block.next_allowed_at) }}
+              </small>
+            </li>
+          </ul>
+          <div class="safety-meter-grid">
+            <span>
+              <b>{{ selected.communication_safety.outbound_messages_total }} / {{ selected.communication_safety.max_outbound_messages_per_process }}</b>
+              process messages
+            </span>
+            <span>
+              <b>{{ selected.communication_safety.outbound_messages_in_window }} / {{ selected.communication_safety.max_outbound_messages_per_window }}</b>
+              per {{ selected.communication_safety.outbound_message_window_hours }}h
+            </span>
+            <span>
+              <b>{{ selected.communication_safety.follow_ups_since_reply }} / {{ selected.communication_safety.max_follow_ups_without_reply }}</b>
+              without human reply
+            </span>
+          </div>
+          <p class="muted">
+            Journey autonomy ends {{ formatDate(selected.communication_safety.process_expires_at) }}.
+            <template v-if="selected.communication_safety.quiet_hours_timezone">
+              Quiet hours: {{ selected.communication_safety.quiet_hours_start_local }}–{{ selected.communication_safety.quiet_hours_end_local }}
+              {{ selected.communication_safety.quiet_hours_timezone }}.
+            </template>
+          </p>
+        </section>
+
         <section v-if="selectedReviews.length" class="review-section" data-testid="review-queue">
           <div class="section-heading">
             <div><p class="eyebrow">Human checkpoint</p><h3>Review the exact proposal</h3></div>

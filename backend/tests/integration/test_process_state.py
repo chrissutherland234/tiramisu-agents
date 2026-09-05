@@ -109,7 +109,7 @@ async def test_process_state_projects_sourced_knowledge_and_versioned_memory() -
                 enquiry,
                 bootstrap=ProcessBootstrap(
                     process_type="enquiry_to_booking",
-                    definition_version="1",
+                    definition_version=definition.version,
                     extension_manifest_hash="a" * 64,
                     client_pack_fingerprint="b" * 64,
                     process_definition_fingerprint=definition.fingerprint(),

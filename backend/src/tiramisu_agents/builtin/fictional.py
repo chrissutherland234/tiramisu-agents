@@ -17,6 +17,7 @@ from tiramisu_agents.core.contracts.knowledge import FactKind
 from tiramisu_agents.extensions import ClientPack, ClientPackError
 from tiramisu_agents.projects import (
     Capability,
+    Communications,
     Fact,
     Journey,
     Project,
@@ -205,7 +206,7 @@ def create_fictional_project(*, state: StubBusinessState | None = None) -> Proje
     )
     journey = Journey(
         id="enquiry_to_booking",
-        version="1",
+        version="2",
         title="Enquiry to completed booking",
         description=(
             "Follow one customer enquiry through clarification, booking, payment, and calendar."
@@ -240,8 +241,12 @@ def create_fictional_project(*, state: StubBusinessState | None = None) -> Proje
             "Return completed only on a later turn after every configured authoritative "
             "completion fact is satisfied.",
         ),
-        outbound_action_types=("send_message",),
-        reply_event_types=("customer.email_received",),
+        communications=Communications(
+            outbound_actions=("send_message",),
+            customer_reply_events=("customer.email_received",),
+            opt_out_events=("customer.email_opted_out",),
+            automated_response_events=("customer.email_auto_replied",),
+        ),
         decision_transformer=apply_fictional_transitions,
     )
     routes = (
@@ -258,6 +263,18 @@ def create_fictional_project(*, state: StubBusinessState | None = None) -> Proje
             title="Customer replied",
             description="Wake when the customer replies to an outbound message.",
             provides=(CUSTOMER_LAST_MESSAGE,),
+        ),
+        Route.wake(
+            "customer.email_opted_out",
+            journey=journey.id,
+            title="Customer opted out",
+            description="Permanently suppress outbound contact for this journey.",
+        ),
+        Route.wake(
+            "customer.email_auto_replied",
+            journey=journey.id,
+            title="Automated response received",
+            description="Suppress outbound contact until a later human reply breaks the loop.",
         ),
         Route.wake(
             "payment.completed",

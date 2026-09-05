@@ -13,6 +13,7 @@ from temporalio.exceptions import ApplicationError
 
 from tiramisu_agents.agents.context import AgentContextError, PostgresAgentContextLoader
 from tiramisu_agents.agents.runner import AgentTurnRunner, ProposalCorrection
+from tiramisu_agents.communications import CommunicationPolicy, evaluate_process_lifetime
 from tiramisu_agents.core.action_identity import action_payload_identity
 from tiramisu_agents.core.contracts.actions import ActionAttemptStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent
@@ -24,6 +25,7 @@ from tiramisu_agents.processes.compatibility import (
     DeploymentCompatibility,
     DeploymentCompatibilityError,
 )
+from tiramisu_agents.processes.definitions import ProcessDefinition
 from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.security.tenancy import (
     TenantNotAuthorized,
@@ -34,6 +36,10 @@ from tiramisu_agents.security.tenancy import (
 )
 
 _MAX_SEMANTIC_CORRECTIONS = 2
+
+
+class ProcessLifetimeExceeded(ValueError):
+    """Raised when a process has exhausted its configured autonomous lifetime."""
 
 
 @dataclass(frozen=True)
@@ -152,6 +158,8 @@ class AgentTurnActivities:
                 await self._require_model_execution_allowed(
                     tenant_id=tenant_id,
                     process_instance_id=UUID(command.process_instance_id),
+                    definition=definition,
+                    workflow_now=command.workflow_now,
                 )
                 if proposal_attempt_count == 1 and self._event_observer is not None:
                     for event in turn_input.events:
@@ -196,6 +204,12 @@ class AgentTurnActivities:
                 type=type(error).__name__,
                 non_retryable=True,
             ) from error
+        except ProcessLifetimeExceeded as error:
+            raise ApplicationError(
+                str(error),
+                type="ProcessLifetimeExceeded",
+                non_retryable=True,
+            ) from error
         except (TenantNotAuthorized, TenantUnavailable, TenantSuspended) as error:
             raise ApplicationError(
                 "tenant safety control blocks agent execution",
@@ -209,6 +223,8 @@ class AgentTurnActivities:
         *,
         tenant_id: UUID,
         process_instance_id: UUID,
+        definition: ProcessDefinition,
+        workflow_now: datetime,
     ) -> None:
         async with self._session_factory.begin() as session:
             await require_active_tenant(
@@ -221,6 +237,13 @@ class AgentTurnActivities:
             )
             if process is None:
                 raise DeploymentCompatibilityError("process instance is unavailable")
+            lifetime_block = evaluate_process_lifetime(
+                process_created_at=process.created_at,
+                policy=CommunicationPolicy.from_definition(definition),
+                now=workflow_now,
+            )
+            if lifetime_block is not None:
+                raise ProcessLifetimeExceeded(lifetime_block.message)
             self._compatibility.require_process(
                 process_type=process.process_type,
                 definition_version=process.definition_version,

@@ -663,6 +663,7 @@ class PostgresTemporalScenarioDriver:
                 ActionAdapterRegistry(self._pack.simulation_bindings),
                 self._pack.compatibility,
                 self._release,
+                self._pack.registry,
             ),
             authorized_tenant_ids=authorized,
         )

@@ -15,10 +15,13 @@ from tiramisu_agents.actions.execution import ActionExecutor
 from tiramisu_agents.actions.gateway import (
     ActionGateway,
     ActionPersistenceConflict,
-    CommunicationPolicy,
 )
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
+from tiramisu_agents.adapters.stubs import StubActionAdapter
 from tiramisu_agents.builtin import load_fictional_deployment
+from tiramisu_agents.communications import CommunicationPolicy
+from tiramisu_agents.communications.safety import CommunicationSafetyService
+from tiramisu_agents.core.contracts.actions import ActionAttemptStatus
 from tiramisu_agents.core.contracts.decisions import ActionProposal, AgentDecision, DecisionStatus
 from tiramisu_agents.core.contracts.events import CanonicalEvent, ExternalReference
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
@@ -54,6 +57,8 @@ from tiramisu_agents.processes.control import (
     ProcessControlService,
     ProcessControlType,
 )
+from tiramisu_agents.processes.definitions import DailyQuietHours
+from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.processes.state import ProcessStateService
 from tiramisu_agents.reviews.service import ReviewConflict, ReviewService
 from tiramisu_agents.testkit.deployment import TEST_DEPLOYMENT_RELEASE
@@ -154,7 +159,7 @@ async def _process_context() -> AsyncGenerator[_TestContext]:
                 enquiry,
                 bootstrap=ProcessBootstrap(
                     process_type="enquiry_to_booking",
-                    definition_version="1",
+                    definition_version=definition.version,
                     extension_manifest_hash="a" * 64,
                     client_pack_fingerprint="b" * 64,
                     process_definition_fingerprint=definition.fingerprint(),
@@ -453,6 +458,7 @@ async def test_takeover_serializes_with_the_final_provider_execution_fence() -> 
             ActionAdapterRegistry({"find_available_slots": adapter}),
             context.compatibility,
             TEST_DEPLOYMENT_RELEASE,
+            ProcessDefinitionRegistry([definition]),
         )
         execution = asyncio.create_task(
             executor.execute(
@@ -713,3 +719,529 @@ async def test_communication_limits_reset_only_after_a_configured_reply() -> Non
                 workflow_now=now + timedelta(hours=2),
             )
         assert len(after_reply) == 1
+
+
+@pytest.mark.asyncio
+async def test_opt_out_and_automated_response_events_fail_closed_until_a_human_reply() -> None:
+    async with _process_context() as context:
+        definition = load_fictional_deployment().definition
+        policy = CommunicationPolicy.from_definition(definition)
+        gateway = ActionGateway()
+        now = datetime.now(UTC)
+
+        def message_decision(key: str) -> AgentDecision:
+            return AgentDecision(
+                based_on_event_ids=(),
+                status=DecisionStatus.ACTIVE,
+                actions=(
+                    ActionProposal(
+                        logical_action_key=key,
+                        action_type="send_message",
+                        parameters={"recipient": "customer@example.test", "body": key},
+                        rationale="Exercise deterministic communication suppression.",
+                    ),
+                ),
+            )
+
+        automated = CanonicalEvent(
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            event_type="customer.email_auto_replied",
+            source="communication.test",
+            source_event_id=f"automated-{uuid4()}",
+            occurred_at=now,
+        )
+        async with context.runtime_factory.begin() as session:
+            await EventIngestionService().ingest(session, automated)
+        with pytest.raises(ActionPersistenceConflict, match="classified as automated"):
+            async with context.runtime_factory.begin() as session:
+                await gateway.persist_decision(
+                    session,
+                    tenant_id=context.tenant_id,
+                    process_instance_id=context.process_id,
+                    agent_turn_id=uuid4(),
+                    process_definition_version=definition.version,
+                    decision=message_decision("blocked-by-automatic-reply"),
+                    policy=definition.action_policy(),
+                    communication_policy=policy,
+                    workflow_now=now,
+                )
+
+        human_reply = CanonicalEvent(
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            event_type="customer.email_received",
+            source="communication.test",
+            source_event_id=f"human-{uuid4()}",
+            occurred_at=now + timedelta(minutes=1),
+        )
+        async with context.runtime_factory.begin() as session:
+            await EventIngestionService().ingest(session, human_reply)
+        async with context.runtime_factory.begin() as session:
+            allowed = await gateway.persist_decision(
+                session,
+                tenant_id=context.tenant_id,
+                process_instance_id=context.process_id,
+                agent_turn_id=uuid4(),
+                process_definition_version=definition.version,
+                decision=message_decision("allowed-after-human-reply"),
+                policy=definition.action_policy(),
+                communication_policy=policy,
+                workflow_now=now + timedelta(hours=1),
+            )
+        assert len(allowed) == 1
+
+        opt_out = CanonicalEvent(
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            event_type="customer.email_opted_out",
+            source="communication.test",
+            source_event_id=f"opt-out-{uuid4()}",
+            occurred_at=now + timedelta(hours=2),
+        )
+        async with context.runtime_factory.begin() as session:
+            await EventIngestionService().ingest(session, opt_out)
+        with pytest.raises(ActionPersistenceConflict, match="customer opted out"):
+            async with context.runtime_factory.begin() as session:
+                await gateway.persist_decision(
+                    session,
+                    tenant_id=context.tenant_id,
+                    process_instance_id=context.process_id,
+                    agent_turn_id=uuid4(),
+                    process_definition_version=definition.version,
+                    decision=message_decision("blocked-after-opt-out"),
+                    policy=definition.action_policy(),
+                    communication_policy=policy,
+                    workflow_now=now + timedelta(hours=3),
+                )
+
+        async with context.runtime_factory.begin() as session:
+            await set_tenant_context(session, context.tenant_id)
+            process = await session.get(ProcessInstance, context.process_id)
+            assert process is not None
+            snapshot = await CommunicationSafetyService().inspect(
+                session,
+                tenant_id=context.tenant_id,
+                process=process,
+                policy=policy,
+                now=now + timedelta(hours=3),
+            )
+        assert snapshot.outbound_allowed_now is False
+        assert snapshot.opted_out_at is not None
+        assert snapshot.latest_automated_response_at is None
+        assert snapshot.outbound_messages_total == 1
+        assert snapshot.follow_ups_since_reply == 1
+        assert {block.code.value for block in snapshot.blocks} >= {"opted_out"}
+
+
+@pytest.mark.asyncio
+async def test_quiet_hours_rolling_rate_process_total_and_lifetime_are_durable() -> None:
+    async with _process_context() as context:
+        definition = load_fictional_deployment().definition
+        gateway = ActionGateway()
+        now = datetime.now(UTC).replace(microsecond=0)
+
+        def message_decision(key: str) -> AgentDecision:
+            return AgentDecision(
+                based_on_event_ids=(),
+                status=DecisionStatus.ACTIVE,
+                actions=(
+                    ActionProposal(
+                        logical_action_key=key,
+                        action_type="send_message",
+                        parameters={"recipient": "customer@example.test", "body": key},
+                        rationale="Exercise durable communication budgets.",
+                    ),
+                ),
+            )
+
+        quiet_policy = CommunicationPolicy(
+            outbound_action_types=frozenset({"send_message"}),
+            reply_event_types=frozenset({"customer.email_received"}),
+            max_follow_ups_without_reply=10,
+            minimum_follow_up_interval=timedelta(hours=1),
+            quiet_hours=DailyQuietHours(
+                timezone="UTC",
+                start_local=(now - timedelta(hours=1)).time(),
+                end_local=(now + timedelta(hours=1)).time(),
+            ),
+            max_outbound_messages_per_window=10,
+        )
+        with pytest.raises(ActionPersistenceConflict, match="quiet hours are active"):
+            async with context.runtime_factory.begin() as session:
+                await gateway.persist_decision(
+                    session,
+                    tenant_id=context.tenant_id,
+                    process_instance_id=context.process_id,
+                    agent_turn_id=uuid4(),
+                    process_definition_version=definition.version,
+                    decision=message_decision("quiet"),
+                    policy=definition.action_policy(),
+                    communication_policy=quiet_policy,
+                    workflow_now=now,
+                )
+
+        rate_policy = CommunicationPolicy(
+            outbound_action_types=frozenset({"send_message"}),
+            reply_event_types=frozenset({"customer.email_received"}),
+            max_follow_ups_without_reply=10,
+            minimum_follow_up_interval=timedelta(hours=1),
+            max_outbound_messages_per_process=10,
+            max_outbound_messages_per_window=1,
+            outbound_message_window=timedelta(hours=24),
+        )
+        async with context.runtime_factory.begin() as session:
+            await gateway.persist_decision(
+                session,
+                tenant_id=context.tenant_id,
+                process_instance_id=context.process_id,
+                agent_turn_id=uuid4(),
+                process_definition_version=definition.version,
+                decision=message_decision("first-reservation"),
+                policy=definition.action_policy(),
+                communication_policy=rate_policy,
+                workflow_now=now,
+            )
+        with pytest.raises(ActionPersistenceConflict, match="rolling-window limit"):
+            async with context.runtime_factory.begin() as session:
+                await gateway.persist_decision(
+                    session,
+                    tenant_id=context.tenant_id,
+                    process_instance_id=context.process_id,
+                    agent_turn_id=uuid4(),
+                    process_definition_version=definition.version,
+                    decision=message_decision("rate-limited"),
+                    policy=definition.action_policy(),
+                    communication_policy=rate_policy,
+                    workflow_now=now + timedelta(hours=2),
+                )
+
+        total_policy = CommunicationPolicy(
+            outbound_action_types=rate_policy.outbound_action_types,
+            reply_event_types=rate_policy.reply_event_types,
+            max_follow_ups_without_reply=10,
+            minimum_follow_up_interval=timedelta(hours=1),
+            max_outbound_messages_per_process=1,
+            max_outbound_messages_per_window=10,
+        )
+        with pytest.raises(ActionPersistenceConflict, match="process outbound-message limit"):
+            async with context.runtime_factory.begin() as session:
+                await gateway.persist_decision(
+                    session,
+                    tenant_id=context.tenant_id,
+                    process_instance_id=context.process_id,
+                    agent_turn_id=uuid4(),
+                    process_definition_version=definition.version,
+                    decision=message_decision("process-limited"),
+                    policy=definition.action_policy(),
+                    communication_policy=total_policy,
+                    workflow_now=now + timedelta(hours=26),
+                )
+
+        async with context.runtime_factory.begin() as session:
+            await set_tenant_context(session, context.tenant_id)
+            process = await session.get(ProcessInstance, context.process_id)
+            assert process is not None
+            expired_at = process.created_at + timedelta(days=2)
+        lifetime_policy = CommunicationPolicy(
+            outbound_action_types=rate_policy.outbound_action_types,
+            reply_event_types=rate_policy.reply_event_types,
+            max_follow_ups_without_reply=10,
+            minimum_follow_up_interval=timedelta(hours=1),
+            max_outbound_messages_per_process=10,
+            max_outbound_messages_per_window=10,
+            maximum_process_lifetime=timedelta(days=1),
+        )
+        with pytest.raises(ActionPersistenceConflict, match="process lifetime ended"):
+            async with context.runtime_factory.begin() as session:
+                await gateway.persist_decision(
+                    session,
+                    tenant_id=context.tenant_id,
+                    process_instance_id=context.process_id,
+                    agent_turn_id=uuid4(),
+                    process_definition_version=definition.version,
+                    decision=message_decision("expired"),
+                    policy=definition.action_policy(),
+                    communication_policy=lifetime_policy,
+                    workflow_now=expired_at,
+                )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_outbound_reservations_cannot_overspend_the_rate_limit() -> None:
+    async with _process_context() as context:
+        definition = load_fictional_deployment().definition
+        policy = CommunicationPolicy(
+            outbound_action_types=frozenset({"send_message"}),
+            reply_event_types=frozenset({"customer.email_received"}),
+            max_follow_ups_without_reply=10,
+            minimum_follow_up_interval=timedelta(hours=1),
+            max_outbound_messages_per_process=1,
+            max_outbound_messages_per_window=1,
+        )
+        now = datetime.now(UTC)
+        start = asyncio.Event()
+
+        async def reserve(key: str) -> str:
+            await start.wait()
+            decision = AgentDecision(
+                based_on_event_ids=(),
+                status=DecisionStatus.ACTIVE,
+                actions=(
+                    ActionProposal(
+                        logical_action_key=key,
+                        action_type="send_message",
+                        parameters={"recipient": "customer@example.test", "body": key},
+                        rationale="Compete for the final outbound reservation.",
+                    ),
+                ),
+            )
+            try:
+                async with context.runtime_factory.begin() as session:
+                    await ActionGateway().persist_decision(
+                        session,
+                        tenant_id=context.tenant_id,
+                        process_instance_id=context.process_id,
+                        agent_turn_id=uuid4(),
+                        process_definition_version=definition.version,
+                        decision=decision,
+                        policy=definition.action_policy(),
+                        communication_policy=policy,
+                        workflow_now=now,
+                    )
+            except ActionPersistenceConflict:
+                return "blocked"
+            return "reserved"
+
+        tasks = (asyncio.create_task(reserve("one")), asyncio.create_task(reserve("two")))
+        start.set()
+        outcomes = await asyncio.gather(*tasks)
+        assert sorted(outcomes) == ["blocked", "reserved"]
+
+        async with context.runtime_factory.begin() as session:
+            await set_tenant_context(session, context.tenant_id)
+            rows = (
+                await session.scalars(
+                    select(ActionRequest).where(
+                        ActionRequest.process_instance_id == context.process_id,
+                        ActionRequest.action_type == "send_message",
+                    )
+                )
+            ).all()
+        assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_opt_out_is_rechecked_after_approval_before_provider_execution() -> None:
+    async with _process_context() as context:
+        definition = load_fictional_deployment().definition
+        now = datetime.now(UTC)
+        decision = AgentDecision(
+            based_on_event_ids=(),
+            status=DecisionStatus.ACTIVE,
+            actions=(
+                ActionProposal(
+                    logical_action_key="approved-message-before-opt-out",
+                    action_type="send_message",
+                    parameters={"recipient": "customer@example.test", "body": "Hello"},
+                    rationale="Create a proposal before the customer opts out.",
+                ),
+            ),
+        )
+        async with context.runtime_factory.begin() as session:
+            persisted = await ActionGateway().persist_decision(
+                session,
+                tenant_id=context.tenant_id,
+                process_instance_id=context.process_id,
+                agent_turn_id=uuid4(),
+                process_definition_version=definition.version,
+                decision=decision,
+                policy=definition.action_policy(),
+                communication_policy=CommunicationPolicy.from_definition(definition),
+                workflow_now=now,
+            )
+        proposal = persisted[0]
+        assert proposal.review_thread_id is not None
+        approve = ReviewCommand(
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            review_thread_id=proposal.review_thread_id,
+            action_request_id=proposal.action_request_id,
+            proposal_revision=proposal.revision,
+            actor_id=uuid4(),
+            command_type=ReviewCommandType.APPROVE,
+            expected_payload_hash=proposal.payload_hash,
+        )
+        async with context.runtime_factory.begin() as session:
+            await ReviewService().apply(session, approve)
+
+        opt_out = CanonicalEvent(
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            event_type="customer.email_opted_out",
+            source="communication.test",
+            source_event_id=f"opt-out-before-execute-{uuid4()}",
+            occurred_at=now + timedelta(minutes=1),
+        )
+        async with context.runtime_factory.begin() as session:
+            await EventIngestionService().ingest(session, opt_out)
+
+        adapter = StubActionAdapter()
+        executor = ActionExecutor(
+            context.runtime_factory,
+            ActionAdapterRegistry({"send_message": adapter}),
+            context.compatibility,
+            TEST_DEPLOYMENT_RELEASE,
+            ProcessDefinitionRegistry([definition]),
+            clock=lambda: now + timedelta(minutes=2),
+        )
+        result = await executor.execute(
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            action_request_id=proposal.action_request_id,
+            revision=proposal.revision,
+        )
+        assert result.status is ActionAttemptStatus.FAILED
+        assert result.error is not None and "customer opted out" in result.error
+        assert adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_committed_opt_out_wins_the_process_fence_before_provider_execution() -> None:
+    async with _process_context() as context:
+        definition = load_fictional_deployment().definition
+        now = datetime.now(UTC)
+        decision = AgentDecision(
+            based_on_event_ids=(),
+            status=DecisionStatus.ACTIVE,
+            actions=(
+                ActionProposal(
+                    logical_action_key="message-racing-with-opt-out",
+                    action_type="send_message",
+                    parameters={"recipient": "customer@example.test", "body": "Hello"},
+                    rationale="Prove the final event/action ordering fence.",
+                ),
+            ),
+        )
+        async with context.runtime_factory.begin() as session:
+            persisted = await ActionGateway().persist_decision(
+                session,
+                tenant_id=context.tenant_id,
+                process_instance_id=context.process_id,
+                agent_turn_id=uuid4(),
+                process_definition_version=definition.version,
+                decision=decision,
+                policy=definition.action_policy(),
+                communication_policy=CommunicationPolicy.from_definition(definition),
+                workflow_now=now,
+            )
+        proposal = persisted[0]
+        assert proposal.review_thread_id is not None
+        async with context.runtime_factory.begin() as session:
+            await ReviewService().apply(
+                session,
+                ReviewCommand(
+                    tenant_id=context.tenant_id,
+                    process_instance_id=context.process_id,
+                    review_thread_id=proposal.review_thread_id,
+                    action_request_id=proposal.action_request_id,
+                    proposal_revision=proposal.revision,
+                    actor_id=uuid4(),
+                    command_type=ReviewCommandType.APPROVE,
+                    expected_payload_hash=proposal.payload_hash,
+                ),
+            )
+
+        adapter = StubActionAdapter()
+        executor = ActionExecutor(
+            context.runtime_factory,
+            ActionAdapterRegistry({"send_message": adapter}),
+            context.compatibility,
+            TEST_DEPLOYMENT_RELEASE,
+            ProcessDefinitionRegistry([definition]),
+            clock=lambda: now + timedelta(minutes=2),
+        )
+        opt_out = CanonicalEvent(
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            event_type="customer.email_opted_out",
+            source="communication.test",
+            source_event_id=f"racing-opt-out-{uuid4()}",
+            occurred_at=now + timedelta(minutes=1),
+        )
+        async with context.runtime_factory.begin() as session:
+            await EventIngestionService().ingest(session, opt_out)
+            execution = asyncio.create_task(
+                executor.execute(
+                    tenant_id=context.tenant_id,
+                    process_instance_id=context.process_id,
+                    action_request_id=proposal.action_request_id,
+                    revision=proposal.revision,
+                )
+            )
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(execution), timeout=0.05)
+
+        result = await execution
+        assert result.status is ActionAttemptStatus.FAILED
+        assert result.error is not None and "customer opted out" in result.error
+        assert adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_process_lifetime_is_rechecked_for_non_communication_provider_actions() -> None:
+    async with _process_context() as context:
+        definition = load_fictional_deployment().definition
+        now = datetime.now(UTC)
+        decision = AgentDecision(
+            based_on_event_ids=(),
+            status=DecisionStatus.ACTIVE,
+            actions=(
+                ActionProposal(
+                    logical_action_key="availability-before-expiry",
+                    action_type="find_available_slots",
+                    parameters={"days": 7},
+                    rationale="Create ordinary work before the process expires.",
+                ),
+            ),
+        )
+        async with context.runtime_factory.begin() as session:
+            persisted = await ActionGateway().persist_decision(
+                session,
+                tenant_id=context.tenant_id,
+                process_instance_id=context.process_id,
+                agent_turn_id=uuid4(),
+                process_definition_version=definition.version,
+                decision=decision,
+                policy=definition.action_policy(),
+                communication_policy=CommunicationPolicy.from_definition(definition),
+                workflow_now=now,
+            )
+        proposal = persisted[0]
+        async with context.runtime_factory.begin() as session:
+            await set_tenant_context(session, context.tenant_id)
+            process = await session.get(ProcessInstance, context.process_id)
+            assert process is not None
+            expired_at = process.created_at + timedelta(
+                days=definition.limits.maximum_process_lifetime_days
+            )
+
+        adapter = StubActionAdapter()
+        executor = ActionExecutor(
+            context.runtime_factory,
+            ActionAdapterRegistry({"find_available_slots": adapter}),
+            context.compatibility,
+            TEST_DEPLOYMENT_RELEASE,
+            ProcessDefinitionRegistry([definition]),
+            clock=lambda: expired_at,
+        )
+        result = await executor.execute(
+            tenant_id=context.tenant_id,
+            process_instance_id=context.process_id,
+            action_request_id=proposal.action_request_id,
+            revision=proposal.revision,
+        )
+
+        assert result.status is ActionAttemptStatus.FAILED
+        assert result.error is not None and "process lifetime ended" in result.error
+        assert adapter.requests == []

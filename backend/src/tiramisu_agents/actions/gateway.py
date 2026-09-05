@@ -1,13 +1,18 @@
 """Idempotently persist action proposals before any side effect is possible."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tiramisu_agents.communications import (
+    CommunicationPolicy,
+    CommunicationSafetyBlocked,
+)
+from tiramisu_agents.communications.safety import CommunicationSafetyService
 from tiramisu_agents.core.action_identity import action_payload_identity
 from tiramisu_agents.core.action_policy import (
     ConfiguredActionPolicy,
@@ -28,7 +33,6 @@ from tiramisu_agents.db.models.actions import (
     ActionRevision,
     ApprovalRequest,
 )
-from tiramisu_agents.db.models.events import EventInbox
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.reviews import ReviewMessage, ReviewThread
 from tiramisu_agents.db.session import set_tenant_context
@@ -49,14 +53,6 @@ class PersistedAction:
     review_thread_id: UUID | None
 
 
-@dataclass(frozen=True, slots=True)
-class CommunicationPolicy:
-    outbound_action_types: frozenset[str]
-    reply_event_types: frozenset[str]
-    max_follow_ups_without_reply: int
-    minimum_follow_up_interval: timedelta
-
-
 def action_payload_hash(action: ActionProposal) -> str:
     return action_payload_identity(
         action.action_type,
@@ -66,6 +62,9 @@ def action_payload_hash(action: ActionProposal) -> str:
 
 class ActionGateway:
     """Persist policy-classified proposals; execution is a later gateway stage."""
+
+    def __init__(self, communication_safety: CommunicationSafetyService | None = None) -> None:
+        self._communication_safety = communication_safety or CommunicationSafetyService()
 
     async def persist_decision(
         self,
@@ -81,18 +80,28 @@ class ActionGateway:
         workflow_now: datetime | None = None,
     ) -> tuple[PersistedAction, ...]:
         await set_tenant_context(session, tenant_id)
-        process_status = await session.scalar(
-            select(ProcessInstance.status).where(
+        process = await session.scalar(
+            select(ProcessInstance)
+            .where(
                 ProcessInstance.tenant_id == tenant_id,
                 ProcessInstance.id == process_instance_id,
             )
+            .with_for_update()
         )
-        if process_status is None:
+        if process is None:
             raise ActionPersistenceConflict("process instance not found")
-        if process_status in {"paused", "completed", "cancelled", "failed"}:
+        if process.status in {"paused", "completed", "cancelled", "failed"}:
             raise ActionPersistenceConflict(
-                f"process state does not permit new actions: {process_status}"
+                f"process state does not permit new actions: {process.status}"
             )
+        if communication_policy is not None and workflow_now is not None:
+            lifetime_block = self._communication_safety.process_lifetime_block(
+                process=process,
+                policy=communication_policy,
+                now=workflow_now,
+            )
+            if lifetime_block is not None:
+                raise ActionPersistenceConflict(lifetime_block.message)
         revision_targets = await self._revision_targets(
             session,
             tenant_id=tenant_id,
@@ -132,7 +141,7 @@ class ActionGateway:
                 await self._enforce_communication_policy(
                     session,
                     tenant_id=tenant_id,
-                    process_instance_id=process_instance_id,
+                    process=process,
                     policy=communication_policy,
                     workflow_now=workflow_now,
                 )
@@ -202,49 +211,26 @@ class ActionGateway:
         ).all()
         return frozenset(action_payload_identity(row.action_type, row.parameters) for row in rows)
 
-    @staticmethod
     async def _enforce_communication_policy(
+        self,
         session: AsyncSession,
         *,
         tenant_id: UUID,
-        process_instance_id: UUID,
+        process: ProcessInstance,
         policy: CommunicationPolicy,
         workflow_now: datetime,
     ) -> None:
-        last_reply_at = await session.scalar(
-            select(EventInbox.received_at)
-            .where(
-                EventInbox.tenant_id == tenant_id,
-                EventInbox.process_instance_id == process_instance_id,
-                EventInbox.event_type.in_(policy.reply_event_types),
+        try:
+            snapshot = await self._communication_safety.inspect(
+                session,
+                tenant_id=tenant_id,
+                process=process,
+                policy=policy,
+                now=workflow_now,
             )
-            .order_by(EventInbox.received_at.desc())
-            .limit(1)
-        )
-        sent_statuses = (
-            ActionRequestStatus.ALLOWED.value,
-            ActionRequestStatus.PENDING_APPROVAL.value,
-            ActionRequestStatus.APPROVED.value,
-            ActionRequestStatus.EXECUTING.value,
-            ActionRequestStatus.SUCCEEDED.value,
-            ActionRequestStatus.UNKNOWN.value,
-            ActionRequestStatus.RECONCILING.value,
-        )
-        query = select(ActionRequest).where(
-            ActionRequest.tenant_id == tenant_id,
-            ActionRequest.process_instance_id == process_instance_id,
-            ActionRequest.action_type.in_(policy.outbound_action_types),
-            ActionRequest.status.in_(sent_statuses),
-        )
-        if last_reply_at is not None:
-            query = query.where(ActionRequest.created_at > last_reply_at)
-        prior = (
-            await session.scalars(query.order_by(ActionRequest.created_at.desc(), ActionRequest.id))
-        ).all()
-        if len(prior) >= policy.max_follow_ups_without_reply:
-            raise ActionPersistenceConflict("maximum follow-ups without a reply has been reached")
-        if prior and workflow_now < prior[0].created_at + policy.minimum_follow_up_interval:
-            raise ActionPersistenceConflict("minimum follow-up interval has not elapsed")
+            snapshot.require_allowed()
+        except CommunicationSafetyBlocked as error:
+            raise ActionPersistenceConflict(str(error)) from error
 
     @staticmethod
     async def _revision_targets(

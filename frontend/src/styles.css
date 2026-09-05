@@ -142,6 +142,15 @@ i.status-completed, .large-status.status-completed { background: #dce8ea; color:
 .manual-control > p { grid-column: 1 / -1; margin: 0; }
 .state-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 26px; }
 .state-card { min-height: 170px; padding: 22px; border: 1px solid #d7ccc1; border-radius: 11px; background: rgba(255,255,255,.38); }
+.communication-safety-card { margin-top: 26px; }
+.communication-safety-card .status-active { border-color: #b7d3bd; background: #e5f1e7; color: #356542; }
+.communication-safety-card .status-review { border-color: #dfb9a9; background: #f8dfd3; color: #94442e; }
+.safety-block-list { list-style: none; padding-left: 0 !important; }
+.safety-block-list li { display: grid; gap: 3px; }
+.safety-block-list strong { text-transform: capitalize; }
+.safety-meter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 18px 0; }
+.safety-meter-grid > span { display: grid; gap: 3px; padding: 12px; border: 1px solid #d7ccc1; }
+.safety-meter-grid b { font-size: 18px; font-weight: 550; }
 .memory-card { background: #e8ded2; }
 .claims-card { grid-column: 1 / -1; min-height: auto; }
 .memory-copy { margin: 18px 0; font-size: 18px; line-height: 1.5; }
@@ -216,6 +225,7 @@ pre { overflow: auto; padding: 12px; border-radius: 7px; background: #e9e1da; fo
   .process-detail { padding-left: 0; }
   .detail-loading { padding-left: 0; }
   .state-grid { grid-template-columns: 1fr; }
+  .safety-meter-grid { grid-template-columns: 1fr; }
   .claims-card { grid-column: auto; }
   .wake-panel, .detail-header { align-items: flex-start; flex-direction: column; }
   .wake-list { justify-content: flex-start; }

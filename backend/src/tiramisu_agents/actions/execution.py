@@ -1,5 +1,6 @@
 """Approval-aware, idempotent provider action execution."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -9,6 +10,11 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
+from tiramisu_agents.communications import (
+    CommunicationPolicy,
+    CommunicationSafetyBlocked,
+)
+from tiramisu_agents.communications.safety import CommunicationSafetyService
 from tiramisu_agents.core.action_identity import execution_idempotency_key
 from tiramisu_agents.core.contracts.actions import (
     ActionAttemptStatus,
@@ -37,6 +43,7 @@ from tiramisu_agents.db.models.reviews import ApprovalDecision
 from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.extensions.runtime import DeploymentRelease
 from tiramisu_agents.processes.compatibility import DeploymentCompatibility
+from tiramisu_agents.processes.registry import ProcessDefinitionRegistry
 from tiramisu_agents.security.tenancy import (
     TenantNotAuthorized,
     TenantSuspended,
@@ -74,11 +81,18 @@ class ActionExecutor:
         adapters: ActionAdapterRegistry,
         compatibility: DeploymentCompatibility,
         deployment_release: DeploymentRelease,
+        registry: ProcessDefinitionRegistry,
+        *,
+        communication_safety: CommunicationSafetyService | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._adapters = adapters
         self._compatibility = compatibility
         self._deployment_release = deployment_release
+        self._registry = registry
+        self._communication_safety = communication_safety or CommunicationSafetyService()
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     async def execute(
         self,
@@ -98,6 +112,8 @@ class ActionExecutor:
                 revision=revision,
             )
             self._require_compatible_process(process)
+            definition = self._registry.get(process.process_type, process.definition_version)
+            communication_policy = CommunicationPolicy.from_definition(definition)
             adapter = self._adapters.resolve(request.action_type)
             key = execution_idempotency_key(
                 tenant_id,
@@ -165,6 +181,7 @@ class ActionExecutor:
 
         provider_result: ProviderActionResult | None = None
         provider_error: Exception | None = None
+        communication_block: CommunicationSafetyBlocked | None = None
         async with self._session_factory.begin() as session:
             await self._require_execution_enabled(session, tenant_id)
             request, action_revision, _, process = await self._load_authorized_action(
@@ -175,22 +192,52 @@ class ActionExecutor:
                 revision=revision,
             )
             self._require_compatible_process(process)
-            provider_request = ProviderActionRequest(
-                action_type=request.action_type,
-                parameters=action_revision.parameters,
-                idempotency_key=key,
-                tenant_id=tenant_id,
-                process_instance_id=process_instance_id,
-                authoritative_facts=dict(process.authoritative_facts),
+            execution_now = self._clock()
+            lifetime_block = self._communication_safety.process_lifetime_block(
+                process=process,
+                policy=communication_policy,
+                now=execution_now,
             )
-            # Hold the process/action row locks across the provider boundary. A
-            # concurrent pause or terminal control must serialize before or after
-            # the side effect; it cannot claim to have stopped work while this call
-            # is crossing the final authorization fence.
-            try:
-                provider_result = await adapter.execute(provider_request)
-            except Exception as error:
-                provider_error = error
+            if lifetime_block is not None:
+                communication_block = CommunicationSafetyBlocked(lifetime_block)
+            elif request.action_type in communication_policy.outbound_action_types:
+                snapshot = await self._communication_safety.inspect(
+                    session,
+                    tenant_id=tenant_id,
+                    process=process,
+                    policy=communication_policy,
+                    now=execution_now,
+                    current_action_request_id=action_request_id,
+                )
+                try:
+                    snapshot.require_allowed()
+                except CommunicationSafetyBlocked as error:
+                    communication_block = error
+            if communication_block is None:
+                provider_request = ProviderActionRequest(
+                    action_type=request.action_type,
+                    parameters=action_revision.parameters,
+                    idempotency_key=key,
+                    tenant_id=tenant_id,
+                    process_instance_id=process_instance_id,
+                    authoritative_facts=dict(process.authoritative_facts),
+                )
+                # Hold the process/action row locks across the provider boundary. A
+                # concurrent pause or terminal control must serialize before or after
+                # the side effect; it cannot claim to have stopped work while this call
+                # is crossing the final authorization fence.
+                try:
+                    provider_result = await adapter.execute(provider_request)
+                except Exception as error:
+                    provider_error = error
+
+        if communication_block is not None:
+            return await self._record_failure(
+                tenant_id,
+                action_request_id,
+                key,
+                f"communication safety blocked execution: {communication_block}",
+            )
 
         if isinstance(provider_error, DefinitiveActionConflict):
             return await self._record_conflict(

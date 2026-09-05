@@ -104,7 +104,7 @@ class EventIngestionService:
         deliver_to_workflow = True
         if process_id is not None and status == "matched":
             process = await session.scalar(
-                select(ProcessInstance).where(ProcessInstance.id == process_id)
+                select(ProcessInstance).where(ProcessInstance.id == process_id).with_for_update()
             )
             if process is None:
                 raise RuntimeError("matched process instance is unavailable")

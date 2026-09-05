@@ -1,6 +1,6 @@
 """Tenant-scoped development operator views and review commands."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -15,6 +15,8 @@ from tiramisu_agents.api.operator_auth import (
     require_process_reader,
     require_review_reader,
 )
+from tiramisu_agents.communications import CommunicationPolicy
+from tiramisu_agents.communications.safety import CommunicationSafetyService
 from tiramisu_agents.core.contracts.decisions import WakeCondition
 from tiramisu_agents.core.contracts.reviews import ReviewCommand, ReviewCommandType
 from tiramisu_agents.core.limits import DEFAULT_PLATFORM_SAFETY_LIMITS, require_utf8_bytes
@@ -91,6 +93,7 @@ class ProcessDetail(BaseModel):
     current_wake_conditions: tuple[WakeCondition, ...]
     created_at: datetime
     updated_at: datetime
+    communication_safety: "CommunicationSafetySummary | None"
     interventions: tuple["ProcessInterventionSummary", ...]
     timeline: tuple[TimelineItem, ...]
 
@@ -109,6 +112,34 @@ class ProcessInterventionSummary(BaseModel):
     resolved_by_command_id: UUID | None
     resolved_at: datetime | None
     created_at: datetime
+
+
+class CommunicationBlockSummary(BaseModel):
+    code: str
+    message: str
+    next_allowed_at: datetime | None
+
+
+class CommunicationSafetySummary(BaseModel):
+    evaluated_at: datetime
+    outbound_action_types: tuple[str, ...]
+    outbound_allowed_now: bool
+    blocks: tuple[CommunicationBlockSummary, ...]
+    outbound_messages_total: int
+    max_outbound_messages_per_process: int
+    outbound_messages_in_window: int
+    max_outbound_messages_per_window: int
+    outbound_message_window_hours: int
+    follow_ups_since_reply: int
+    max_follow_ups_without_reply: int
+    minimum_follow_up_interval_hours: int
+    last_human_reply_at: datetime | None
+    latest_automated_response_at: datetime | None
+    opted_out_at: datetime | None
+    process_expires_at: datetime
+    quiet_hours_timezone: str | None
+    quiet_hours_start_local: str | None
+    quiet_hours_end_local: str | None
 
 
 class PendingReview(BaseModel):
@@ -278,6 +309,12 @@ async def get_process(
             )
         ).all()
         timeline = await _load_timeline(session, process_instance_id, limit=timeline_limit)
+        communication_safety = await _communication_safety_summary(
+            request,
+            session,
+            identity.tenant_id,
+            process,
+        )
         return ProcessDetail(
             id=process.id,
             process_type=process.process_type,
@@ -304,6 +341,7 @@ async def get_process(
             ),
             created_at=process.created_at,
             updated_at=process.updated_at,
+            communication_safety=communication_safety,
             interventions=tuple(
                 ProcessInterventionSummary(
                     id=item.id,
@@ -328,6 +366,66 @@ async def get_process(
             ),
             timeline=tuple(timeline),
         )
+
+
+async def _communication_safety_summary(
+    request: Request,
+    session: AsyncSession,
+    tenant_id: UUID,
+    process: ProcessInstance,
+) -> CommunicationSafetySummary | None:
+    registry = request.app.state.process_registry
+    if registry is None:
+        return None
+    try:
+        definition = registry.get(process.process_type, process.definition_version)
+    except LookupError:
+        return None
+    policy = CommunicationPolicy.from_definition(definition)
+    if not policy.outbound_action_types:
+        return None
+    snapshot = await CommunicationSafetyService().inspect(
+        session,
+        tenant_id=tenant_id,
+        process=process,
+        policy=policy,
+        now=datetime.now(UTC),
+    )
+    quiet_hours = definition.communications.quiet_hours
+    return CommunicationSafetySummary(
+        evaluated_at=snapshot.evaluated_at,
+        outbound_action_types=tuple(sorted(policy.outbound_action_types)),
+        outbound_allowed_now=snapshot.outbound_allowed_now,
+        blocks=tuple(
+            CommunicationBlockSummary(
+                code=block.code.value,
+                message=block.message,
+                next_allowed_at=block.next_allowed_at,
+            )
+            for block in snapshot.blocks
+        ),
+        outbound_messages_total=snapshot.outbound_messages_total,
+        max_outbound_messages_per_process=policy.max_outbound_messages_per_process,
+        outbound_messages_in_window=snapshot.outbound_messages_in_window,
+        max_outbound_messages_per_window=policy.max_outbound_messages_per_window,
+        outbound_message_window_hours=int(policy.outbound_message_window.total_seconds() // 3600),
+        follow_ups_since_reply=snapshot.follow_ups_since_reply,
+        max_follow_ups_without_reply=policy.max_follow_ups_without_reply,
+        minimum_follow_up_interval_hours=int(
+            policy.minimum_follow_up_interval.total_seconds() // 3600
+        ),
+        last_human_reply_at=snapshot.last_human_reply_at,
+        latest_automated_response_at=snapshot.latest_automated_response_at,
+        opted_out_at=snapshot.opted_out_at,
+        process_expires_at=snapshot.process_expires_at,
+        quiet_hours_timezone=quiet_hours.timezone if quiet_hours else None,
+        quiet_hours_start_local=(
+            quiet_hours.start_local.isoformat(timespec="minutes") if quiet_hours else None
+        ),
+        quiet_hours_end_local=(
+            quiet_hours.end_local.isoformat(timespec="minutes") if quiet_hours else None
+        ),
+    )
 
 
 @router.get("/reviews", response_model=list[PendingReview])

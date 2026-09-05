@@ -1,7 +1,9 @@
 """Public authoring framework for conventional Tiramisu client projects."""
 
+from tiramisu_agents.processes.definitions import DailyQuietHours, ProcessLimits
 from tiramisu_agents.projects.contracts import (
     Capability,
+    Communications,
     Fact,
     FactRequirement,
     Journey,
@@ -25,6 +27,8 @@ from tiramisu_agents.projects.output import (
 
 __all__ = [
     "Capability",
+    "Communications",
+    "DailyQuietHours",
     "Fact",
     "FactRequirement",
     "GeneratedActionProposalOutput",
@@ -32,6 +36,7 @@ __all__ = [
     "Journey",
     "Project",
     "ProjectConfigurationError",
+    "ProcessLimits",
     "Route",
     "Scenario",
     "ScenarioAction",

@@ -7,6 +7,13 @@ from enum import StrEnum
 from typing import Any, Protocol, cast
 from uuid import UUID
 
+from tiramisu_agents.communications import (
+    CommunicationPolicy,
+    CommunicationSafetyBlocked,
+    CommunicationSafetyFacts,
+    evaluate_communication_safety,
+    evaluate_process_lifetime,
+)
 from tiramisu_agents.core.action_identity import (
     action_payload_identity,
     execution_idempotency_key,
@@ -158,6 +165,11 @@ class KernelScenarioDriver:
         pending_timers: tuple[str, ...] = ()
         index = 0
         turn_number = 0
+        communication_policy = CommunicationPolicy.from_definition(definition)
+        outbound_message_times: list[datetime] = []
+        last_human_reply_at: datetime | None = None
+        latest_automated_response_at: datetime | None = None
+        opted_out_at: datetime | None = None
 
         while index < len(scenario.steps):
             if not (pending_events or pending_results or pending_timers):
@@ -181,6 +193,13 @@ class KernelScenarioDriver:
                         f"process is not waiting for {event.event_type}",
                     )
                 pending_events = (event,)
+                if event.event_type in communication_policy.reply_event_types:
+                    last_human_reply_at = event.received_at
+                    latest_automated_response_at = None
+                elif event.event_type in communication_policy.automated_response_event_types:
+                    latest_automated_response_at = event.received_at
+                elif event.event_type in communication_policy.opt_out_event_types:
+                    opted_out_at = event.received_at
                 self._append_trace(
                     trace,
                     now,
@@ -202,6 +221,16 @@ class KernelScenarioDriver:
                 raise script.error(
                     decision_step,
                     "expected an action, wait, or completion decision",
+                )
+            lifetime_block = evaluate_process_lifetime(
+                process_created_at=scenario.started_at,
+                policy=communication_policy,
+                now=now,
+            )
+            if lifetime_block is not None:
+                raise script.error(
+                    decision_step,
+                    lifetime_block.message,
                 )
             turn_number += 1
             turn_id = script.deterministic_uuid(f"turn:{turn_number}")
@@ -315,9 +344,30 @@ class KernelScenarioDriver:
             for action in decision.actions:
                 permission = definition.action_policy().evaluate(action).outcome
                 status = initial_action_request_status(permission)
+                if action.action_type in communication_policy.outbound_action_types:
+                    communication = evaluate_communication_safety(
+                        policy=communication_policy,
+                        facts=CommunicationSafetyFacts(
+                            process_created_at=scenario.started_at,
+                            outbound_message_times=tuple(outbound_message_times),
+                            last_human_reply_at=last_human_reply_at,
+                            latest_automated_response_at=latest_automated_response_at,
+                            opted_out_at=opted_out_at,
+                        ),
+                        now=now,
+                    )
+                    try:
+                        communication.require_allowed()
+                    except CommunicationSafetyBlocked as error:
+                        raise script.error(
+                            decision_step,
+                            f"communication safety blocked {action.action_type}: {error}",
+                        ) from error
                 classified.append((action, permission, status))
                 if status is not ActionRequestStatus.DENIED:
                     open_actions.append((action.action_request_id, status))
+                    if action.action_type in communication_policy.outbound_action_types:
+                        outbound_message_times.append(now)
                 self._append_trace(
                     trace,
                     now,

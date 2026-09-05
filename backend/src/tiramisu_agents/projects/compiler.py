@@ -383,14 +383,19 @@ def compile_project(project: Project) -> ClientPack:
             raise ProjectConfigurationError(
                 f"journey {journey.id} has guidance for unavailable capabilities"
             )
-        if not set(journey.outbound_action_types).issubset(journey.capabilities):
+        if not set(journey.communications.outbound_actions).issubset(journey.capabilities):
             raise ProjectConfigurationError(
                 f"journey {journey.id} marks an unavailable capability as outbound"
             )
         wake_events = {route.event_type for route in wake_routes}
-        if not set(journey.reply_event_types).issubset(wake_events):
+        communication_events = {
+            *journey.communications.customer_reply_events,
+            *journey.communications.opt_out_events,
+            *journey.communications.automated_response_events,
+        }
+        if not communication_events.issubset(wake_events):
             raise ProjectConfigurationError(
-                f"journey {journey.id} reply events must have wake routes"
+                f"journey {journey.id} communication events must have wake routes"
             )
 
         completion_requirements = {
@@ -443,8 +448,11 @@ def compile_project(project: Project) -> ClientPack:
             limits=journey.limits,
             review=ReviewConfiguration(commands=journey.review_commands),
             communications=CommunicationConfiguration(
-                outbound_action_types=journey.outbound_action_types,
-                reply_event_types=journey.reply_event_types,
+                outbound_action_types=journey.communications.outbound_actions,
+                reply_event_types=journey.communications.customer_reply_events,
+                opt_out_event_types=journey.communications.opt_out_events,
+                automated_response_event_types=(journey.communications.automated_response_events),
+                quiet_hours=journey.communications.quiet_hours,
             ),
             integrations={capability.action_type: capability.adapter.id for capability in selected},
             facts=tuple(_fact_definition(fact) for fact in relevant_facts),
@@ -474,6 +482,8 @@ def compile_project(project: Project) -> ClientPack:
                 capabilities=tuple(_capability_description(item) for item in selected),
                 facts=tuple(_fact_description(fact) for fact in relevant_facts),
                 permissions=permissions,
+                limits=journey.limits,
+                communications=definition.communications,
                 completion_requirements=completion_requirements,
                 scenarios=tuple(_scenario_description(item) for item in journey_scenarios),
             )

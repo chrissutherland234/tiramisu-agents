@@ -135,6 +135,7 @@ async def serve(
                 ActionAdapterRegistry(deployment.bindings),
                 deployment.compatibility,
                 release,
+                registry,
             ),
             authorized_tenant_ids=authorized_tenant_ids,
         )

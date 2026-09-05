@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tiramisu_agents.core.contracts.actions import PermissionOutcome
 from tiramisu_agents.core.contracts.knowledge import FactKind
+from tiramisu_agents.processes.definitions import CommunicationConfiguration, ProcessLimits
 
 
 class FactDescription(BaseModel):
@@ -74,6 +75,8 @@ class JourneyDescription(BaseModel):
     capabilities: tuple[CapabilityDescription, ...]
     facts: tuple[FactDescription, ...]
     permissions: dict[str, PermissionOutcome]
+    limits: ProcessLimits
+    communications: CommunicationConfiguration
     completion_requirements: dict[str, Any]
     scenarios: tuple[ScenarioDescription, ...]
 

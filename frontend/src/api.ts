@@ -66,8 +66,37 @@ export interface ProcessDetail {
   current_wake_conditions: WakeCondition[];
   created_at: string;
   updated_at: string;
+  communication_safety?: CommunicationSafety | null;
   interventions: ProcessIntervention[];
   timeline: TimelineItem[];
+}
+
+export interface CommunicationSafetyBlock {
+  code: string;
+  message: string;
+  next_allowed_at: string | null;
+}
+
+export interface CommunicationSafety {
+  evaluated_at: string;
+  outbound_action_types: string[];
+  outbound_allowed_now: boolean;
+  blocks: CommunicationSafetyBlock[];
+  outbound_messages_total: number;
+  max_outbound_messages_per_process: number;
+  outbound_messages_in_window: number;
+  max_outbound_messages_per_window: number;
+  outbound_message_window_hours: number;
+  follow_ups_since_reply: number;
+  max_follow_ups_without_reply: number;
+  minimum_follow_up_interval_hours: number;
+  last_human_reply_at: string | null;
+  latest_automated_response_at: string | null;
+  opted_out_at: string | null;
+  process_expires_at: string;
+  quiet_hours_timezone: string | null;
+  quiet_hours_start_local: string | null;
+  quiet_hours_end_local: string | null;
 }
 
 export interface PendingReview {

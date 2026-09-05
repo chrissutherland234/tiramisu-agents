@@ -15,9 +15,12 @@ def test_support_project_compiles_to_a_safe_client_pack() -> None:
 
     assert pack.manifest.extension_id == "support_client"
     assert pack.definition.id == "resolve_support_case"
+    assert pack.definition.version == "2"
     assert pack.definition.trigger_events == ("case.created",)
     assert pack.definition.allowed_wake_events == (
         "customer.email_received",
+        "customer.email_opted_out",
+        "customer.email_auto_replied",
         "case.resolved",
     )
     assert pack.definition.completion_requirements == {"case.status": "resolved"}

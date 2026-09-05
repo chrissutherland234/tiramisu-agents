@@ -1,7 +1,7 @@
 # Building a client project
 
 Tiramisu client work is ordinary, version-controlled Python in a separate editable package. The
-recommended surface is deliberately small and conventional: describe the business in six concepts,
+recommended surface is deliberately small and conventional: describe the business in seven concepts,
 then let Tiramisu compile the low-level manifest, process definition, policy registrations, strict
 OpenAI output model, and runtime bindings.
 
@@ -12,6 +12,7 @@ OpenAI output model, and runtime bindings.
 | `Route` | A business event that starts or wakes a journey | URL route |
 | `Capability` | A typed business operation backed by an adapter | Service/form action |
 | `Fact` | Named, typed business knowledge and its authority class | Domain model field |
+| `Communications` | Which actions contact customers and when contact is forbidden | Middleware/policy |
 | `Scenario` | A reviewable example of how the journey should unfold | Acceptance test |
 
 This is code-first rather than a general workflow language. Python is useful for provider bindings,
@@ -49,11 +50,21 @@ demo.
 ## A minimal definition
 
 ```python
+from datetime import time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 from tiramisu_agents.adapters.stubs import StubActionAdapter
-from tiramisu_agents.projects import Capability, Fact, Journey, Project, Route
+from tiramisu_agents.projects import (
+    Capability,
+    Communications,
+    DailyQuietHours,
+    Fact,
+    Journey,
+    ProcessLimits,
+    Project,
+    Route,
+)
 
 
 class SendReplyParameters(BaseModel):
@@ -88,6 +99,23 @@ def create_project() -> Project:
         goals=("Resolve the customer's problem",),
         capabilities=(send_reply.action_type,),
         complete_when=(CASE_STATUS.equals("resolved"),),
+        limits=ProcessLimits(
+            max_outbound_messages_per_process=20,
+            max_outbound_messages_per_window=3,
+            outbound_message_window_hours=24,
+            maximum_process_lifetime_days=60,
+        ),
+        communications=Communications(
+            outbound_actions=(send_reply.action_type,),
+            customer_reply_events=("customer.email_received",),
+            opt_out_events=("customer.email_opted_out",),
+            automated_response_events=("customer.email_auto_replied",),
+            quiet_hours=DailyQuietHours(
+                timezone="Pacific/Auckland",
+                start_local=time(20),
+                end_local=time(8),
+            ),
+        ),
     )
     return Project(
         id="acme_service",
@@ -102,6 +130,24 @@ def create_project() -> Project:
                 title="Case created",
                 description="Start an agent for each new case.",
                 provides=(CASE_STATUS,),
+            ),
+            Route.wake(
+                "customer.email_received",
+                journey=journey.id,
+                title="Customer replied",
+                description="Wake when a genuine customer reply arrives.",
+            ),
+            Route.wake(
+                "customer.email_opted_out",
+                journey=journey.id,
+                title="Customer opted out",
+                description="Permanently stop outbound contact for this journey.",
+            ),
+            Route.wake(
+                "customer.email_auto_replied",
+                journey=journey.id,
+                title="Automated response received",
+                description="Stop outbound contact until a later human reply.",
             ),
             Route.wake(
                 "case.resolved",
@@ -127,6 +173,12 @@ capability's strict Pydantic parameter model and restricts model-selected event 
 wake routes. Human approval wakes cannot be invented by the model; they arise from deterministic
 permission policy.
 
+`Communications` is also compiled into deterministic policy. The model cannot relabel an event,
+ignore quiet hours, spend beyond a message budget, or make an approval override an opt-out. Provider
+adapters must classify genuine replies, opt-outs, and automated responses into the declared canonical
+event types. Tiramisu then derives usage from the durable event/action ledgers and checks it when an
+action is reserved and again immediately before provider execution.
+
 Completion is also a deterministic fact gate. If the model proposes `completed`, both the agent-turn
 validator and the persistence boundary require every `complete_when` value to match the current
 authoritative fact projection. A customer message, model summary, or operator Wake instruction
@@ -143,6 +195,10 @@ cannot manufacture resolution or payment.
   audited fact-correction UI; that UI is not implemented yet.
 - Journey guidance helps the model choose among allowed proposals. Hard lifecycle, permission,
   completion, idempotency, and authority rules stay deterministic.
+- Communications classifies customer-contact actions and inbound event roles. Quiet hours currently
+  use one IANA timezone per journey. Opt-out is enforced for the current process; a future shared
+  customer consent registry is still required before one person can be contacted across multiple
+  independent processes or channels.
 - A `decision_transformer` is an advanced, versioned escape hatch for a small deterministic
   transition after structured output conversion. It cannot bypass the downstream policy or action
   gateway. Most projects should not need one.
@@ -204,11 +260,12 @@ tiramisu simulate acme_service:create_project --scenario happy_path --json
 ```
 
 The runner validates scripted decisions through the generated strict output schema and production
-decision policy, classifies actions through the production permission policy, derives exact action
-identities, calls only explicitly safe simulation adapters, and projects facts, process status,
-wakes, and completion through the same infrastructure-free transition functions used by PostgreSQL
-persistence. Its trace shows every event, decision, approval, provider result, wait, fact assertion,
-and completion.
+decision policy, classifies actions through the production permission and communication policies,
+derives exact action identities, calls only explicitly safe simulation adapters, and projects facts,
+process status, wakes, and completion through the same infrastructure-free transition functions
+used by PostgreSQL persistence. Its fake clock exercises quiet hours, rolling windows, follow-up
+resets, and process lifetime without sleeping. Its trace shows every event, decision, approval,
+provider result, wait, fact assertion, and completion.
 
 Integration suites can pass the same pack to `PostgresTemporalScenarioDriver`. That driver creates
 an isolated test tenant, sends event steps through real ingestion and outbox delivery, runs the

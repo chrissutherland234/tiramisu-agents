@@ -1,7 +1,7 @@
 """Bounded agent Activity integration against tenant-scoped PostgreSQL context."""
 
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -147,7 +147,7 @@ async def test_activity_repairs_then_rejects_out_of_policy_decisions_with_one_sn
                 event,
                 bootstrap=ProcessBootstrap(
                     process_type="enquiry_to_booking",
-                    definition_version="1",
+                    definition_version=definition.version,
                     extension_manifest_hash="a" * 64,
                     client_pack_fingerprint="b" * 64,
                     process_definition_fingerprint=definition.fingerprint(),
@@ -161,7 +161,7 @@ async def test_activity_repairs_then_rejects_out_of_policy_decisions_with_one_sn
             tenant_id=str(tenant_id),
             process_instance_id=str(ingested.process_instance_id),
             process_definition_id="enquiry_to_booking",
-            process_definition_version="1",
+            process_definition_version=definition.version,
             turn_id=str(uuid4()),
             event_ids=(str(event.event_id),),
             workflow_now=datetime.now(UTC),
@@ -262,6 +262,20 @@ async def test_activity_repairs_then_rejects_out_of_policy_decisions_with_one_sn
             process = await session.get(ProcessInstance, ingested.process_instance_id)
             assert process is not None
             process.client_pack_fingerprint = "b" * 64
+
+        async with admin_factory.begin() as session:
+            process = await session.get(ProcessInstance, ingested.process_instance_id)
+            assert process is not None
+            process.created_at = command.workflow_now - timedelta(
+                days=definition.limits.maximum_process_lifetime_days
+            )
+        prior_turn_count = len(scripted_agent.turn_inputs)
+        with pytest.raises(ApplicationError) as expired:
+            await activities.run_agent_turn(command)
+        assert expired.value.non_retryable is True
+        assert expired.value.type == "ProcessLifetimeExceeded"
+        assert "process lifetime ended" in str(expired.value)
+        assert len(scripted_agent.turn_inputs) == prior_turn_count
 
         async with admin_factory.begin() as session:
             await TenantSafetyService().set_status(

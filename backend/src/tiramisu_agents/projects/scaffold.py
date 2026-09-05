@@ -52,7 +52,12 @@ The files follow one convention:
 - `Route` says which business events start or wake the journey.
 - `Capability` binds one typed business action to an adapter and permission.
 - `Fact` names trusted business knowledge.
+- `Communications` declares which actions contact customers and the hard contact rules.
 - `Scenario` records an executable acceptance example in business language.
+
+If a capability contacts a customer, declare it in `Journey.communications` together with genuine
+reply, opt-out, automated-response, quiet-hour, and message-budget rules. Those rules are enforced
+outside the model and by the scenario runner.
 
 During local development, install Tiramisu and this project into the same environment:
 

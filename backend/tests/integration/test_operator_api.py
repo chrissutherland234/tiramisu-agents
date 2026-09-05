@@ -308,6 +308,12 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             assert detail.json()["current_wake_conditions"] == [
                 {"type": "human", "interaction": "approval"}
             ]
+            communication_safety = detail.json()["communication_safety"]
+            assert communication_safety["outbound_allowed_now"] is False
+            assert communication_safety["outbound_messages_total"] == 1
+            assert communication_safety["follow_ups_since_reply"] == 1
+            assert communication_safety["max_outbound_messages_per_process"] == 50
+            assert [item["code"] for item in communication_safety["blocks"]] == ["minimum_interval"]
             assert detail.json()["interventions"] == [
                 {
                     "id": str(intervention_id),

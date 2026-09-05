@@ -2,10 +2,11 @@
 
 import json
 import re
-from datetime import timedelta
+from datetime import time, timedelta
 from enum import StrEnum
 from hashlib import sha256
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -31,10 +32,14 @@ class DefinitionStatus(StrEnum):
 class ProcessLimits(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    max_actions_per_turn: int = Field(ge=0, le=20)
-    max_follow_ups_without_reply: int = Field(ge=0, le=100)
-    minimum_follow_up_interval_hours: int = Field(ge=1, le=24 * 30)
-    maximum_timer_horizon_days: int = Field(ge=1, le=365)
+    max_actions_per_turn: int = Field(default=3, ge=0, le=20)
+    max_follow_ups_without_reply: int = Field(default=3, ge=0, le=100)
+    minimum_follow_up_interval_hours: int = Field(default=24, ge=1, le=24 * 30)
+    maximum_timer_horizon_days: int = Field(default=30, ge=1, le=365)
+    max_outbound_messages_per_process: int = Field(default=50, ge=0, le=10_000)
+    max_outbound_messages_per_window: int = Field(default=5, ge=0, le=1_000)
+    outbound_message_window_hours: int = Field(default=24, ge=1, le=24 * 30)
+    maximum_process_lifetime_days: int = Field(default=90, ge=1, le=3650)
 
 
 class ReviewConfiguration(BaseModel):
@@ -60,11 +65,70 @@ class ReviewConfiguration(BaseModel):
         return values
 
 
+class DailyQuietHours(BaseModel):
+    """A recurring local-time interval in which outbound contact is forbidden."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    timezone: str = Field(min_length=1, max_length=100)
+    start_local: time
+    end_local: time
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as error:
+            raise ValueError("quiet-hours timezone must be a valid IANA timezone") from error
+        return value
+
+    @model_validator(mode="after")
+    def validate_interval(self) -> "DailyQuietHours":
+        if self.start_local.tzinfo is not None or self.end_local.tzinfo is not None:
+            raise ValueError("quiet-hours times must be local clock times without UTC offsets")
+        if self.start_local == self.end_local:
+            raise ValueError("quiet-hours start and end must differ")
+        return self
+
+
 class CommunicationConfiguration(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     outbound_action_types: tuple[str, ...] = ()
     reply_event_types: tuple[str, ...] = ()
+    opt_out_event_types: tuple[str, ...] = ()
+    automated_response_event_types: tuple[str, ...] = ()
+    quiet_hours: DailyQuietHours | None = None
+
+    @field_validator(
+        "outbound_action_types",
+        "reply_event_types",
+        "opt_out_event_types",
+        "automated_response_event_types",
+    )
+    @classmethod
+    def validate_unique_values(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("communication action and event types must be unique")
+        return values
+
+    @model_validator(mode="after")
+    def validate_event_roles(self) -> "CommunicationConfiguration":
+        event_groups = (
+            set(self.reply_event_types),
+            set(self.opt_out_event_types),
+            set(self.automated_response_event_types),
+        )
+        if any(
+            left & right
+            for index, left in enumerate(event_groups)
+            for right in event_groups[index + 1 :]
+        ):
+            raise ValueError("communication event types must have one unambiguous role")
+        if not self.outbound_action_types and any((*event_groups, self.quiet_hours is not None)):
+            raise ValueError("communication controls require at least one outbound action type")
+        return self
 
 
 class FactDefinition(BaseModel):
@@ -209,6 +273,12 @@ class ProcessDefinition(BaseModel):
             raise ValueError("communication actions must be allowed actions")
         if not set(self.communications.reply_event_types).issubset(self.allowed_wake_events):
             raise ValueError("communication reply events must be allowed wake events")
+        communication_events = {
+            *self.communications.opt_out_event_types,
+            *self.communications.automated_response_event_types,
+        }
+        if not communication_events.issubset(self.allowed_wake_events):
+            raise ValueError("communication control events must be allowed wake events")
         fact_by_key = {fact.key: fact for fact in self.facts}
         if len(fact_by_key) != len(self.facts):
             raise ValueError("fact definitions must have unique keys")
@@ -276,6 +346,7 @@ class ProcessDefinition(BaseModel):
             )
             or "- No additional fact requirements were declared."
         )
+        communication_rules = self._compile_communication_instructions()
         return (
             f"Process: {self.id} version {self.version}\n"
             f"Goals:\n{goals}\n"
@@ -285,7 +356,34 @@ class ProcessDefinition(BaseModel):
             f"Allowed event wake types: {wakes}\n"
             f"Business facts:\n{facts}\n"
             f"Completion requirements:\n{completion}\n"
+            f"Communication safety:\n{communication_rules}\n"
+            f"Maximum process lifetime: {self.limits.maximum_process_lifetime_days} days "
+            "from process creation.\n"
             f"Terminal states: {terminal_states}\n"
             "Propose only actions and wake conditions allowed above. "
             "Never claim that a proposed action has already executed."
         )
+
+    def _compile_communication_instructions(self) -> str:
+        communications = self.communications
+        if not communications.outbound_action_types:
+            return "- This journey has no customer-facing outbound actions."
+        lines = [
+            "- Outbound actions: " + ", ".join(communications.outbound_action_types),
+            "- Never contact a customer after an opt-out or while an automated-response loop "
+            "is active; deterministic policy is authoritative.",
+            f"- At most {self.limits.max_follow_ups_without_reply} follow-ups without a human "
+            "reply, separated by at least "
+            f"{self.limits.minimum_follow_up_interval_hours} hours.",
+            f"- At most {self.limits.max_outbound_messages_per_window} outbound messages in "
+            f"{self.limits.outbound_message_window_hours} hours and "
+            f"{self.limits.max_outbound_messages_per_process} over the process lifetime.",
+        ]
+        if communications.quiet_hours is not None:
+            quiet = communications.quiet_hours
+            lines.append(
+                f"- Quiet hours are {quiet.start_local.isoformat(timespec='minutes')} to "
+                f"{quiet.end_local.isoformat(timespec='minutes')} in {quiet.timezone}; "
+                "wait until they end before proposing outbound contact."
+            )
+        return "\n".join(lines)

@@ -62,8 +62,8 @@ def test_api_and_worker_load_the_same_bundled_client_pack_contract() -> None:
     assert worker_pack is not None
     assert app.state.client_pack.manifest == worker_pack.manifest
     assert app.state.trigger_rules == worker_pack.trigger_rules(app.state.deployment_release)
-    assert app.state.process_registry.get("enquiry_to_booking", "1") == (
-        worker_pack.registry.get("enquiry_to_booking", "1")
+    assert app.state.process_registry.get("enquiry_to_booking", "2") == (
+        worker_pack.registry.get("enquiry_to_booking", "2")
     )
     assert set(app.state.client_pack.bindings) == set(worker_pack.bindings)
 

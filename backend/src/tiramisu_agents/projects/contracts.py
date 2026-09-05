@@ -16,7 +16,7 @@ from tiramisu_agents.core.contracts.knowledge import FactKind
 from tiramisu_agents.core.contracts.processes import AgentTurnInput, ProcessStatus
 from tiramisu_agents.core.contracts.reviews import ReviewCommandType
 from tiramisu_agents.core.limits import canonical_json_bytes
-from tiramisu_agents.processes.definitions import DefinitionStatus, ProcessLimits
+from tiramisu_agents.processes.definitions import DailyQuietHours, DefinitionStatus, ProcessLimits
 
 if TYPE_CHECKING:
     from tiramisu_agents.extensions import ClientPack
@@ -427,12 +427,44 @@ class Scenario:
 
 
 def _default_limits() -> ProcessLimits:
-    return ProcessLimits(
-        max_actions_per_turn=3,
-        max_follow_ups_without_reply=3,
-        minimum_follow_up_interval_hours=24,
-        maximum_timer_horizon_days=30,
-    )
+    return ProcessLimits()
+
+
+@dataclass(frozen=True, slots=True)
+class Communications:
+    """Business-readable customer-contact rules for one journey."""
+
+    outbound_actions: tuple[str, ...] = ()
+    customer_reply_events: tuple[str, ...] = ()
+    opt_out_events: tuple[str, ...] = ()
+    automated_response_events: tuple[str, ...] = ()
+    quiet_hours: DailyQuietHours | None = None
+
+    def __post_init__(self) -> None:
+        for label, values, pattern in (
+            ("outbound actions", self.outbound_actions, _IDENTIFIER),
+            ("customer reply events", self.customer_reply_events, _EVENT_TYPE),
+            ("opt-out events", self.opt_out_events, _EVENT_TYPE),
+            ("automated-response events", self.automated_response_events, _EVENT_TYPE),
+        ):
+            if len(values) != len(set(values)):
+                raise ProjectConfigurationError(f"communication {label} must be unique")
+            if any(pattern.fullmatch(value) is None for value in values):
+                raise ProjectConfigurationError(f"communication {label} contains an invalid ID")
+        groups = (
+            set(self.customer_reply_events),
+            set(self.opt_out_events),
+            set(self.automated_response_events),
+        )
+        if any(left & right for index, left in enumerate(groups) for right in groups[index + 1 :]):
+            raise ProjectConfigurationError(
+                "communication events must be classified as exactly one of customer reply, "
+                "opt-out, or automated response"
+            )
+        if not self.outbound_actions and any((*groups, self.quiet_hours is not None)):
+            raise ProjectConfigurationError(
+                "communication controls require at least one outbound action"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -463,8 +495,7 @@ class Journey:
         ReviewCommandType.REQUEST_REVISION,
         ReviewCommandType.COMMENT,
     )
-    outbound_action_types: tuple[str, ...] = ()
-    reply_event_types: tuple[str, ...] = ()
+    communications: Communications = field(default_factory=Communications)
     decision_transformer: DecisionTransformer | None = field(
         default=None, repr=False, compare=False
     )
@@ -484,12 +515,6 @@ class Journey:
             )
         if len({item.fact_key for item in self.complete_when}) != len(self.complete_when):
             raise ProjectConfigurationError(f"journey {self.id} completion facts must be unique")
-        for label, values in (
-            ("outbound action types", self.outbound_action_types),
-            ("reply event types", self.reply_event_types),
-        ):
-            if len(values) != len(set(values)):
-                raise ProjectConfigurationError(f"journey {self.id} {label} must be unique")
         object.__setattr__(
             self,
             "permission_overrides",

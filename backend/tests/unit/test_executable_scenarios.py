@@ -1,14 +1,17 @@
 """Reusable executable scenario contracts and deterministic runtime."""
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from tiramisu_agents.adapters.stubs import StubActionAdapter
 from tiramisu_agents.core.contracts.actions import PermissionOutcome
 from tiramisu_agents.projects import (
     Capability,
+    Communications,
     Project,
     ProjectConfigurationError,
+    Route,
     Scenario,
     ScenarioStep,
 )
@@ -189,3 +192,73 @@ async def test_scenario_uses_the_safe_binding_instead_of_the_production_binding(
     assert result.passed is True
     assert production_adapter.requests == []
     assert len(simulation_adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_scenario_runner_uses_the_production_communication_policy() -> None:
+    project = create_timer_project()
+    journey = replace(
+        project.journeys[0],
+        communications=Communications(
+            outbound_actions=("finish_work",),
+            automated_response_events=("customer.auto_replied",),
+        ),
+    )
+    original = project.scenarios[0]
+    scenario = replace(
+        original,
+        steps=(
+            original.steps[0],
+            ScenarioStep.wait_for_event(
+                "customer.auto_replied", "Wait for the customer's mailbox response."
+            ),
+            ScenarioStep.event("customer.auto_replied", "The mailbox sends an automated response."),
+            *original.steps[2:],
+        ),
+    )
+    pack = replace(
+        project,
+        journeys=(journey,),
+        routes=(
+            *project.routes,
+            Route.wake(
+                "customer.auto_replied",
+                journey=journey.id,
+                title="Automated response received",
+                description="Suppress outbound contact until a later human reply.",
+            ),
+        ),
+        scenarios=(scenario,),
+    ).compile()
+
+    with pytest.raises(
+        ScenarioRunError,
+        match="communication safety blocked finish_work: latest inbound contact was classified",
+    ):
+        await run_scenario(pack, "follow_up")
+
+
+@pytest.mark.asyncio
+async def test_scenario_runner_enforces_the_process_lifetime_at_its_fake_clock() -> None:
+    project = create_timer_project()
+    journey = replace(
+        project.journeys[0],
+        limits=project.journeys[0].limits.model_copy(update={"maximum_process_lifetime_days": 1}),
+    )
+    original = project.scenarios[0]
+    scenario = replace(
+        original,
+        steps=(
+            original.steps[0],
+            ScenarioStep.wait_for_timer(
+                "after-expiry",
+                timedelta(days=2),
+                "The timer is deliberately later than the process lifetime.",
+            ),
+            *original.steps[2:],
+        ),
+    )
+    pack = replace(project, journeys=(journey,), scenarios=(scenario,)).compile()
+
+    with pytest.raises(ScenarioRunError, match="process lifetime ended at 2026-02-04"):
+        await run_scenario(pack, "follow_up")

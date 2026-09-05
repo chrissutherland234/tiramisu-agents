@@ -9,6 +9,7 @@ from tiramisu_agents.core.contracts.knowledge import FactKind
 from tiramisu_agents.extensions import ClientPack
 from tiramisu_agents.projects import (
     Capability,
+    Communications,
     Fact,
     Journey,
     Project,
@@ -68,7 +69,7 @@ def create_project() -> Project:
     )
     journey = Journey(
         id="resolve_support_case",
-        version="1",
+        version="2",
         title="Resolve one support case",
         description="Stay with one customer from initial case through authoritative resolution.",
         goals=(
@@ -83,8 +84,12 @@ def create_project() -> Project:
             "Wait for customer.email_received when an answer is needed from the customer.",
             "Wait for case.resolved after the business has performed the required work.",
         ),
-        outbound_action_types=(send_reply.action_type,),
-        reply_event_types=("customer.email_received",),
+        communications=Communications(
+            outbound_actions=(send_reply.action_type,),
+            customer_reply_events=("customer.email_received",),
+            opt_out_events=("customer.email_opted_out",),
+            automated_response_events=("customer.email_auto_replied",),
+        ),
     )
     return Project(
         id="support_client",
@@ -106,6 +111,18 @@ def create_project() -> Project:
                 title="Customer replied",
                 description="Wake when this case's customer sends a reply.",
                 provides=(CUSTOMER_MESSAGE,),
+            ),
+            Route.wake(
+                "customer.email_opted_out",
+                journey=journey.id,
+                title="Customer opted out",
+                description="Stops further customer email for this case.",
+            ),
+            Route.wake(
+                "customer.email_auto_replied",
+                journey=journey.id,
+                title="Automated response received",
+                description="Stops follow-ups until a human reply arrives.",
             ),
             Route.wake(
                 "case.resolved",

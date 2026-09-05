@@ -55,6 +55,33 @@ const detail = {
   memory_summary_source_event_ids: [],
   current_wake_conditions: [{ type: "human", interaction: "approval" }],
   created_at: now,
+  communication_safety: {
+    evaluated_at: now,
+    outbound_action_types: ["send_message"],
+    outbound_allowed_now: false,
+    blocks: [
+      {
+        code: "opted_out",
+        message: "Customer opted out of email contact.",
+        next_allowed_at: null,
+      },
+    ],
+    outbound_messages_total: 2,
+    max_outbound_messages_per_process: 20,
+    outbound_messages_in_window: 1,
+    max_outbound_messages_per_window: 3,
+    outbound_message_window_hours: 24,
+    follow_ups_since_reply: 1,
+    max_follow_ups_without_reply: 2,
+    minimum_follow_up_interval_hours: 1,
+    last_human_reply_at: "2026-08-30T08:30:00Z",
+    latest_automated_response_at: null,
+    opted_out_at: now,
+    process_expires_at: "2026-09-30T10:00:00Z",
+    quiet_hours_timezone: "Pacific/Auckland",
+    quiet_hours_start_local: "20:00",
+    quiet_hours_end_local: "08:00",
+  },
   interventions: [
     {
       id: interventionId,
@@ -210,6 +237,11 @@ describe("operator console", () => {
       "enquiry to booking",
     );
     expect(wrapper.get('[data-testid="wake-panel"]').text()).toContain("Human · approval");
+    const communicationSafety = wrapper.get('[data-testid="communication-safety"]');
+    expect(communicationSafety.text()).toContain("Contact blocked");
+    expect(communicationSafety.text()).toContain("Customer opted out of email contact.");
+    expect(communicationSafety.text()).toContain("2 / 20");
+    expect(communicationSafety.text()).toContain("Pacific/Auckland");
     expect(wrapper.get('[data-testid="review-queue"]').text()).toContain("Hello there");
     expect(wrapper.get('[data-testid="timeline"]').text()).toContain("Agent decision");
     const turnGroups = wrapper.get('[data-testid="timeline"]').findAll(".turn-group");

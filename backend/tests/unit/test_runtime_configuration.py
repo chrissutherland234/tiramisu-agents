@@ -149,8 +149,8 @@ def test_deployment_release_identity_is_deterministic_and_fails_closed() -> None
 def test_bundled_fictional_configuration_is_self_consistent() -> None:
     deployment = load_fictional_deployment()
 
-    assert deployment.registry.get("enquiry_to_booking", "1") == deployment.definition
-    assert deployment.manifest.process_definitions == ("enquiry_to_booking.v1",)
+    assert deployment.registry.get("enquiry_to_booking", "2") == deployment.definition
+    assert deployment.manifest.process_definitions == ("enquiry_to_booking.v2",)
 
 
 def test_settings_normalize_and_reject_unsafe_runtime_combinations() -> None:

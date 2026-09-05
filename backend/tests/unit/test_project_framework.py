@@ -12,6 +12,7 @@ from tiramisu_agents.core.contracts.knowledge import FactKind
 from tiramisu_agents.core.contracts.processes import AgentTurnInput, ProcessSnapshot, ProcessStatus
 from tiramisu_agents.projects import (
     Capability,
+    Communications,
     Fact,
     GeneratedAgentDecisionOutput,
     Journey,
@@ -64,8 +65,10 @@ def _project() -> Project:
         goals=("Resolve the customer's problem",),
         capabilities=(capability.action_type,),
         complete_when=(CASE_STATUS.equals("resolved"),),
-        outbound_action_types=(capability.action_type,),
-        reply_event_types=("customer.replied",),
+        communications=Communications(
+            outbound_actions=(capability.action_type,),
+            customer_reply_events=("customer.replied",),
+        ),
     )
     return Project(
         id="support_demo",
@@ -145,10 +148,16 @@ def test_project_compiles_all_runtime_and_business_metadata() -> None:
     assert pack.definition.allowed_wake_events == ("customer.replied", "case.resolved")
     assert pack.definition.completion_requirements == {"case.status": "resolved"}
     assert pack.definition.integrations == {"send_reply": "stub.actions.v1"}
+    assert pack.definition.communications.outbound_action_types == ("send_reply",)
+    assert pack.definition.communications.reply_event_types == ("customer.replied",)
     assert pack.project is not None
     assert pack.project.journeys[0].scenarios[0].title == "Case resolved"
     assert pack.project.journeys[0].facts[0].operator_editable is True
+    assert pack.project.journeys[0].communications.outbound_action_types == ("send_reply",)
+    assert pack.project.journeys[0].limits.max_outbound_messages_per_process == 50
     assert "case.status must equal" in pack.definition.compile_instructions()
+    assert "Communication safety" in pack.definition.compile_instructions()
+    assert "50 over the process lifetime" in pack.definition.compile_instructions()
 
 
 def test_generated_output_is_strict_and_converts_to_a_trusted_decision() -> None:

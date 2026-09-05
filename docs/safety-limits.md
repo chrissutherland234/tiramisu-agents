@@ -1,6 +1,6 @@
 # Platform safety limits
 
-Last reviewed: 2026-09-03
+Last reviewed: 2026-09-05
 
 Tiramisu applies deterministic hard ceilings to untrusted semantic data and every assembled
 agent turn. These are platform safety maxima, not prompt instructions. A future tenant or process
@@ -57,10 +57,36 @@ correction feedback, and serialization around the already-bounded context.
 - Provider-declared action conflicts are rejected at contract construction if their fact count,
   encoded message, or complete structured outcome exceeds the platform envelope.
 
+## Configurable communication and lifetime limits
+
+Client journeys classify outbound actions plus genuine-reply, opt-out, and automated-response event
+types. The deterministic gateway and provider execution fence enforce:
+
+- A permanent process-local contact block after a matched opt-out event.
+- Contact suppression when the latest classified inbound response is automated, reset only by a
+  later genuine human reply.
+- Start-inclusive, end-exclusive daily quiet hours in one configured IANA timezone, including
+  overnight intervals.
+- A rolling outbound-message limit, a total process-message limit, a maximum number of follow-ups
+  without reply, and minimum follow-up spacing.
+- A maximum process lifetime before model proposals, action reservation, and provider execution.
+
+Accepted, pending-approval, approved, executing, successful, ambiguous, and reconciling action
+requests reserve message capacity. Rejected, denied, superseded, and definitively failed actions do
+not. Unknown provider outcomes remain reserved because a message may have escaped. Counts come from
+the PostgreSQL action ledger rather than resettable workflow counters, so retries, restarts, and
+Continue-As-New cannot replenish them. New reservations serialize on the process row, and matched
+event ingestion uses the same fence as final action execution so a committed opt-out cannot be
+overtaken by a provider call.
+
+These controls are process-local. Cross-process/channel customer consent, recipient-specific
+timezones, tenant-configured lower platform ceilings, and global throughput quotas remain required
+before production messaging.
+
 ## Deliberate remaining work
 
 These limits do not yet provide an ASGI/web-server raw request-body cap, attachment streaming
-limits, general successful provider-response limits, model token/cost budgets, process-lifetime
-budgets, tenant-specific lower ceilings, or per-tenant throughput/back-pressure quotas. Raw transport limits are required
-before public production ingress. Token, cost, rate, and lifetime budgets belong to the next
-autonomy-budget milestone and must be durable across Continue-As-New.
+limits, general successful provider-response limits, model token/cost budgets, tenant-specific lower
+ceilings, cross-process consent, or per-tenant throughput/back-pressure quotas. Raw transport limits
+are required before public production ingress. Token/cost budgets and tenant/platform circuit
+breakers are the remaining autonomy-budget milestone and must be durable across Continue-As-New.

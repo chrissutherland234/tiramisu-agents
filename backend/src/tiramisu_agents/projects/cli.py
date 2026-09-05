@@ -115,6 +115,43 @@ def describe_project(target: str, *, as_json: bool = False) -> str:
                 lines.append(f"    - {capability.title} ({capability.action_type}; {permission})")
         else:
             lines.append("  Can: observe only; no business actions")
+        communications = journey.communications
+        if communications.outbound_action_types:
+            lines.append("  Customer-contact safety:")
+            lines.append(
+                "    - Contact actions: " + ", ".join(communications.outbound_action_types)
+            )
+            if communications.reply_event_types:
+                lines.append(
+                    "    - Genuine replies: " + ", ".join(communications.reply_event_types)
+                )
+            if communications.opt_out_event_types:
+                lines.append("    - Opt-outs: " + ", ".join(communications.opt_out_event_types))
+            if communications.automated_response_event_types:
+                lines.append(
+                    "    - Automated responses: "
+                    + ", ".join(communications.automated_response_event_types)
+                )
+            if communications.quiet_hours is not None:
+                quiet = communications.quiet_hours
+                lines.append(
+                    "    - Quiet hours: "
+                    f"{quiet.start_local.isoformat(timespec='minutes')}–"
+                    f"{quiet.end_local.isoformat(timespec='minutes')} {quiet.timezone}"
+                )
+            limits = journey.limits
+            lines.append(
+                f"    - Contact budget: {limits.max_outbound_messages_per_window} per "
+                f"{limits.outbound_message_window_hours} hours; "
+                f"{limits.max_outbound_messages_per_process} for the whole journey"
+            )
+            lines.append(
+                f"    - Follow-ups: {limits.max_follow_ups_without_reply} without a reply; "
+                f"at least {limits.minimum_follow_up_interval_hours} hours apart"
+            )
+        lines.append(
+            f"  Maximum journey lifetime: {journey.limits.maximum_process_lifetime_days} days"
+        )
         lines.append("  Completes when:")
         facts = {fact.key: fact for fact in journey.facts}
         for key, expected in sorted(journey.completion_requirements.items()):

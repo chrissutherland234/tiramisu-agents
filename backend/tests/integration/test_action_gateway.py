@@ -394,6 +394,7 @@ async def test_gateway_is_idempotent_hash_bound_and_tenant_isolated() -> None:
             ),
             compatibility,
             TEST_DEPLOYMENT_RELEASE,
+            ProcessDefinitionRegistry([definition]),
         )
         async with admin_factory.begin() as session:
             process = await session.get(ProcessInstance, ingested.process_instance_id)

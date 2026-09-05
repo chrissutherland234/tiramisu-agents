@@ -1,7 +1,7 @@
 # Tiramisu — Long-Running Business Agents Project Plan
 
 Status: Draft  
-Last updated: 2026-09-04
+Last updated: 2026-09-05
 
 Working project name: **Tiramisu**  
 Name rationale: “Pick me up” reflects agents waking from durable waits and continuing with the same context. The layered dessert also reflects the platform's workflow, memory, policy, and integration layers.
@@ -655,7 +655,7 @@ Avoid a generic JSON/EAV `business_objects` store unless a concrete client requi
 
 Testing is designed around an integration-free kernel, provider contracts, deterministic Temporal orchestration, and a separate layer of probabilistic agent evaluation.
 
-Current baseline: 176 backend tests (122 unit/contract, 50 PostgreSQL or Temporal integration, and 4 committed-history replay cases), 3 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exhaustive tenant-table RLS/grant enforcement, exact approval/action fencing, typed provider-conflict recovery, tenant Activity authorization, deterministic Temporal race ordering, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, and identical compiled safe-adapter scenarios through both shared kernel transitions and the real PostgreSQL/Temporal path. Configuration evolution, agent behavior, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
+Current baseline: 200 backend tests (140 unit/contract, 56 PostgreSQL or Temporal integration, and 4 committed-history replay cases), 3 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exhaustive tenant-table RLS/grant enforcement, exact approval/action fencing, typed provider-conflict recovery, deterministic process-local communication/lifetime safety, tenant Activity authorization, deterministic Temporal race ordering, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, and identical compiled safe-adapter scenarios through both shared kernel transitions and the real PostgreSQL/Temporal path. Configuration evolution, agent behavior, cross-process consent, token/cost budgets, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
 
 ### Layer 1 — Pure kernel tests
 
@@ -845,7 +845,9 @@ The exact packaging boundary remains intentionally simple until the first vertic
 - [x] Define initial canonical event, action, wake-condition, review-command, and agent-decision contracts.
 - [x] Define the initial provider-neutral action port and explicit adapter registry contracts.
 - [ ] Threat-model tenant isolation, webhooks, prompts, tools, and credentials.
-- [ ] Define minimum autonomy, communication, cost, and process-lifetime budgets.
+- [ ] Define minimum autonomy, communication, cost, and process-lifetime budgets. Conservative
+  process communication/rate/lifetime defaults and hard upper bounds are now compiled from client
+  journeys; model token/cost budgets and tenant/platform circuit-breaker thresholds remain.
 - [x] Decide how client packs, tenants, API deployments, worker task queues, provider credentials, upgrades, and rollbacks map to one another: one immutable deployment and Temporal task queue per client pack, or per intentional identical-pack tenant group (ADR-011).
 - [x] Confirm MIT licensing, public contribution policy, and the public/private client-pack boundary.
 
@@ -879,7 +881,12 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Add a tenant-allow-listed Temporal outbox delivery worker with recoverable claims, bounded retries, explicit dead letters, attributed/idempotent requeue, recovery history, and idempotent Signal-With-Start delivery.
 - [ ] Add operator-driven quarantine resolution and replay.
 - [x] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations, including exact action-result provenance and immutable evidence-backed operator resolution.
-- [ ] Add autonomy budgets, communication policy, and rate limits. Initial deterministic outbound follow-up count/interval policy and reply resets are enforced, an audited tenant suspension control gates ingress, dispatch, model calls, and provider side effects, and hard semantic data/context limits are in place; durable budgets, operational quotas, and capability-specific circuit breakers remain.
+- [ ] Add autonomy budgets, communication policy, and rate limits. Process-local opt-out,
+  automated-response suppression with genuine-reply reset, local quiet hours, durable rolling and
+  total message reservations, follow-up count/spacing, and maximum process lifetime are enforced at
+  proposal and provider boundaries. An audited tenant suspension control and hard semantic
+  data/context limits are also in place; model token/cost budgets, cross-process consent,
+  tenant/platform throughput quotas, and capability-specific circuit breakers remain.
 - [ ] Add data classification, log/trace redaction, Temporal payload encryption hooks, and retention configuration.
 - [ ] Add explicit byte/count/token ceilings for ingress events, facts, action parameters, review context, commitments, and rendered model context. Hard semantic byte/count maxima, pre-persistence validation, prospective fact/context preflight, pre-provider prompt checks, and fail-closed intervention are complete; raw HTTP body/attachment controls, provider-response limits, tenant-specific lower ceilings, and durable model token/cost budgets remain.
 - [x] Add formatting, linting, strict static typing, unit tests, dependency lockfiles, and CI.
@@ -904,7 +911,14 @@ The following architecture decision records are gates for the durable kernel:
 - [ ] Implement durable review threads, revision/supersession, bounded operator-agent turns, approval Signals, operator Updates, and status Queries. Durable threads, attributed messages, exact approve/reject transitions, row-lock serialization, idempotent commands, supersession requests, transactional outbox Signals, bounded review context, replacement-turn provenance, and automatic workflow turns are complete; operator Updates and richer Queries remain.
 - [ ] Implement action attempts, bounded retries, idempotent execution, ambiguous outcomes, and reconciliation. Durable attempts, stable payload-bound idempotency keys, exact approval revalidation, autonomous/approved stub execution, lookup-only automatic reconciliation, typed and size-bounded conflict outcomes, crash-safe conflict lookup, unchanged-conflict re-proposal rejection, action-result turns, and evidence-backed operator resolution are complete; delayed/background schedules, multi-attempt policy, backoff, backlog operations, and compensation remain.
 - [ ] Implement the tenant integration registry and provider bindings. An explicit in-memory action-type registry and provider-neutral adapter contract are complete; tenant-configured bindings and credential resolution remain.
-- [ ] Implement budget, communication-policy, and safety-boundary enforcement. Initial follow-up count/interval policy, configured reply resets, deployment-tenant Activity authorization, lifecycle fencing, approval expiry, tenant suspension, and hard semantic data/context ceilings are enforced; durable budgets, raw transport limits, and platform/capability circuit breakers remain.
+- [ ] Implement budget, communication-policy, and safety-boundary enforcement. The compiled
+  client-pack contract now classifies outbound, genuine-reply, opt-out, and automated-response
+  types. Process-local consent/loop suppression, local quiet hours, durable message reservations,
+  rolling/total/follow-up limits use one pure evaluator in scenarios and at proposal/final provider
+  boundaries; process lifetime additionally blocks model calls. Deployment-tenant authorization,
+  lifecycle fencing, approval expiry, tenant suspension, and semantic data/context ceilings are
+  also enforced; token/cost budgets, raw transport limits, cross-process consent, operational
+  quotas, and platform/capability circuit breakers remain.
 - [ ] Implement Continue-As-New with complete mailbox, wait, version, approval, and budget carry-forward. Versioned rollover now preserves active mailbox buffers, delivery deduplication, recent diagnostics, pending approvals, absolute timers, process-definition identity, and lifetime counters; budget carry-forward awaits the budget model.
 - [x] Add Temporal replay and failure-recovery tests. Committed signal/wait and Activity-backed Continue-As-New histories replay in CI; worker restart, rollover carry-forward, and retry-isolation tests cover the initial recovery surface. The broader failure matrix in the testing strategy remains ongoing.
 - [ ] Add committed replay histories for approval/revision, reconciliation, intervention/retry, takeover, suspension, and terminal closure, plus the timer/event, control/turn, review/turn, and event/action-result race matrix. Reserved manual-wake ordering and takeover-during-turn histories are now committed alongside the original and Continue-As-New histories; the complete matrix also runs live against the time-skipping server.
@@ -926,13 +940,13 @@ Recommended initial journey:
 - [x] Run the same compiled complete journey through both the integration-free kernel and the full PostgreSQL + Temporal path with stub messaging, booking, payment, and calendar providers.
 - [ ] Run agent behavior evaluations against the same stubbed journey.
 - [x] Demonstrate recovery after fresh worker and Activity compositions restart at the reference journey's review/wait boundaries.
-- [ ] Demonstrate quarantine resolution, ambiguous provider reconciliation, opt-out, message-loop prevention, and budget exhaustion.
+- [ ] Demonstrate quarantine resolution, ambiguous provider reconciliation, opt-out, message-loop prevention, and budget exhaustion. Focused kernel/PostgreSQL tests now demonstrate communication suppression and message/lifetime exhaustion; authored full-journey negative scenarios, quarantine resolution, and ambiguous reconciliation demonstrations remain.
 - [ ] Only after the stubbed journey passes, add one real provider integration and run the shared contract and sandbox suites.
 
 ### Phase 4 — Configurable client processes
 
 - [x] Add immutable process-definition contracts, validation, fingerprinting, trigger resolution, and deterministic policy/instruction compilation.
-- [x] Add the opinionated `Project`/`Journey`/`Route`/`Capability`/`Fact`/`Scenario` authoring framework, derived manifests and strict output schemas, `startproject`/`check`/`describe`, a migrated fictional journey, and a separately editable support example in CI (ADR-012).
+- [x] Add the opinionated `Project`/`Journey`/`Route`/`Capability`/`Fact`/`Communications`/`Scenario` authoring framework, derived manifests and strict output schemas, `startproject`/`check`/`describe`, a migrated fictional journey, and a separately editable support example in CI (ADR-012).
 - [ ] Add the process-definition draft, validation, evaluation, approval, publication, and retirement lifecycle.
 - [ ] Add client-pack installation, compatibility validation, enable/disable, audit, and deployment composition. Explicit `module:attribute` loading from an installed/editable package, the validated public `ClientPack` contract, conventional author tooling, an independently authored editable-package example, shared API/worker composition, deterministic release identity/queues, and durable audited tenant assignment are complete. Persisted installation inventory, runtime enable/disable, provider credential resolution, ingress routing, and richer lifecycle controls remain.
 - [x] Enforce published-only production process triggers and fingerprint-bound definition identities. Draft/retired definitions cannot install real triggers, and same-version behavior drift fails closed for active instances. An explicit draft simulation mode and audited active-instance migration remain separate work.
@@ -1154,13 +1168,16 @@ Status: Accepted and implemented. Recorded in ADR-011 on 2026-08-31; release ide
 
 The initial executable milestone—fictional enquiry through booking, payment, calendar, and completion—is working through both an integration-free demonstration and the real PostgreSQL/Temporal path. ADR-011's release boundary now makes that foundation safe to evolve across rolling pack releases. The next milestone is:
 
-1. Complete the autonomy and communication safety envelope: opt-out, quiet hours, auto-responder/loop detection, rate, cost, token, and process-lifetime budgets. Semantic ingress/context byte and count bounds are complete; raw transport and provider-response limits remain part of production hardening.
+1. Complete durable model token/cost accounting and budgets plus tenant/platform/capability circuit
+   breakers. The process-local outbound communication/rate/lifetime envelope is complete; shared
+   cross-process consent and recipient-specific timezones remain explicit production messaging
+   gates.
 2. Implement quarantine resolution and replay with operator visibility.
 3. Add isolated draft simulation, evaluation records, and publication gates on top of the shared scenario drivers.
 4. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
 5. Expand committed operational histories and generalized data-bearing migration fixtures as described in [`docs/testing.md`](docs/testing.md).
 
-D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), and D-012 (data/compliance requirements) remain explicit gates before production integrations. D-014 is implemented as ADR-011. A GitHub-issue triage/Codex handoff pack is a useful later validation of that boundary once the communication safety envelope is in place.
+D-001 (reference industry and completion criteria), D-003 (real-world autonomy), D-005 (production Temporal deployment), and D-012 (data/compliance requirements) remain explicit gates before production integrations. D-014 is implemented as ADR-011. Now that the communication safety envelope is in place, a GitHub-issue triage/Codex handoff pack remains a useful later validation of that boundary rather than the next product milestone.
 
 ## 19. Design references
 
