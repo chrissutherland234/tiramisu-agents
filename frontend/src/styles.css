@@ -404,3 +404,23 @@ pre { font-size: 12px; }
   .dashboard-row { align-items: start; flex-direction: column; gap: 9px; }
   .dashboard-row-meta { justify-content: start; }
 }
+
+.quarantine-shell { max-width: 1600px; }
+.quarantine-toolbar { margin: 24px 0; }
+.quarantine-grid { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr); gap: 24px; align-items: start; }
+.quarantine-event { width: 100%; padding: 16px; border: 0; border-bottom: 1px solid #d7ccc1; border-radius: 6px; text-align: left; cursor: pointer; background: transparent; color: inherit; font: inherit; }
+.quarantine-event.selected { background: #ece4d9; }
+.quarantine-event small, .quarantine-references a, .quarantine-references span { display: block; margin-top: 5px; }
+.quarantine-event span, .quarantine-detail { min-width: 0; overflow-wrap: anywhere; }
+.quarantine-detail pre { max-height: 400px; overflow: auto; white-space: pre-wrap; font-size: 12px; }
+.quarantine-detail h3 { margin-top: 24px; }
+.quarantine-detail form > label { display: grid; gap: 8px; margin: 18px 0; }
+.quarantine-detail input:not([type="checkbox"]), .quarantine-detail textarea, .quarantine-detail select { width: 100%; box-sizing: border-box; }
+.quarantine-detail textarea { min-height: 100px; }
+.quarantine-detail fieldset { margin-top: 18px; border: 1px solid #d7ccc1; }
+.quarantine-checkbox { display: flex; gap: 8px; align-items: start; margin: 12px 0; }
+.quarantine-checkbox input { flex-shrink: 0; }
+.quarantine-references { padding-left: 20px; }
+.quarantine-references li { margin: 12px 0; }
+.quarantine-pagination { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-top: 20px; }
+@media (max-width: 800px) { .quarantine-grid { grid-template-columns: 1fr; } }

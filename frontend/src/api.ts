@@ -243,3 +243,76 @@ export const operatorApi = {
       }),
     }),
 };
+
+export interface ExternalReference {
+  provider: string;
+  resource_type: string;
+  external_id: string;
+}
+
+export interface EventResolution {
+  id: string;
+  event_id: string;
+  process_instance_id: string;
+  actor_id: string;
+  reason: string;
+  previous_status: string;
+  previous_reason: string | null;
+  bound_references: ExternalReference[];
+  delivery_scheduled: boolean;
+  created_at: string;
+}
+
+export interface QuarantineSummary {
+  id: string;
+  event_type: string;
+  source: string;
+  source_event_id: string;
+  correlation_status: string;
+  correlation_reason: string | null;
+  process_instance_id: string | null;
+  received_at: string;
+  resolution: EventResolution | null;
+}
+
+export interface QuarantinePage {
+  items: QuarantineSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  can_resolve: boolean;
+}
+
+export interface QuarantineDetail extends QuarantineSummary {
+  event: {
+    event_id: string;
+    process_instance_id: string | null;
+    occurred_at: string;
+    sensitivity: string;
+    facts: Record<string, unknown>[];
+    payload: Record<string, unknown>;
+    external_references: ExternalReference[];
+  };
+  references: { reference: ExternalReference; process_instance_id: string | null }[];
+  candidates: { id: string; process_type: string; status: string; deployment_id: string }[];
+  can_resolve: boolean;
+}
+
+export interface ResolveQuarantineRequest {
+  command_id: string;
+  process_instance_id: string;
+  reason: string;
+  bind_references: ExternalReference[];
+}
+
+export const quarantineApi = {
+  list: (credentials: OperatorCredentials, state: "unresolved" | "resolved", offset = 0) =>
+    request<QuarantinePage>(`/v1/quarantine?state=${state}&offset=${offset}&limit=25`, credentials),
+  get: (credentials: OperatorCredentials, eventId: string) =>
+    request<QuarantineDetail>(`/v1/quarantine/${eventId}`, credentials),
+  resolve: (credentials: OperatorCredentials, eventId: string, body: ResolveQuarantineRequest) =>
+    request<EventResolution>(`/v1/quarantine/${eventId}/resolve`, credentials, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+};

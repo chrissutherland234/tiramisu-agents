@@ -69,22 +69,9 @@ class EventIngestionService:
             raise ReservedKernelEventType(
                 f"event type is reserved for kernel use: {event.event_type}"
             )
-        await lock_tenant_deployment_for_ingress(session, event.tenant_id)
-        await set_tenant_context(session, event.tenant_id)
-        tenant_row = (
-            await session.execute(
-                select(Tenant.status, Tenant.deployment_id).where(Tenant.id == event.tenant_id)
-            )
-        ).one_or_none()
-        if tenant_row is None:
-            raise TenantNotFound(str(event.tenant_id))
-        tenant_status, assigned_deployment = tenant_row
-        if deployment_id is not None and assigned_deployment != deployment_id:
-            raise TenantNotAuthorized(str(event.tenant_id))
-        if tenant_status != "active":
-            raise TenantSuspended(str(event.tenant_id))
+        await self.require_ingress_tenant(session, event.tenant_id, deployment_id=deployment_id)
 
-        await self._lock_source_event_key(session, event)
+        await self.lock_source_event_key(session, event)
         existing = await self._existing_result(session, event)
         if existing is not None:
             return existing
@@ -94,10 +81,10 @@ class EventIngestionService:
                 "a process-triggering event requires an external reference"
             )
         if event.external_references:
-            await self._lock_correlation_keys(session, event.tenant_id, event.external_references)
+            await self.lock_correlation_keys(session, event.tenant_id, event.external_references)
 
         process_id, status, reason = await self._resolve_process(session, event)
-        if process_id is None and status == "pending" and bootstrap is not None:
+        if process_id is None and reason == "no_process_match" and bootstrap is not None:
             process_id = await self._create_process(session, event.tenant_id, bootstrap)
             status = "matched"
             reason = "process_created_from_trigger"
@@ -115,7 +102,7 @@ class EventIngestionService:
                     )
                 reason = "terminal_process_record_only"
                 deliver_to_workflow = False
-            await self._persist_references(
+            await self.persist_references(
                 session,
                 tenant_id=event.tenant_id,
                 process_id=process_id,
@@ -147,26 +134,7 @@ class EventIngestionService:
 
         outbox_id: UUID | None = None
         if process_id is not None and status == "matched" and deliver_to_workflow:
-            workflow_id = await session.scalar(
-                select(ProcessInstance.workflow_id).where(ProcessInstance.id == process_id)
-            )
-            if workflow_id is None:
-                raise RuntimeError("matched process has no workflow identity")
-            outbox_id = uuid4()
-            await session.execute(
-                insert(OutboxMessage)
-                .values(
-                    id=outbox_id,
-                    tenant_id=event.tenant_id,
-                    process_instance_id=process_id,
-                    causation_event_id=event.event_id,
-                    message_type="temporal.process_event",
-                    destination=workflow_id,
-                    deduplication_key=f"process-event:{event.event_id}",
-                    payload={"event_id": str(event.event_id), "event_type": event.event_type},
-                )
-                .on_conflict_do_nothing(constraint="uq_outbox_messages_dedup")
-            )
+            outbox_id = await self.schedule_delivery(session, event, process_id)
 
         return IngestionResult(
             event_id=inserted_id,
@@ -176,6 +144,63 @@ class EventIngestionService:
             process_instance_id=process_id,
             outbox_message_id=outbox_id,
         )
+
+    async def require_ingress_tenant(
+        self, session: AsyncSession, tenant_id: UUID, *, deployment_id: str | None = None
+    ) -> str:
+        await lock_tenant_deployment_for_ingress(session, tenant_id)
+        await set_tenant_context(session, tenant_id)
+        row = (
+            await session.execute(
+                select(Tenant.status, Tenant.deployment_id).where(Tenant.id == tenant_id)
+            )
+        ).one_or_none()
+        if row is None:
+            raise TenantNotFound(str(tenant_id))
+        tenant_status, assigned_deployment = row
+        if deployment_id is not None and assigned_deployment != deployment_id:
+            raise TenantNotAuthorized(str(tenant_id))
+        if tenant_status != "active":
+            raise TenantSuspended(str(tenant_id))
+        return assigned_deployment
+
+    async def schedule_delivery(
+        self, session: AsyncSession, event: CanonicalEvent, process_id: UUID
+    ) -> UUID:
+        """Schedule the original event using the same durable identity on every path."""
+        workflow_id = await session.scalar(
+            select(ProcessInstance.workflow_id).where(
+                ProcessInstance.tenant_id == event.tenant_id, ProcessInstance.id == process_id
+            )
+        )
+        if workflow_id is None:
+            raise RuntimeError("matched process has no workflow identity")
+        key = f"process-event:{event.event_id}"
+        inserted = await session.scalar(
+            insert(OutboxMessage)
+            .values(
+                tenant_id=event.tenant_id,
+                process_instance_id=process_id,
+                causation_event_id=event.event_id,
+                message_type="temporal.process_event",
+                destination=workflow_id,
+                deduplication_key=key,
+                payload={"event_id": str(event.event_id), "event_type": event.event_type},
+            )
+            .on_conflict_do_nothing(constraint="uq_outbox_messages_dedup")
+            .returning(OutboxMessage.id)
+        )
+        if inserted is not None:
+            return inserted
+        existing = await session.scalar(
+            select(OutboxMessage).where(
+                OutboxMessage.tenant_id == event.tenant_id,
+                OutboxMessage.deduplication_key == key,
+            )
+        )
+        if existing is None or existing.process_instance_id != process_id:
+            raise RuntimeError("event delivery identity conflicts with its destination")
+        return existing.id
 
     async def _existing_result(
         self, session: AsyncSession, event: CanonicalEvent
@@ -275,7 +300,7 @@ class EventIngestionService:
         await session.flush()
         return process_id
 
-    async def _persist_references(
+    async def persist_references(
         self,
         session: AsyncSession,
         *,
@@ -327,11 +352,11 @@ class EventIngestionService:
         if additions:
             await session.flush()
 
-    async def _lock_source_event_key(self, session: AsyncSession, event: CanonicalEvent) -> None:
+    async def lock_source_event_key(self, session: AsyncSession, event: CanonicalEvent) -> None:
         key = f"event:{event.tenant_id}:{event.source}:{event.source_event_id}"
         await self._advisory_lock(session, key)
 
-    async def _lock_correlation_keys(
+    async def lock_correlation_keys(
         self,
         session: AsyncSession,
         tenant_id: UUID,

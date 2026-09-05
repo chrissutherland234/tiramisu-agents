@@ -22,6 +22,7 @@ from tiramisu_agents.db.models.actions import (
 from tiramisu_agents.db.models.breakers import CircuitBreaker
 from tiramisu_agents.db.models.events import (
     EventInbox,
+    EventResolutionCommand,
     ExternalCorrelation,
     OutboxMessage,
     OutboxRecoveryCommand,
@@ -71,6 +72,7 @@ _TENANT_TABLES = (
     "review_messages",
     "model_usage_ledger",
     "circuit_breakers",
+    "event_resolution_commands",
 )
 
 _CONTROL_PLANE_READ_ONLY_TABLES = frozenset(
@@ -436,6 +438,17 @@ async def _seed_tenant_graph(session: AsyncSession, tenant_id: UUID) -> None:
                 output_tokens=50,
                 cost_micros=1000,
                 price_table_version=1,
+            ),
+            EventResolutionCommand(
+                tenant_id=tenant_id,
+                event_id=event_id,
+                process_instance_id=process_id,
+                actor_id=actor_id,
+                reason="Exercise quarantine audit isolation",
+                previous_status="pending",
+                previous_reason="no_process_match",
+                bound_references=[],
+                delivery_scheduled=True,
             ),
             CircuitBreaker(
                 tenant_id=tenant_id,

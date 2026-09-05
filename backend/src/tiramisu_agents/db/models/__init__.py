@@ -14,6 +14,7 @@ from tiramisu_agents.db.models.actions import (
 from tiramisu_agents.db.models.breakers import CircuitBreaker
 from tiramisu_agents.db.models.events import (
     EventInbox,
+    EventResolutionCommand,
     ExternalCorrelation,
     OutboxMessage,
     OutboxRecoveryCommand,
@@ -43,6 +44,7 @@ __all__ = [
     "ApprovalDecision",
     "CircuitBreaker",
     "EventInbox",
+    "EventResolutionCommand",
     "ExternalCorrelation",
     "ModelUsageLedger",
     "OutboxMessage",

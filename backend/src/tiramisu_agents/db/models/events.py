@@ -5,6 +5,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
@@ -173,6 +174,42 @@ class OutboxRecoveryCommand(UUIDPrimaryKeyMixin, Base):
     previous_dead_lettered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class EventResolutionCommand(UUIDPrimaryKeyMixin, Base):
+    """Immutable operator attribution for the original quarantined event."""
+
+    __tablename__ = "event_resolution_commands"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "event_id"],
+            ["event_inbox.tenant_id", "event_inbox.id"],
+            name="fk_event_resolution_commands_event",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "process_instance_id"],
+            ["process_instances.tenant_id", "process_instances.id"],
+            name="fk_event_resolution_commands_process",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "event_id", name="uq_event_resolution_commands_event"),
+        CheckConstraint("previous_status IN ('pending', 'rejected')", name="previous_status_valid"),
+        Index("ix_event_resolution_commands_created", "tenant_id", "created_at", "id"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    event_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    process_instance_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    actor_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    previous_reason: Mapped[str | None] = mapped_column(String(500))
+    bound_references: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    delivery_scheduled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

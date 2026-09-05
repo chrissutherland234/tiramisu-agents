@@ -13,6 +13,7 @@ from tiramisu_agents.api.deployment import compose_deployment_release
 from tiramisu_agents.api.events import router as events_router
 from tiramisu_agents.api.outbox import router as outbox_router
 from tiramisu_agents.api.processes import router as processes_router
+from tiramisu_agents.api.quarantine import router as quarantine_router
 from tiramisu_agents.api.settings import Settings, get_settings
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.events.ingestion import ProcessBootstrap
@@ -133,6 +134,7 @@ def create_app(
     app.include_router(events_router)
     app.include_router(processes_router)
     app.include_router(outbox_router)
+    app.include_router(quarantine_router)
 
     return app
 

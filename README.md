@@ -21,7 +21,8 @@ The project is in its foundation phase. See [PLAN.md](PLAN.md), the [testing str
 2. Run `uv sync --all-groups`.
 3. Run `docker compose up -d --wait` to start PostgreSQL and the persistent Temporal development server.
 4. Run `uv run alembic upgrade head` with the migration/admin database URL.
-5. Run `uv run pytest`.
+5. Run `bash scripts/test-local.sh quick` for unit/component tests, or
+   `bash scripts/test-local.sh` for full local checks against an isolated test database.
 6. Run `uv run tiramisu-api` for the API.
 7. From `frontend`, run `npm install` and `npm run dev`.
 
@@ -33,6 +34,33 @@ sample enquiry event.
 The API uses a least-privilege `tiramisu_app` database role; Alembic uses the separate local admin role. Every application transaction must call `set_tenant_context` before accessing tenant-owned tables. The PostgreSQL integration test is opt-in locally with `TIRAMISU_RUN_DB_TESTS=1`. Temporal's mailbox test uses the official time-skipping test server; an offline or predownloaded binary can be selected with `TEMPORAL_TEST_SERVER_PATH`. No test needs an OpenAI key. The bundled fictional project is ordinary importable Python, so API and worker composition does not depend on the launch directory.
 
 The pure kernel and scripted-agent tests remain integration-free: they require no Docker, Temporal, PostgreSQL, network access, or provider credentials.
+
+## Running tests
+
+```bash
+bash scripts/test-local.sh quick     # Backend unit + Vue tests; no Docker
+bash scripts/test-local.sh           # Full backend/client/frontend checks
+bash scripts/test-local.sh backend   # Full backend checks only
+bash scripts/test-local.sh frontend  # Vue tests + TypeScript + production build
+```
+
+The full backend runner starts a separate PostgreSQL container from `compose.test.yaml`,
+using `tiramisu_test` on port **15432**, and applies/checks migrations before testing.
+It overrides development database URLs for the test process. Set
+`TIRAMISU_TEST_POSTGRES_PORT` if 15432 is occupied. Temporal tests start their own
+time-skipping server; the persistent development Temporal service is unnecessary.
+The runner installs locked dependencies with `uv sync` and `npm ci`; use the same
+Node 24 LTS environment as CI. Browser smoke tests remain a separate
+`npm run test:operator-smoke` command from `frontend` against a migrated test database.
+
+For the shortest backend-only feedback loop after dependency setup:
+
+```bash
+uv run pytest backend/tests/unit -q
+```
+
+Stop the isolated database without deleting its data:
+`docker compose -f compose.test.yaml down`.
 
 ## Agent-turn foundation
 
@@ -67,6 +95,11 @@ The current process projection separates provider/event-sourced authoritative fa
 The Vue operator console lists tenant processes and pending reviews, then presents the selected process's durable wake plan, memory, facts and claims, commitments, and combined event/decision/action/review timeline. Operators can comment, approve the exact payload, reject it, provide revision feedback for another bounded agent turn, inspect dead-lettered deliveries, open their related process, and requeue them with a required audit reason. The API has an initial tenant-bound bearer credential baseline with endpoint scopes, approval roles, expiry, revocation, and tenant suspension. The current Vue identity form remains development-only; a production browser session and external identity-provider integration are still required.
 
 The provider-neutral execution stage writes an action attempt before calling the provider, uses a stable payload-bound idempotency key, revalidates exact human approval immediately before dispatch, and distinguishes definitive failure, a definitive resource/state conflict, and an ambiguous outcome. A conflict is persisted with bounded structured details and authoritative facts, is recoverable through lookup after a platform crash without repeating the provider operation, and drives one bounded follow-up turn. The deterministic policy and persistence gateway reject an unchanged re-proposal from that result turn, while allowing a genuinely different proposal or a later fact-driven turn. An unknown outcome triggers a lookup-only reconciliation Activity that cannot repeat the side effect. If the provider still cannot establish the truth, an operator may resolve it only with an immutable, attributed evidence record. That resolution is delivered transactionally through the outbox to the same Temporal mailbox and becomes authoritative context for another bounded agent turn.
+
+Unmatched or ambiguous events can be inspected and resolved in the **Event quarantine** console.
+Resolution records an immutable operator audit and replays the original event through normal
+delivery; selected unassigned references can route future arrivals. See [event quarantine and
+replay](docs/event-quarantine.md) for API scopes, retry semantics, and terminal-event handling.
 
 Temporal outbox delivery uses claim tokens, exponential retries, and an explicit dead-letter state after bounded exhaustion. Credentials with `outbox:read` can inspect dead letters and recovery history; `outbox:requeue` authorizes an attributed, idempotent requeue. Requeue starts a fresh bounded attempt cycle while preserving the prior attempt count, error, timestamp, reason, and actor in immutable recovery history.
 

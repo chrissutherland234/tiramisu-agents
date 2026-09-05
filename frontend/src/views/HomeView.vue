@@ -502,6 +502,7 @@ function customerClaimLabel(key: string) {
           :title="syncError || (lastUpdatedAt ? `Last updated ${formatDate(lastUpdatedAt)}` : '')"
           data-testid="sync-status"
         ><i></i>{{ syncLabel }}</span>
+        <a class="topbar-link" href="/quarantine">Event quarantine</a>
         <a href="http://127.0.0.1:8233" target="_blank">Temporal ↗</a>
         <a href="http://127.0.0.1:8000/docs" target="_blank">API ↗</a>
       </div>

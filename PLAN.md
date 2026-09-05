@@ -655,7 +655,7 @@ Avoid a generic JSON/EAV `business_objects` store unless a concrete client requi
 
 Testing is designed around an integration-free kernel, provider contracts, deterministic Temporal orchestration, and a separate layer of probabilistic agent evaluation.
 
-Current baseline: 224 backend tests (153 unit/contract, 67 PostgreSQL or Temporal integration, and 4 committed-history replay cases), 3 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exhaustive tenant-table RLS/grant enforcement, exact approval/action fencing, typed provider-conflict recovery, deterministic process-local communication/lifetime safety, durable model token/cost ledger with pre-call fencing and breaker enforcement, tenant Activity authorization, deterministic Temporal race ordering, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, and identical compiled safe-adapter scenarios through both shared kernel transitions and the real PostgreSQL/Temporal path. Configuration evolution, agent behavior, cross-process consent, platform spend aggregation, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
+Current baseline: 243 backend tests (153 unit/contract, 86 PostgreSQL or Temporal integration, and 4 committed-history replay cases), 3 standalone support-project cases, 10 Vue component cases across 3 files, and 2 live-stack Playwright journeys. The strongest coverage is delivery races, exhaustive tenant-table RLS/grant enforcement, exact approval/action fencing, typed provider-conflict recovery, deterministic process-local communication/lifetime safety, durable model token/cost ledger with pre-call fencing and breaker enforcement, tenant Activity authorization, deterministic Temporal race ordering, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, and identical compiled safe-adapter scenarios through both shared kernel transitions and the real PostgreSQL/Temporal path. Configuration evolution, agent behavior, cross-process consent, platform spend aggregation, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
 
 ### Layer 1 — Pure kernel tests
 
@@ -881,7 +881,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Establish initial tenant-aware API authentication with hash-only, scoped, expirable and revocable deployment credentials. Managed external identity-provider/browser sessions and production database role provisioning remain.
 - [x] Add canonical event inbox, transactional outbox, external correlation registry, and quarantine persistence foundations.
 - [x] Add a tenant-allow-listed Temporal outbox delivery worker with recoverable claims, bounded retries, explicit dead letters, attributed/idempotent requeue, recovery history, and idempotent Signal-With-Start delivery.
-- [ ] Add operator-driven quarantine resolution and replay.
+- [x] Add operator-driven quarantine resolution and replay. Tenant-scoped inspection, immutable attributed resolution, optional late reference binding, atomic original-event dispatch, and operator UI/history are implemented.
 - [x] Add action-request proposal lineage, review-thread/message, approval, attempt, unknown-outcome, and reconciliation foundations, including exact action-result provenance and immutable evidence-backed operator resolution.
 - [ ] Add autonomy budgets, communication policy, and rate limits. Process-local opt-out,
   automated-response suppression with genuine-reply reset, local quiet hours, durable rolling and
@@ -904,7 +904,7 @@ The following architecture decision records are gates for the durable kernel:
 - [x] Implement the initial deterministic process mailbox with event deduplication, replaceable event/timer wake plans, state queries, and time-skipping tests.
 - [x] Implement canonical event ingestion and source-event deduplication.
 - [x] Implement exact correlation, quarantine-on-ambiguity, transactional outbox creation, and safe Signal-With-Start routing.
-- [ ] Implement quarantine resolution, late correlation, and replay.
+- [x] Implement quarantine resolution, late correlation, and replay. Existing reference ownership is preserved; concurrent resolutions and repeated commands deduplicate, and terminal destinations retain record-only behavior.
 - [ ] Implement the single-flight mailbox, event priority, coalescing, and timer/event race handling. Automatic single-flight event, timer, priority-review, action-resolution, and exactly-once logical manual-reevaluation turns are complete; reserved manual wakes supersede the old plan and precede ordinary matching events/timers. The core event/timer, lifecycle-control/turn, review/turn, action-result/event, manual-wake, and Continue-As-New tie rules now have live race coverage. Explicit event batching and richer cancellation semantics remain.
 - [x] Implement the bounded, proposal-only OpenAI Agents SDK Activity, strict output transport, at-most-two validator-guided semantic corrections against one trusted snapshot, bounded PostgreSQL event/review/action-result context loader, deterministic scripted-runner path, and automatic workflow consumption through the action gateway.
 - [x] Implement bounded context assembly, sourced authoritative-fact/customer-claim projection, provenance-checked summaries and commitments, immutable state revisions, and deterministic lifecycle projection.
@@ -946,7 +946,7 @@ Recommended initial journey:
 - [x] Run the same compiled complete journey through both the integration-free kernel and the full PostgreSQL + Temporal path with stub messaging, booking, payment, and calendar providers.
 - [ ] Run agent behavior evaluations against the same stubbed journey.
 - [x] Demonstrate recovery after fresh worker and Activity compositions restart at the reference journey's review/wait boundaries.
-- [ ] Demonstrate quarantine resolution, ambiguous provider reconciliation, opt-out, message-loop prevention, and budget exhaustion. Focused kernel/PostgreSQL tests now demonstrate communication suppression and message/lifetime exhaustion; authored full-journey negative scenarios, quarantine resolution, and ambiguous reconciliation demonstrations remain.
+- [ ] Demonstrate quarantine resolution, ambiguous provider reconciliation, opt-out, message-loop prevention, and budget exhaustion. Focused kernel/PostgreSQL tests now demonstrate communication suppression and message/lifetime exhaustion; authored full-journey negative scenarios, ambiguous reconciliation demonstrations remain; quarantine resolution now has a live browser journey and PostgreSQL/Temporal recovery coverage.
 - [ ] Only after the stubbed journey passes, add one real provider integration and run the shared contract and sandbox suites.
 
 ### Phase 4 — Configurable client processes
@@ -962,7 +962,7 @@ Recommended initial journey:
 - [ ] Add process simulation and validation before publication. Compiled scenarios now execute both without infrastructure and through a reusable PostgreSQL/Temporal driver using generated strict decision schemas, production decision/permission/action-identity rules, explicitly safe stub bindings, exact reviews, virtual time, durable audits, and shared fact/status/wake/completion behavior. Draft isolation, evaluation records, and publication gates remain.
 - [x] Add the initial tenant process list/detail API and operator instance timeline, durable wake-condition, sourced-fact/claim, memory, and commitment UI.
 - [ ] Add the full approval, proposal-diff, review-chat, revision-lineage, and manual-intervention UI. Exact-payload approve/reject/comment/request-revision and intervention retry/wake/takeover/resume controls are complete; Wake is explicitly presented as non-authoritative reevaluation. Diffs, complete thread history, expiry management, typed fact-correction controls, and richer intervention diagnostics remain.
-- [ ] Add event-quarantine, unknown-action, and reconciliation UI.
+- [ ] Add event-quarantine, unknown-action, and reconciliation UI. Event-quarantine inspection, resolution, and history are complete; unknown-action and reconciliation views remain.
 - [x] Define active-instance migration behavior. Existing processes remain pinned to their immutable release while old/new workers coexist; tenant moves require terminal processes and published deliveries. Active-process pin migration is deliberately unsupported until an audited, replay-safe migration command is designed and implemented.
 - [ ] Decide the public distribution name and registry strategy when the extension API is stable; only then publish signed/versioned Python distributions if useful. Container releases may proceed independently.
 
@@ -1180,7 +1180,7 @@ The initial executable milestone—fictional enquiry through booking, payment, c
    deployment platform kill switches are complete; shared cross-process consent,
    recipient-specific timezones, and platform spend aggregation remain explicit production
    messaging gates.
-2. Implement quarantine resolution and replay with operator visibility.
+2. Quarantine resolution and replay with operator visibility are complete: original-event inspection, audited destination selection, optional late reference binding, retry-safe dispatch, and resolution history. See [`docs/event-quarantine.md`](docs/event-quarantine.md).
 3. Add isolated draft simulation, evaluation records, and publication gates on top of the shared scenario drivers.
 4. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.
 5. Expand committed operational histories and generalized data-bearing migration fixtures as described in [`docs/testing.md`](docs/testing.md).

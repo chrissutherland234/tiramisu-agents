@@ -9,6 +9,8 @@ The API accepts `Authorization: Bearer <token>`. A token is bound to one tenant 
 Available scopes are:
 
 - `events:ingest`
+- `quarantine:read`
+- `quarantine:resolve`
 - `processes:read`
 - `reviews:read`
 - `reviews:comment`
@@ -68,6 +70,10 @@ uv run tiramisu-admin set-tenant-status \
 ```
 
 Suspension is independently checked at API authentication, event ingestion, PostgreSQL-to-Temporal dispatch, immediately before a model call, and immediately before a provider side effect. Pending outbox messages and workflows remain durable, and resume when the tenant is explicitly returned to `active`. Lookup-only reconciliation remains available because it does not repeat a side effect.
+
+Quarantine operations use `quarantine:read` for original-event and audit inspection and
+`quarantine:resolve` for attributed resolution/replay. Resolution cannot reassign existing
+reference ownership or select a cross-tenant destination. See [event quarantine](event-quarantine.md).
 
 Outbox operations use separate least-privilege scopes. `outbox:read` permits
 dead-letter and recovery-history inspection; `outbox:requeue` permits an

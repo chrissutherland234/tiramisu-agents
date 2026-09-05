@@ -124,6 +124,7 @@ function shortId(value: string) {
       <nav class="topbar-actions" aria-label="Primary navigation">
         <a class="topbar-link active" href="/">Dashboard</a>
         <a class="topbar-link" href="/processes">Processes</a>
+        <a class="topbar-link" href="/quarantine">Event quarantine</a>
         <a href="http://127.0.0.1:8233" target="_blank">Temporal ↗</a>
         <a href="http://127.0.0.1:8000/docs" target="_blank">API ↗</a>
       </nav>

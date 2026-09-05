@@ -13,6 +13,8 @@ _SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
 
 class CredentialScope(StrEnum):
     EVENTS_INGEST = "events:ingest"
+    QUARANTINE_READ = "quarantine:read"
+    QUARANTINE_RESOLVE = "quarantine:resolve"
     PROCESSES_READ = "processes:read"
     REVIEWS_READ = "reviews:read"
     REVIEWS_COMMENT = "reviews:comment"
