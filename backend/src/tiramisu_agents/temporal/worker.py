@@ -12,10 +12,17 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from tiramisu_agents.actions.execution import ActionExecutor
+from tiramisu_agents.actions.gateway import ActionGateway
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
 from tiramisu_agents.agents.openai_runner import OpenAIAgentsTurnRunner
 from tiramisu_agents.api.deployment import compose_deployment_release
 from tiramisu_agents.api.settings import Settings, get_settings
+from tiramisu_agents.budgets import TenantSpendCaps
+from tiramisu_agents.budgets.pricing import (
+    UnknownModelPrice,
+    require_priced_model,
+    resolve_model_prices,
+)
 from tiramisu_agents.builtin import FictionalDeployment, load_fictional_deployment
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.extensions import ClientPack, DeploymentRelease, load_configured_client_pack
@@ -72,6 +79,12 @@ def _require_agent_model_configuration(settings: Settings) -> None:
         )
     if settings.openai_api_key is None:
         raise ValueError("OPENAI_API_KEY is required when client-pack orchestration is enabled")
+    try:
+        require_priced_model(
+            settings.openai_model, resolve_model_prices(settings.model_price_overrides)
+        )
+    except UnknownModelPrice as error:
+        raise ValueError(str(error)) from error
 
 
 async def serve(
@@ -116,10 +129,19 @@ async def serve(
             compatibility=deployment.compatibility,
             deployment_release=release,
             authorized_tenant_ids=authorized_tenant_ids,
+            model_prices=resolve_model_prices(settings.model_price_overrides),
+            tenant_spend_caps=TenantSpendCaps(
+                max_tokens=settings.max_model_tokens_per_tenant,
+                max_cost_micros=settings.max_model_cost_micros_per_tenant,
+            ),
+            platform_model_calls_paused=settings.platform_model_calls_paused,
         )
         gateway_activities = ActionGatewayActivities(
             session_factory,
             registry,
+            gateway=ActionGateway(
+                platform_outbound_messages_paused=settings.platform_outbound_messages_paused,
+            ),
             deployment_release=release,
             authorized_tenant_ids=authorized_tenant_ids,
         )
@@ -136,6 +158,7 @@ async def serve(
                 deployment.compatibility,
                 release,
                 registry,
+                platform_outbound_messages_paused=settings.platform_outbound_messages_paused,
             ),
             authorized_tenant_ids=authorized_tenant_ids,
         )

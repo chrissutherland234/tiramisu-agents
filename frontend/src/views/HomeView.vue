@@ -733,6 +733,41 @@ function customerClaimLabel(key: string) {
           </p>
         </section>
 
+        <section
+          v-if="selected.model_budget"
+          class="state-card model-budget-card"
+          data-testid="model-budget"
+        >
+          <div class="section-heading">
+            <div><p class="eyebrow">Autonomy spend</p><h3>Model budget</h3></div>
+            <span :class="selected.model_budget.model_allowed_now ? 'status-active' : 'status-review'">
+              {{ selected.model_budget.model_allowed_now ? "Process budget available" : "Budget exhausted" }}
+            </span>
+          </div>
+          <ul v-if="selected.model_budget.blocks.length" class="safety-block-list">
+            <li v-for="block in selected.model_budget.blocks" :key="block.code">
+              <strong>{{ block.code.replaceAll('_', ' ') }}</strong>
+              <span>{{ block.message }}</span>
+            </li>
+          </ul>
+          <div class="safety-meter-grid">
+            <span>
+              <b>{{ selected.model_budget.spent_total_tokens }} / {{ selected.model_budget.max_total_tokens_per_process }}</b>
+              process tokens
+            </span>
+            <span>
+              <b>{{ (selected.model_budget.spent_cost_micros / 1000000).toFixed(2) }} / {{ (selected.model_budget.max_cost_micros_per_process / 1000000).toFixed(2) }}</b>
+              process USD
+            </span>
+          </div>
+          <ul v-if="selected.breakers && selected.breakers.length" class="safety-block-list">
+            <li v-for="breaker in selected.breakers" :key="breaker.scope + breaker.target">
+              <strong>{{ breaker.tripped ? "Open" : "Closed" }} · {{ breaker.scope.replaceAll('_', ' ') }}{{ breaker.target ? ` (${breaker.target})` : "" }}</strong>
+              <span>{{ breaker.reason }}</span>
+            </li>
+          </ul>
+        </section>
+
         <section v-if="selectedReviews.length" class="review-section" data-testid="review-queue">
           <div class="section-heading">
             <div><p class="eyebrow">Human checkpoint</p><h3>Review the exact proposal</h3></div>

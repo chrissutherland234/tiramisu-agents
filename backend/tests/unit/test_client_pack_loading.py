@@ -48,7 +48,7 @@ def test_api_and_worker_load_the_same_bundled_client_pack_contract() -> None:
     tenant_id = "5dc839ab-b42e-42e8-a8d9-afc240ce1d94"
     settings = _settings(
         client_pack_factory=factory_path,
-        openai_model="test-model",
+        openai_model="gpt-4o-mini",
         openai_api_key="test-key-not-used",
         deployment_id="fictional-test",
         deployment_build_id="unit-test",

@@ -15,6 +15,14 @@ from tiramisu_agents.api.operator_auth import (
     require_process_reader,
     require_review_reader,
 )
+from tiramisu_agents.budgets import ModelBudget
+from tiramisu_agents.budgets.breakers import (
+    BreakerConflict,
+    BreakerScope,
+    BreakerState,
+    CircuitBreakerService,
+)
+from tiramisu_agents.budgets.ledger import ModelUsageService
 from tiramisu_agents.communications import CommunicationPolicy
 from tiramisu_agents.communications.safety import CommunicationSafetyService
 from tiramisu_agents.core.contracts.decisions import WakeCondition
@@ -26,6 +34,7 @@ from tiramisu_agents.db.models.actions import (
     ActionRevision,
     ApprovalRequest,
 )
+from tiramisu_agents.db.models.breakers import CircuitBreaker
 from tiramisu_agents.db.models.events import EventInbox
 from tiramisu_agents.db.models.processes import (
     ProcessControlCommand,
@@ -94,6 +103,8 @@ class ProcessDetail(BaseModel):
     created_at: datetime
     updated_at: datetime
     communication_safety: "CommunicationSafetySummary | None"
+    model_budget: "ModelBudgetSummary | None"
+    breakers: tuple["BreakerStateSummary", ...]
     interventions: tuple["ProcessInterventionSummary", ...]
     timeline: tuple[TimelineItem, ...]
 
@@ -118,6 +129,25 @@ class CommunicationBlockSummary(BaseModel):
     code: str
     message: str
     next_allowed_at: datetime | None
+
+
+class ModelBudgetBlockSummary(BaseModel):
+    code: str
+    message: str
+
+
+class ModelBudgetSummary(BaseModel):
+    evaluated_at: datetime
+    model_allowed_now: bool
+    blocks: tuple[ModelBudgetBlockSummary, ...]
+    spent_input_tokens: int
+    max_input_tokens_per_process: int
+    spent_output_tokens: int
+    max_output_tokens_per_process: int
+    spent_total_tokens: int
+    max_total_tokens_per_process: int
+    spent_cost_micros: int
+    max_cost_micros_per_process: int
 
 
 class CommunicationSafetySummary(BaseModel):
@@ -315,6 +345,13 @@ async def get_process(
             identity.tenant_id,
             process,
         )
+        model_budget = await _model_budget_summary(
+            request,
+            session,
+            identity.tenant_id,
+            process,
+        )
+        breakers = await _latest_breaker_summaries(session, identity.tenant_id)
         return ProcessDetail(
             id=process.id,
             process_type=process.process_type,
@@ -342,6 +379,8 @@ async def get_process(
             created_at=process.created_at,
             updated_at=process.updated_at,
             communication_safety=communication_safety,
+            model_budget=model_budget,
+            breakers=tuple(breakers),
             interventions=tuple(
                 ProcessInterventionSummary(
                     id=item.id,
@@ -585,6 +624,180 @@ async def submit_process_control(
         command_id=stored.id,
         command_type=ProcessControlType(stored.command_type),
     )
+
+
+class BreakerTransitionRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    scope: str
+    target: str = ""
+    reason: str = Field(min_length=1, max_length=10_000)
+
+
+class BreakerStateSummary(BaseModel):
+    scope: str
+    target: str
+    tripped: bool
+    reason: str
+    actor_id: UUID
+    transitioned_at: datetime
+
+
+def _summarize_breaker(state: BreakerState) -> BreakerStateSummary:
+    return BreakerStateSummary(
+        scope=state.scope.value,
+        target=state.target,
+        tripped=state.tripped,
+        reason=state.reason,
+        actor_id=state.actor_id,
+        transitioned_at=state.transitioned_at,
+    )
+
+
+@router.get("/breakers", response_model=list[BreakerStateSummary])
+async def list_breakers(
+    request: Request,
+    identity: Annotated[OperatorIdentity, Depends(require_process_reader)],
+) -> list[BreakerStateSummary]:
+    async with _session_factory(request).begin() as session:
+        return await _latest_breaker_summaries(session, identity.tenant_id)
+
+
+async def _latest_breaker_summaries(
+    session: AsyncSession, tenant_id: UUID
+) -> list[BreakerStateSummary]:
+    await set_tenant_context(session, tenant_id)
+    rows = (
+        await session.scalars(
+            select(CircuitBreaker)
+            .where(CircuitBreaker.tenant_id == tenant_id)
+            .order_by(CircuitBreaker.created_at.desc(), CircuitBreaker.id.desc())
+        )
+    ).all()
+    latest: dict[tuple[str, str], BreakerStateSummary] = {}
+    for row in rows:
+        key = (row.scope, row.target)
+        if key not in latest:
+            latest[key] = BreakerStateSummary(
+                scope=row.scope,
+                target=row.target,
+                tripped=row.tripped,
+                reason=row.reason,
+                actor_id=row.actor_id,
+                transitioned_at=row.created_at,
+            )
+    return [latest[key] for key in sorted(latest)]
+
+
+async def _model_budget_summary(
+    request: Request,
+    session: AsyncSession,
+    tenant_id: UUID,
+    process: ProcessInstance,
+) -> ModelBudgetSummary | None:
+    registry = request.app.state.process_registry
+    if registry is None:
+        return None
+    try:
+        definition = registry.get(process.process_type, process.definition_version)
+    except LookupError:
+        return None
+    budget = ModelBudget.from_definition(definition)
+    snapshot = await ModelUsageService().inspect(
+        session,
+        tenant_id=tenant_id,
+        process_instance_id=process.id,
+        budget=budget,
+    )
+    return ModelBudgetSummary(
+        evaluated_at=datetime.now(UTC),
+        model_allowed_now=snapshot.model_allowed_now,
+        blocks=tuple(
+            ModelBudgetBlockSummary(code=block.code.value, message=block.message)
+            for block in snapshot.blocks
+        ),
+        spent_input_tokens=snapshot.evaluated_spent.input_tokens,
+        max_input_tokens_per_process=budget.max_input_tokens_per_process,
+        spent_output_tokens=snapshot.evaluated_spent.output_tokens,
+        max_output_tokens_per_process=budget.max_output_tokens_per_process,
+        spent_total_tokens=snapshot.evaluated_spent.total_tokens,
+        max_total_tokens_per_process=budget.max_total_tokens_per_process,
+        spent_cost_micros=snapshot.evaluated_cost_micros,
+        max_cost_micros_per_process=budget.max_cost_micros_per_process,
+    )
+
+
+@router.post(
+    "/breakers/trip",
+    response_model=BreakerStateSummary,
+    status_code=status.HTTP_200_OK,
+)
+async def trip_breaker(
+    body: BreakerTransitionRequest,
+    request: Request,
+    identity: Annotated[OperatorIdentity, Depends(require_operator_identity)],
+) -> BreakerStateSummary:
+    return _summarize_breaker(
+        await _apply_breaker_transition(body, request, identity, tripped=True)
+    )
+
+
+@router.post(
+    "/breakers/reset",
+    response_model=BreakerStateSummary,
+    status_code=status.HTTP_200_OK,
+)
+async def reset_breaker(
+    body: BreakerTransitionRequest,
+    request: Request,
+    identity: Annotated[OperatorIdentity, Depends(require_operator_identity)],
+) -> BreakerStateSummary:
+    return _summarize_breaker(
+        await _apply_breaker_transition(body, request, identity, tripped=False)
+    )
+
+
+async def _apply_breaker_transition(
+    body: BreakerTransitionRequest,
+    request: Request,
+    identity: OperatorIdentity,
+    *,
+    tripped: bool,
+) -> BreakerState:
+    identity.require_scope(CredentialScope.PROCESSES_CONTROL)
+    try:
+        scope = BreakerScope(body.scope)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"unknown breaker scope: {body.scope}",
+        ) from error
+    try:
+        async with _session_factory(request).begin() as session:
+            service = CircuitBreakerService()
+            if tripped:
+                return await service.trip(
+                    session,
+                    tenant_id=identity.tenant_id,
+                    scope=scope,
+                    target=body.target,
+                    actor_id=identity.actor_id,
+                    reason=body.reason,
+                )
+            return await service.reset(
+                session,
+                tenant_id=identity.tenant_id,
+                scope=scope,
+                target=body.target,
+                actor_id=identity.actor_id,
+                reason=body.reason,
+            )
+    except BreakerConflict as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from error
 
 
 async def _load_timeline(

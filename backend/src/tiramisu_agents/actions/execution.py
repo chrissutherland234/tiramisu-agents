@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
+from tiramisu_agents.budgets.breakers import CircuitBreakerService
 from tiramisu_agents.communications import (
     CommunicationPolicy,
     CommunicationSafetyBlocked,
@@ -84,6 +85,8 @@ class ActionExecutor:
         registry: ProcessDefinitionRegistry,
         *,
         communication_safety: CommunicationSafetyService | None = None,
+        breakers: CircuitBreakerService | None = None,
+        platform_outbound_messages_paused: bool = False,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -92,6 +95,8 @@ class ActionExecutor:
         self._deployment_release = deployment_release
         self._registry = registry
         self._communication_safety = communication_safety or CommunicationSafetyService()
+        self._breakers = breakers or CircuitBreakerService()
+        self._platform_outbound_paused = platform_outbound_messages_paused
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def execute(
@@ -182,6 +187,7 @@ class ActionExecutor:
         provider_result: ProviderActionResult | None = None
         provider_error: Exception | None = None
         communication_block: CommunicationSafetyBlocked | None = None
+        breaker_message: str | None = None
         async with self._session_factory.begin() as session:
             await self._require_execution_enabled(session, tenant_id)
             request, action_revision, _, process = await self._load_authorized_action(
@@ -214,6 +220,13 @@ class ActionExecutor:
                 except CommunicationSafetyBlocked as error:
                     communication_block = error
             if communication_block is None:
+                breaker_message = await self._breaker_message(
+                    session,
+                    tenant_id=tenant_id,
+                    action_type=request.action_type,
+                    communication_policy=communication_policy,
+                )
+            if breaker_message is None and communication_block is None:
                 provider_request = ProviderActionRequest(
                     action_type=request.action_type,
                     parameters=action_revision.parameters,
@@ -237,6 +250,13 @@ class ActionExecutor:
                 action_request_id,
                 key,
                 f"communication safety blocked execution: {communication_block}",
+            )
+        if breaker_message is not None:
+            return await self._record_failure(
+                tenant_id,
+                action_request_id,
+                key,
+                f"circuit breaker open: {breaker_message}",
             )
 
         if isinstance(provider_error, DefinitiveActionConflict):
@@ -281,6 +301,27 @@ class ActionExecutor:
             raise ActionExecutionRejected(
                 "tenant is not assigned to this action-execution deployment"
             ) from error
+
+    async def _breaker_message(
+        self,
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+        action_type: str,
+        communication_policy: CommunicationPolicy,
+    ) -> str | None:
+        opened = await self._breakers.open_for_capability(
+            session, tenant_id=tenant_id, action_type=action_type
+        )
+        if opened is not None:
+            return f"{opened.scope.value}: {opened.reason}"
+        if action_type in communication_policy.outbound_action_types:
+            if self._platform_outbound_paused:
+                return "platform outbound messaging is paused"
+            opened = await self._breakers.open_for_outbound(session, tenant_id=tenant_id)
+            if opened is not None:
+                return f"{opened.scope.value}: {opened.reason}"
+        return None
 
     async def reconcile(
         self,

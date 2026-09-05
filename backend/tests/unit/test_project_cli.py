@@ -96,6 +96,7 @@ def test_describe_explains_customer_contact_rules_in_business_terms() -> None:
     assert "Opt-outs: customer.email_opted_out" in description
     assert "Automated responses: customer.email_auto_replied" in description
     assert "Contact budget: 5 per 24 hours; 50 for the whole journey" in description
+    assert "Model budget: 1000000 tokens and $20.00 for the whole journey" in description
 
 
 @pytest.mark.asyncio

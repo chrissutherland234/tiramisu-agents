@@ -83,10 +83,34 @@ These controls are process-local. Cross-process/channel customer consent, recipi
 timezones, tenant-configured lower platform ceilings, and global throughput quotas remain required
 before production messaging.
 
+## Durable model token/cost budgets and circuit breakers
+
+Every model call records its provider-reported input/output tokens with a deterministic cost
+estimate from a versioned per-model price table. Records are immutable per-execution/turn-attempt rows in
+the `model_usage_ledger`. Repeating a ledger write is idempotent, while rerunning an Activity
+records new model spend under a fresh execution identity. Rows are keyed by process so spend
+survives worker restarts and Continue-As-New. Worker composition refuses models with no price
+entry; deployment overrides can extend the table.
+
+Process token and cost caps from the journey limits are fenced before every model call,
+including corrections; tenant token/cost spend auto-trips the same fence. Exhaustion fails
+closed into operator intervention without further model spend. Manual tenant breakers pause
+model calls, outbound messages, one capability, or everything, with audited trip/reset
+history and an operator API. Concurrent transitions serialize, and resets remain ordered even
+within one transaction. The provider execution fence rechecks capability and outbound breakers
+after approval, before starting provider I/O. Platform-wide pauses are deployment kill switches;
+platform spend aggregation across tenants is still required before production scale.
+
+A call may overshoot a cap; subsequent calls are blocked once recorded spend reaches it.
+Concurrent processes can have calls in flight before tenant spend is recorded. Provider failures
+without usage reports, or a worker crash between a provider response and ledger commit, remain
+unaccounted for and require provider-side reconciliation.
+
 ## Deliberate remaining work
 
 These limits do not yet provide an ASGI/web-server raw request-body cap, attachment streaming
-limits, general successful provider-response limits, model token/cost budgets, tenant-specific lower
-ceilings, cross-process consent, or per-tenant throughput/back-pressure quotas. Raw transport limits
-are required before public production ingress. Token/cost budgets and tenant/platform circuit
-breakers are the remaining autonomy-budget milestone and must be durable across Continue-As-New.
+limits, general successful provider-response limits, tenant-specific lower ceilings,
+cross-process consent, per-tenant throughput/back-pressure quotas, or platform-wide spend
+aggregation. Raw transport limits are required before public production ingress. Remaining
+autonomy-budget work is operational quotas and platform aggregation on top of the durable
+per-process/per-tenant ledger now in place.

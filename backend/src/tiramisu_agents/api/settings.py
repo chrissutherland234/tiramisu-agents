@@ -7,6 +7,8 @@ from uuid import UUID
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from tiramisu_agents.budgets.pricing import ModelPriceOverride
+
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
 
@@ -38,6 +40,11 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("OPENAI_API_KEY", "TIRAMISU_OPENAI_API_KEY"),
     )
+    model_price_overrides: dict[str, ModelPriceOverride] = Field(default_factory=dict)
+    max_model_tokens_per_tenant: int = Field(default=100_000_000, ge=0)
+    max_model_cost_micros_per_tenant: int = Field(default=2_000_000_000, ge=0)
+    platform_model_calls_paused: bool = False
+    platform_outbound_messages_paused: bool = False
     api_host: str = "127.0.0.1"
     api_port: int = Field(default=8000, ge=1, le=65535)
     allow_unsafe_development_tenant_header: bool = False

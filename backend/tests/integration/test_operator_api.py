@@ -29,6 +29,7 @@ from tiramisu_agents.db.models.actions import (
     ActionRevision,
     ApprovalRequest,
 )
+from tiramisu_agents.db.models.breakers import CircuitBreaker
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
 from tiramisu_agents.db.models.processes import (
     ProcessControlCommand,
@@ -62,6 +63,7 @@ async def _delete_tenant_data(
 ) -> None:
     async with admin_factory.begin() as session:
         for model in (
+            CircuitBreaker,
             ProcessStateRevision,
             ProcessControlCommand,
             ProcessIntervention,
@@ -314,6 +316,13 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
             assert communication_safety["follow_ups_since_reply"] == 1
             assert communication_safety["max_outbound_messages_per_process"] == 50
             assert [item["code"] for item in communication_safety["blocks"]] == ["minimum_interval"]
+            model_budget = detail.json()["model_budget"]
+            assert model_budget["model_allowed_now"] is True
+            assert model_budget["blocks"] == []
+            assert model_budget["spent_input_tokens"] == 0
+            assert model_budget["max_total_tokens_per_process"] == 1000000
+            assert model_budget["max_cost_micros_per_process"] == 20000000
+            assert detail.json()["breakers"] == []
             assert detail.json()["interventions"] == [
                 {
                     "id": str(intervention_id),
@@ -482,5 +491,136 @@ async def test_operator_can_inspect_process_and_approve_exact_proposal() -> None
     finally:
         await _delete_tenant_data(admin_factory, tenant_id)
         await _delete_tenant_data(admin_factory, other_tenant_id)
+        await runtime_engine.dispose()
+        await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_operator_can_trip_reset_and_list_breakers() -> None:
+    runtime_url = os.getenv(
+        "TIRAMISU_DATABASE_URL",
+        "postgresql+asyncpg://tiramisu_app:tiramisu_app@localhost:5432/tiramisu_test",
+    )
+    migration_url = os.getenv(
+        "TIRAMISU_MIGRATION_DATABASE_URL",
+        "postgresql+asyncpg://tiramisu:tiramisu@localhost:5432/tiramisu_test",
+    )
+    runtime_engine = create_engine(runtime_url)
+    admin_engine = create_engine(migration_url)
+    runtime_factory = create_session_factory(runtime_engine)
+    admin_factory = create_session_factory(admin_engine)
+    definition = load_fictional_deployment().definition
+    tenant_id = uuid4()
+    actor_id = uuid4()
+    app = create_app(
+        settings=_settings(environment="production"),
+        session_factory=runtime_factory,
+        process_registry=ProcessDefinitionRegistry([definition]),
+    )
+    try:
+        async with admin_factory.begin() as session:
+            session.add(
+                Tenant(
+                    id=tenant_id,
+                    slug=f"tenant-{tenant_id}",
+                    name="Breaker API Tenant",
+                )
+            )
+        credential_service = TenantCredentialService()
+        async with admin_factory.begin() as session:
+            control_credential = await credential_service.issue(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                name="breaker controller",
+                scopes=(
+                    CredentialScope.PROCESSES_READ,
+                    CredentialScope.PROCESSES_CONTROL,
+                ),
+            )
+            read_credential = await credential_service.issue(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                name="breaker reader",
+                scopes=(CredentialScope.PROCESSES_READ,),
+            )
+        control_headers = {"Authorization": f"Bearer {control_credential.token}"}
+        read_headers = {"Authorization": f"Bearer {read_credential.token}"}
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            listed = await client.get("/v1/breakers", headers=read_headers)
+            assert listed.status_code == 200
+            assert listed.json() == []
+
+            tripped = await client.post(
+                "/v1/breakers/trip",
+                headers=control_headers,
+                json={
+                    "scope": "capability",
+                    "target": "send_message",
+                    "reason": "Pause customer messaging",
+                },
+            )
+            assert tripped.status_code == 200
+            assert tripped.json()["tripped"] is True
+            assert tripped.json()["scope"] == "capability"
+            assert tripped.json()["target"] == "send_message"
+
+            repeated = await client.post(
+                "/v1/breakers/trip",
+                headers=control_headers,
+                json={
+                    "scope": "capability",
+                    "target": "send_message",
+                    "reason": "Pause customer messaging",
+                },
+            )
+            assert repeated.status_code == 409
+
+            unknown = await client.post(
+                "/v1/breakers/trip",
+                headers=control_headers,
+                json={"scope": "everything", "reason": "Pause customer messaging"},
+            )
+            assert unknown.status_code == 422
+
+            mistargeted = await client.post(
+                "/v1/breakers/trip",
+                headers=control_headers,
+                json={"scope": "model_calls", "target": "send_message", "reason": "x"},
+            )
+            assert mistargeted.status_code == 422
+
+            forbidden = await client.post(
+                "/v1/breakers/trip",
+                headers=read_headers,
+                json={"scope": "model_calls", "reason": "Pause customer messaging"},
+            )
+            assert forbidden.status_code == 403
+
+            listed = await client.get("/v1/breakers", headers=read_headers)
+            assert [(item["scope"], item["target"], item["tripped"]) for item in listed.json()] == [
+                ("capability", "send_message", True)
+            ]
+
+            reset = await client.post(
+                "/v1/breakers/reset",
+                headers=control_headers,
+                json={
+                    "scope": "capability",
+                    "target": "send_message",
+                    "reason": "Resume customer messaging",
+                },
+            )
+            assert reset.status_code == 200
+            assert reset.json()["tripped"] is False
+
+            listed = await client.get("/v1/breakers", headers=read_headers)
+            assert [(item["scope"], item["target"], item["tripped"]) for item in listed.json()] == [
+                ("capability", "send_message", False)
+            ]
+    finally:
+        await _delete_tenant_data(admin_factory, tenant_id)
         await runtime_engine.dispose()
         await admin_engine.dispose()

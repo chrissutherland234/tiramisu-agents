@@ -52,6 +52,7 @@ from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, Ou
 from tiramisu_agents.db.models.processes import ProcessInstance, ProcessStateRevision
 from tiramisu_agents.db.models.reviews import ApprovalDecision, ReviewMessage, ReviewThread
 from tiramisu_agents.db.models.tenancy import Tenant, TenantSafetyEvent
+from tiramisu_agents.db.models.usage import ModelUsageLedger
 from tiramisu_agents.db.session import create_engine, create_session_factory, set_tenant_context
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
 from tiramisu_agents.processes.compatibility import DeploymentCompatibility
@@ -94,6 +95,7 @@ async def _delete_tenant_data(
             delete(ProcessStateRevision).where(ProcessStateRevision.tenant_id == tenant_id)
         )
         for model in (
+            ModelUsageLedger,
             ActionReconciliationDecision,
             ActionAttempt,
             ApprovalDecision,

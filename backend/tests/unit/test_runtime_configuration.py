@@ -207,7 +207,7 @@ def test_worker_assignments_are_explicit_and_cli_replaces_environment() -> None:
     deployment = compose_worker_client_pack(
         _settings(
             load_fictional_example_processes=True,
-            openai_model="test-model",
+            openai_model="gpt-4o-mini",
             openai_api_key="test-key-not-used",
             deployment_id="fictional-test",
             deployment_build_id="cli-test",
@@ -235,15 +235,15 @@ def test_fictional_worker_fails_fast_without_model_or_explicit_key() -> None:
     with pytest.raises(ValueError, match="TIRAMISU_OPENAI_MODEL"):
         compose_fictional_worker(_settings())
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
-        compose_fictional_worker(_settings(openai_model="test-model"))
+        compose_fictional_worker(_settings(openai_model="gpt-4o-mini"))
     with pytest.raises(ValueError, match="TIRAMISU_DEPLOYMENT_ID"):
         compose_fictional_worker(
-            _settings(openai_model="test-model", openai_api_key="test-key-not-used")
+            _settings(openai_model="gpt-4o-mini", openai_api_key="test-key-not-used")
         )
     with pytest.raises(ValueError, match="TIRAMISU_DEPLOYMENT_BUILD_ID"):
         compose_fictional_worker(
             _settings(
-                openai_model="test-model",
+                openai_model="gpt-4o-mini",
                 openai_api_key="test-key-not-used",
                 deployment_id="fictional-test",
             )
@@ -251,7 +251,7 @@ def test_fictional_worker_fails_fast_without_model_or_explicit_key() -> None:
     with pytest.raises(ValueError, match="TIRAMISU_DEPLOYMENT_TENANT_IDS"):
         compose_fictional_worker(
             _settings(
-                openai_model="test-model",
+                openai_model="gpt-4o-mini",
                 openai_api_key="test-key-not-used",
                 deployment_id="fictional-test",
                 deployment_build_id="unit-test",
@@ -260,11 +260,36 @@ def test_fictional_worker_fails_fast_without_model_or_explicit_key() -> None:
 
     deployment = compose_fictional_worker(
         _settings(
-            openai_model="test-model",
+            openai_model="gpt-4o-mini",
             openai_api_key="test-key-not-used",
             deployment_id="fictional-test",
             deployment_build_id="unit-test",
             deployment_tenant_ids=(uuid4(),),
+        )
+    )
+    assert deployment.definition.id == "enquiry_to_booking"
+
+
+def test_worker_refuses_models_without_a_price_entry_unless_overridden() -> None:
+    base = {
+        "openai_api_key": "test-key-not-used",
+        "deployment_id": "fictional-test",
+        "deployment_build_id": "unit-test",
+        "deployment_tenant_ids": (uuid4(),),
+    }
+    with pytest.raises(ValueError, match="no price entry"):
+        compose_fictional_worker(_settings(openai_model="future-model-9", **base))
+
+    deployment = compose_fictional_worker(
+        _settings(
+            openai_model="future-model-9",
+            model_price_overrides={
+                "future-model-9": {
+                    "input_micros_per_million_tokens": 1_000_000,
+                    "output_micros_per_million_tokens": 2_000_000,
+                }
+            },
+            **base,
         )
     )
     assert deployment.definition.id == "enquiry_to_booking"

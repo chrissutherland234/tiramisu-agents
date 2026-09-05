@@ -150,6 +150,11 @@ def describe_project(target: str, *, as_json: bool = False) -> str:
                 f"at least {limits.minimum_follow_up_interval_hours} hours apart"
             )
         lines.append(
+            f"  Model budget: {journey.limits.max_model_total_tokens_per_process} tokens and "
+            f"${journey.limits.max_model_cost_micros_per_process / 1_000_000:.2f} "
+            "for the whole journey"
+        )
+        lines.append(
             f"  Maximum journey lifetime: {journey.limits.maximum_process_lifetime_days} days"
         )
         lines.append("  Completes when:")

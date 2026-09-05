@@ -17,7 +17,8 @@ from temporalio.worker import Worker
 from tiramisu_agents.actions.execution import ActionExecutor
 from tiramisu_agents.adapters.registry import ActionAdapterRegistry
 from tiramisu_agents.agents.context import PostgresAgentContextLoader
-from tiramisu_agents.agents.runner import ProposalCorrection
+from tiramisu_agents.agents.runner import ModelTurnOutcome, ProposalCorrection
+from tiramisu_agents.budgets.policy import ModelUsage
 from tiramisu_agents.core.contracts.actions import (
     ActionAttemptStatus,
     PermissionOutcome,
@@ -38,6 +39,7 @@ from tiramisu_agents.db.models.actions import (
     ActionRevision,
     ApprovalRequest,
 )
+from tiramisu_agents.db.models.breakers import CircuitBreaker
 from tiramisu_agents.db.models.events import (
     EventInbox,
     ExternalCorrelation,
@@ -57,6 +59,7 @@ from tiramisu_agents.db.models.tenancy import (
     TenantDeploymentEvent,
     TenantSafetyEvent,
 )
+from tiramisu_agents.db.models.usage import ModelUsageLedger
 from tiramisu_agents.db.session import set_tenant_context
 from tiramisu_agents.events.ingestion import EventIngestionService
 from tiramisu_agents.extensions import ClientPack
@@ -110,8 +113,11 @@ class _ExpectedWake:
 class _CompiledScenarioAgent:
     """Agent-turn runner whose only decisions come from compiled scenario steps."""
 
-    def __init__(self, script: CompiledScenarioScript) -> None:
+    def __init__(self, script: CompiledScenarioScript, *, model: str = "gpt-4o-mini") -> None:
+        if not model.strip():
+            raise ValueError("a scenario agent requires a model name for usage records")
         self.script = script
+        self.model = model
         self.cursor = 0
         self.expected_wake: _ExpectedWake | None = None
         self.checkpoint: _ScenarioCheckpoint | None = None
@@ -125,10 +131,10 @@ class _CompiledScenarioAgent:
         turn_input: AgentTurnInput,
         *,
         correction: ProposalCorrection | None = None,
-    ) -> AgentDecision:
+    ) -> ModelTurnOutcome:
         cached = self._decisions_by_turn.get(turn_input.turn_id)
         if cached is not None and correction is None:
-            return cached
+            return ModelTurnOutcome(decision=cached, usage=ModelUsage(), model=self.model)
         try:
             if correction is not None:
                 step = self.current_step()
@@ -142,7 +148,7 @@ class _CompiledScenarioAgent:
                 raise ScenarioRunError("Temporal scenario agent requires the workflow clock")
             decision = self._next_decision(turn_input)
             self._decisions_by_turn[turn_input.turn_id] = decision
-            return decision
+            return ModelTurnOutcome(decision=decision, usage=ModelUsage(), model=self.model)
         except ScenarioRunError as error:
             self.failure = error
             raise
@@ -1160,6 +1166,8 @@ class PostgresTemporalScenarioDriver:
 
     async def _delete_tenant_data(self, tenant_id: UUID) -> None:
         models: Sequence[type[Any]] = (
+            ModelUsageLedger,
+            CircuitBreaker,
             ApprovalDecision,
             ReviewMessage,
             ReviewThread,

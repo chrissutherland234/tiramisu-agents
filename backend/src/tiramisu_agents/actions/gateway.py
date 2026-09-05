@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tiramisu_agents.budgets.breakers import BreakerScope, CircuitBreakerService
 from tiramisu_agents.communications import (
     CommunicationPolicy,
     CommunicationSafetyBlocked,
@@ -63,8 +64,16 @@ def action_payload_hash(action: ActionProposal) -> str:
 class ActionGateway:
     """Persist policy-classified proposals; execution is a later gateway stage."""
 
-    def __init__(self, communication_safety: CommunicationSafetyService | None = None) -> None:
+    def __init__(
+        self,
+        communication_safety: CommunicationSafetyService | None = None,
+        *,
+        breakers: CircuitBreakerService | None = None,
+        platform_outbound_messages_paused: bool = False,
+    ) -> None:
         self._communication_safety = communication_safety or CommunicationSafetyService()
+        self._breakers = breakers or CircuitBreakerService()
+        self._platform_outbound_paused = platform_outbound_messages_paused
 
     async def persist_decision(
         self,
@@ -102,6 +111,11 @@ class ActionGateway:
             )
             if lifetime_block is not None:
                 raise ActionPersistenceConflict(lifetime_block.message)
+        halted = await self._breakers.latest(session, tenant_id=tenant_id, scope=BreakerScope.ALL)
+        if halted is not None and halted.tripped:
+            raise ActionPersistenceConflict(
+                f"circuit breaker open (all): {halted.reason}",
+            )
         revision_targets = await self._revision_targets(
             session,
             tenant_id=tenant_id,
@@ -132,6 +146,10 @@ class ActionGateway:
                 raise ActionPersistenceConflict(
                     "decision repeats an action payload that just returned a definitive conflict"
                 )
+            if existing_action_id is None:
+                await self._enforce_capability_breakers(
+                    session, tenant_id=tenant_id, action_type=action.action_type
+                )
             if (
                 existing_action_id is None
                 and communication_policy is not None
@@ -145,6 +163,7 @@ class ActionGateway:
                     policy=communication_policy,
                     workflow_now=workflow_now,
                 )
+                await self._enforce_outbound_breakers(session, tenant_id=tenant_id)
             matching_targets = tuple(
                 request_id
                 for request_id, action_type in revision_targets
@@ -231,6 +250,35 @@ class ActionGateway:
             snapshot.require_allowed()
         except CommunicationSafetyBlocked as error:
             raise ActionPersistenceConflict(str(error)) from error
+
+    async def _enforce_outbound_breakers(
+        self,
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+    ) -> None:
+        if self._platform_outbound_paused:
+            raise ActionPersistenceConflict("platform outbound messaging is paused")
+        opened = await self._breakers.open_for_outbound(session, tenant_id=tenant_id)
+        if opened is not None:
+            raise ActionPersistenceConflict(
+                f"circuit breaker open ({opened.scope.value}): {opened.reason}",
+            )
+
+    async def _enforce_capability_breakers(
+        self,
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+        action_type: str,
+    ) -> None:
+        opened = await self._breakers.open_for_capability(
+            session, tenant_id=tenant_id, action_type=action_type
+        )
+        if opened is not None:
+            raise ActionPersistenceConflict(
+                f"circuit breaker open ({opened.scope.value}): {opened.reason}",
+            )
 
     @staticmethod
     async def _revision_targets(

@@ -11,6 +11,7 @@ from tiramisu_agents.db.models.actions import (
     ActionRevision,
     ApprovalRequest,
 )
+from tiramisu_agents.db.models.breakers import CircuitBreaker
 from tiramisu_agents.db.models.events import (
     EventInbox,
     ExternalCorrelation,
@@ -30,6 +31,7 @@ from tiramisu_agents.db.models.tenancy import (
     TenantDeploymentEvent,
     TenantSafetyEvent,
 )
+from tiramisu_agents.db.models.usage import ModelUsageLedger
 
 __all__ = [
     "ActionAttempt",
@@ -39,8 +41,10 @@ __all__ = [
     "ActionRevision",
     "ApprovalRequest",
     "ApprovalDecision",
+    "CircuitBreaker",
     "EventInbox",
     "ExternalCorrelation",
+    "ModelUsageLedger",
     "OutboxMessage",
     "OutboxRecoveryCommand",
     "ProcessInstance",

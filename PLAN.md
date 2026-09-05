@@ -655,7 +655,7 @@ Avoid a generic JSON/EAV `business_objects` store unless a concrete client requi
 
 Testing is designed around an integration-free kernel, provider contracts, deterministic Temporal orchestration, and a separate layer of probabilistic agent evaluation.
 
-Current baseline: 200 backend tests (140 unit/contract, 56 PostgreSQL or Temporal integration, and 4 committed-history replay cases), 3 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exhaustive tenant-table RLS/grant enforcement, exact approval/action fencing, typed provider-conflict recovery, deterministic process-local communication/lifetime safety, tenant Activity authorization, deterministic Temporal race ordering, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, and identical compiled safe-adapter scenarios through both shared kernel transitions and the real PostgreSQL/Temporal path. Configuration evolution, agent behavior, cross-process consent, token/cost budgets, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
+Current baseline: 224 backend tests (153 unit/contract, 67 PostgreSQL or Temporal integration, and 4 committed-history replay cases), 3 standalone support-project cases, 5 Vue component cases across 2 files, and 1 live-stack Playwright journey. The strongest coverage is delivery races, exhaustive tenant-table RLS/grant enforcement, exact approval/action fencing, typed provider-conflict recovery, deterministic process-local communication/lifetime safety, durable model token/cost ledger with pre-call fencing and breaker enforcement, tenant Activity authorization, deterministic Temporal race ordering, workflow restart/rollover, manual reevaluation, interventions, generated client-project contracts, and identical compiled safe-adapter scenarios through both shared kernel transitions and the real PostgreSQL/Temporal path. Configuration evolution, agent behavior, cross-process consent, platform spend aggregation, broader adapter contracts, browser failure paths, security automation, and load/resilience remain material gaps. [`docs/testing.md`](docs/testing.md) is the actionable coverage map and ordered gap plan.
 
 ### Layer 1 — Pure kernel tests
 
@@ -845,9 +845,11 @@ The exact packaging boundary remains intentionally simple until the first vertic
 - [x] Define initial canonical event, action, wake-condition, review-command, and agent-decision contracts.
 - [x] Define the initial provider-neutral action port and explicit adapter registry contracts.
 - [ ] Threat-model tenant isolation, webhooks, prompts, tools, and credentials.
-- [ ] Define minimum autonomy, communication, cost, and process-lifetime budgets. Conservative
-  process communication/rate/lifetime defaults and hard upper bounds are now compiled from client
-  journeys; model token/cost budgets and tenant/platform circuit-breaker thresholds remain.
+- [x] Define minimum autonomy, communication, cost, and process-lifetime budgets. Conservative
+  process communication/rate/lifetime/model-token/model-cost defaults and hard upper bounds are
+  now compiled from client journeys, with a durable per-attempt usage ledger, tenant spend
+  auto-trips, manual tenant/capability/outbound breakers, and deployment platform kill
+  switches; cross-process consent, operational quotas, and platform spend aggregation remain.
 - [x] Decide how client packs, tenants, API deployments, worker task queues, provider credentials, upgrades, and rollbacks map to one another: one immutable deployment and Temporal task queue per client pack, or per intentional identical-pack tenant group (ADR-011).
 - [x] Confirm MIT licensing, public contribution policy, and the public/private client-pack boundary.
 
@@ -885,10 +887,12 @@ The following architecture decision records are gates for the durable kernel:
   automated-response suppression with genuine-reply reset, local quiet hours, durable rolling and
   total message reservations, follow-up count/spacing, and maximum process lifetime are enforced at
   proposal and provider boundaries. An audited tenant suspension control and hard semantic
-  data/context limits are also in place; model token/cost budgets, cross-process consent,
-  tenant/platform throughput quotas, and capability-specific circuit breakers remain.
+  data/context limits are also in place, as are durable process token/cost budgets,
+  tenant spend auto-trips, and manual tenant/capability/outbound breakers with operator
+  trip/reset; cross-process consent, operational throughput quotas, and platform spend
+  aggregation remain.
 - [ ] Add data classification, log/trace redaction, Temporal payload encryption hooks, and retention configuration.
-- [ ] Add explicit byte/count/token ceilings for ingress events, facts, action parameters, review context, commitments, and rendered model context. Hard semantic byte/count maxima, pre-persistence validation, prospective fact/context preflight, pre-provider prompt checks, and fail-closed intervention are complete; raw HTTP body/attachment controls, provider-response limits, tenant-specific lower ceilings, and durable model token/cost budgets remain.
+- [ ] Add explicit byte/count/token ceilings for ingress events, facts, action parameters, review context, commitments, and rendered model context. Hard semantic byte/count maxima, pre-persistence validation, prospective fact/context preflight, pre-provider prompt checks, durable model token/cost budgets, and fail-closed intervention are complete; raw HTTP body/attachment controls, provider-response limits, and tenant-specific lower ceilings remain.
 - [x] Add formatting, linting, strict static typing, unit tests, dependency lockfiles, and CI.
 - [ ] Add correlated structured logging, tracing, metrics, health checks, and initial stuck-work alerts.
 - [x] Add the reusable stub providers and scenario test kit.
@@ -917,9 +921,11 @@ The following architecture decision records are gates for the durable kernel:
   rolling/total/follow-up limits use one pure evaluator in scenarios and at proposal/final provider
   boundaries; process lifetime additionally blocks model calls. Deployment-tenant authorization,
   lifecycle fencing, approval expiry, tenant suspension, and semantic data/context ceilings are
-  also enforced; token/cost budgets, raw transport limits, cross-process consent, operational
-  quotas, and platform/capability circuit breakers remain.
-- [ ] Implement Continue-As-New with complete mailbox, wait, version, approval, and budget carry-forward. Versioned rollover now preserves active mailbox buffers, delivery deduplication, recent diagnostics, pending approvals, absolute timers, process-definition identity, and lifetime counters; budget carry-forward awaits the budget model.
+  also enforced, as are pre-model-call token/cost/tenant-spend fences with idempotent
+  per-attempt recording, manual breaker enforcement at reservation and provider boundaries,
+  and deployment platform kill switches; raw transport limits, cross-process consent,
+  operational quotas, and platform spend aggregation remain.
+- [ ] Implement Continue-As-New with complete mailbox, wait, version, approval, and budget carry-forward. Versioned rollover now preserves active mailbox buffers, delivery deduplication, recent diagnostics, pending approvals, absolute timers, process-definition identity, and lifetime counters; model spend needs no carry-forward because the PostgreSQL ledger is keyed by process, not by workflow run.
 - [x] Add Temporal replay and failure-recovery tests. Committed signal/wait and Activity-backed Continue-As-New histories replay in CI; worker restart, rollover carry-forward, and retry-isolation tests cover the initial recovery surface. The broader failure matrix in the testing strategy remains ongoing.
 - [ ] Add committed replay histories for approval/revision, reconciliation, intervention/retry, takeover, suspension, and terminal closure, plus the timer/event, control/turn, review/turn, and event/action-result race matrix. Reserved manual-wake ordering and takeover-during-turn histories are now committed alongside the original and Continue-As-New histories; the complete matrix also runs live against the time-skipping server.
 - [ ] Run the optional Temporal/OpenAI SDK integration spike and record the decision without blocking the proposal-only path.
@@ -1169,9 +1175,11 @@ Status: Accepted and implemented. Recorded in ADR-011 on 2026-08-31; release ide
 The initial executable milestone—fictional enquiry through booking, payment, calendar, and completion—is working through both an integration-free demonstration and the real PostgreSQL/Temporal path. ADR-011's release boundary now makes that foundation safe to evolve across rolling pack releases. The next milestone is:
 
 1. Complete durable model token/cost accounting and budgets plus tenant/platform/capability circuit
-   breakers. The process-local outbound communication/rate/lifetime envelope is complete; shared
-   cross-process consent and recipient-specific timezones remain explicit production messaging
-   gates.
+   breakers. Per-process token/cost budgets with a durable per-attempt ledger, tenant spend
+   auto-trips, manual tenant/capability/outbound breakers with operator trip/reset, and
+   deployment platform kill switches are complete; shared cross-process consent,
+   recipient-specific timezones, and platform spend aggregation remain explicit production
+   messaging gates.
 2. Implement quarantine resolution and replay with operator visibility.
 3. Add isolated draft simulation, evaluation records, and publication gates on top of the shared scenario drivers.
 4. Add real-model evaluations and the shared messaging adapter contract before connecting a real email provider.

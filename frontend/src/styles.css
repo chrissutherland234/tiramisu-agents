@@ -143,6 +143,9 @@ i.status-completed, .large-status.status-completed { background: #dce8ea; color:
 .state-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 26px; }
 .state-card { min-height: 170px; padding: 22px; border: 1px solid #d7ccc1; border-radius: 11px; background: rgba(255,255,255,.38); }
 .communication-safety-card { margin-top: 26px; }
+.model-budget-card { margin-top: 26px; }
+.model-budget-card .status-active { border-color: #b7d3bd; background: #e5f1e7; color: #356542; }
+.model-budget-card .status-review { border-color: #dfb9a9; background: #f8dfd3; color: #94442e; }
 .communication-safety-card .status-active { border-color: #b7d3bd; background: #e5f1e7; color: #356542; }
 .communication-safety-card .status-review { border-color: #dfb9a9; background: #f8dfd3; color: #94442e; }
 .safety-block-list { list-style: none; padding-left: 0 !important; }

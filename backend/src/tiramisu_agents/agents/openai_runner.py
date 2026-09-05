@@ -8,7 +8,8 @@ from agents import Agent, OpenAIProvider, RunConfig, Runner
 from pydantic import BaseModel, ConfigDict, Field
 
 from tiramisu_agents.agents.context import AgentContextError, AgentContextLimitExceeded
-from tiramisu_agents.agents.runner import ProposalCorrection
+from tiramisu_agents.agents.runner import ModelTurnOutcome, ProposalCorrection
+from tiramisu_agents.budgets.policy import ModelUsage
 from tiramisu_agents.core.contracts.decisions import (
     ActionProposal,
     AgentDecision,
@@ -25,9 +26,23 @@ from tiramisu_agents.core.limits import (
 from tiramisu_agents.core.reserved_events import OPERATOR_MANUAL_WAKE_EVENT_TYPE
 
 
+class AgentsSDKUsage(Protocol):
+    @property
+    def input_tokens(self) -> int: ...
+    @property
+    def output_tokens(self) -> int: ...
+
+
+class AgentsSDKContextWrapper(Protocol):
+    @property
+    def usage(self) -> AgentsSDKUsage: ...
+
+
 class AgentsSDKResult(Protocol):
     @property
     def final_output(self) -> Any: ...
+    @property
+    def context_wrapper(self) -> AgentsSDKContextWrapper: ...
 
 
 class AgentDecisionOutputContract(Protocol):
@@ -133,7 +148,7 @@ class OpenAIAgentsTurnRunner:
         turn_input: AgentTurnInput,
         *,
         correction: ProposalCorrection | None = None,
-    ) -> AgentDecision:
+    ) -> ModelTurnOutcome:
         instructions = (
             "You produce a typed proposal for one bounded business-process turn. "
             "You cannot execute actions. Do not invent action or event types. "
@@ -176,7 +191,16 @@ class OpenAIAgentsTurnRunner:
             run_config,
         )
         output = self._output_type.model_validate(result.final_output)
-        return cast(AgentDecisionOutputContract, output).to_agent_decision(turn_input)
+        reported = result.context_wrapper.usage
+        usage = ModelUsage(
+            input_tokens=int(reported.input_tokens),
+            output_tokens=int(reported.output_tokens),
+        )
+        return ModelTurnOutcome(
+            decision=cast(AgentDecisionOutputContract, output).to_agent_decision(turn_input),
+            usage=usage,
+            model=self._model,
+        )
 
     @staticmethod
     def _render_prompt(

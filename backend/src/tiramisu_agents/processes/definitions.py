@@ -40,6 +40,10 @@ class ProcessLimits(BaseModel):
     max_outbound_messages_per_window: int = Field(default=5, ge=0, le=1_000)
     outbound_message_window_hours: int = Field(default=24, ge=1, le=24 * 30)
     maximum_process_lifetime_days: int = Field(default=90, ge=1, le=3650)
+    max_model_input_tokens_per_process: int = Field(default=1_000_000, ge=0, le=1_000_000_000)
+    max_model_output_tokens_per_process: int = Field(default=250_000, ge=0, le=1_000_000_000)
+    max_model_total_tokens_per_process: int = Field(default=1_000_000, ge=0, le=1_000_000_000)
+    max_model_cost_micros_per_process: int = Field(default=20_000_000, ge=0, le=10**15)
 
 
 class ReviewConfiguration(BaseModel):
@@ -357,6 +361,9 @@ class ProcessDefinition(BaseModel):
             f"Business facts:\n{facts}\n"
             f"Completion requirements:\n{completion}\n"
             f"Communication safety:\n{communication_rules}\n"
+            f"Model budget: at most {self.limits.max_model_total_tokens_per_process} "
+            "tokens and deterministic cost enforcement per process; deterministic "
+            "policy is authoritative.\n"
             f"Maximum process lifetime: {self.limits.maximum_process_lifetime_days} days "
             "from process creation.\n"
             f"Terminal states: {terminal_states}\n"

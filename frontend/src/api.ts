@@ -67,8 +67,38 @@ export interface ProcessDetail {
   created_at: string;
   updated_at: string;
   communication_safety?: CommunicationSafety | null;
+  model_budget?: ModelBudget | null;
+  breakers?: BreakerState[];
   interventions: ProcessIntervention[];
   timeline: TimelineItem[];
+}
+
+export interface ModelBudgetBlock {
+  code: string;
+  message: string;
+}
+
+export interface ModelBudget {
+  evaluated_at: string;
+  model_allowed_now: boolean;
+  blocks: ModelBudgetBlock[];
+  spent_input_tokens: number;
+  max_input_tokens_per_process: number;
+  spent_output_tokens: number;
+  max_output_tokens_per_process: number;
+  spent_total_tokens: number;
+  max_total_tokens_per_process: number;
+  spent_cost_micros: number;
+  max_cost_micros_per_process: number;
+}
+
+export interface BreakerState {
+  scope: string;
+  target: string;
+  tripped: boolean;
+  reason: string;
+  actor_id: string;
+  transitioned_at: string;
 }
 
 export interface CommunicationSafetyBlock {

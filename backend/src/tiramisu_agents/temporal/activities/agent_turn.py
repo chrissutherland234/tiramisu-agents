@@ -1,10 +1,10 @@
 """Temporal Activity boundary for nondeterministic agent execution."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -12,7 +12,25 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from tiramisu_agents.agents.context import AgentContextError, PostgresAgentContextLoader
-from tiramisu_agents.agents.runner import AgentTurnRunner, ProposalCorrection
+from tiramisu_agents.agents.runner import AgentTurnRunner, ModelTurnOutcome, ProposalCorrection
+from tiramisu_agents.budgets import (
+    DEFAULT_TENANT_SPEND_CAPS,
+    ModelBudget,
+    ModelBudgetBlock,
+    ModelBudgetBlockCode,
+    ModelBudgetExceeded,
+    ModelUsageService,
+    TenantSpendCaps,
+    evaluate_tenant_spend,
+)
+from tiramisu_agents.budgets.breakers import CircuitBreakerService
+from tiramisu_agents.budgets.pricing import (
+    DEFAULT_MODEL_PRICES,
+    PRICE_TABLE_VERSION,
+    PriceEntry,
+    UnknownModelPrice,
+    estimate_cost_micros,
+)
 from tiramisu_agents.communications import CommunicationPolicy, evaluate_process_lifetime
 from tiramisu_agents.core.action_identity import action_payload_identity
 from tiramisu_agents.core.contracts.actions import ActionAttemptStatus
@@ -74,6 +92,11 @@ class AgentTurnActivities:
         context_loader: PostgresAgentContextLoader | None = None,
         event_observer: Callable[[CanonicalEvent, dict[str, Any]], None] | None = None,
         authorized_tenant_ids: frozenset[UUID] | None = None,
+        model_prices: Mapping[str, PriceEntry] | None = None,
+        usage_service: ModelUsageService | None = None,
+        breakers: CircuitBreakerService | None = None,
+        tenant_spend_caps: TenantSpendCaps | None = None,
+        platform_model_calls_paused: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._registry = registry
@@ -83,10 +106,20 @@ class AgentTurnActivities:
         self._context_loader = context_loader or PostgresAgentContextLoader()
         self._event_observer = event_observer
         self._authorized_tenant_ids = authorized_tenant_ids
+        self._model_prices = (
+            dict(model_prices) if model_prices is not None else dict(DEFAULT_MODEL_PRICES)
+        )
+        self._usage_service = usage_service or ModelUsageService()
+        self._breakers = breakers or CircuitBreakerService()
+        self._tenant_spend_caps = tenant_spend_caps or DEFAULT_TENANT_SPEND_CAPS
+        self._platform_model_paused = platform_model_calls_paused
 
     @activity.defn(name="run_agent_turn")
     async def run_agent_turn(self, command: AgentTurnCommand) -> AgentTurnActivityResult:
         tenant_id = UUID(command.tenant_id)
+        # An Activity retry makes new provider calls, even for the same turn.
+        # Keep its spend distinct from earlier executions of the correction loop.
+        execution_id = uuid4()
         try:
             require_authorized_tenant(tenant_id, self._authorized_tenant_ids)
         except TenantNotAuthorized as error:
@@ -164,7 +197,16 @@ class AgentTurnActivities:
                 if proposal_attempt_count == 1 and self._event_observer is not None:
                     for event in turn_input.events:
                         self._event_observer(event, turn_input.process.authoritative_facts)
-                decision = await self._runner.run_turn(turn_input, correction=correction)
+                outcome = await self._runner.run_turn(turn_input, correction=correction)
+                await self._record_model_usage(
+                    tenant_id=tenant_id,
+                    process_instance_id=UUID(command.process_instance_id),
+                    turn_id=UUID(command.turn_id),
+                    attempt_number=proposal_attempt_count,
+                    execution_id=execution_id,
+                    outcome=outcome,
+                )
+                decision = outcome.decision
                 try:
                     validated = validate_decision(
                         decision,
@@ -210,6 +252,12 @@ class AgentTurnActivities:
                 type="ProcessLifetimeExceeded",
                 non_retryable=True,
             ) from error
+        except ModelBudgetExceeded as error:
+            raise ApplicationError(
+                str(error),
+                type="ModelBudgetExceeded",
+                non_retryable=True,
+            ) from error
         except (TenantNotAuthorized, TenantUnavailable, TenantSuspended) as error:
             raise ApplicationError(
                 "tenant safety control blocks agent execution",
@@ -244,6 +292,38 @@ class AgentTurnActivities:
             )
             if lifetime_block is not None:
                 raise ProcessLifetimeExceeded(lifetime_block.message)
+            budget_snapshot = await self._usage_service.inspect(
+                session,
+                tenant_id=tenant_id,
+                process_instance_id=process_instance_id,
+                budget=ModelBudget.from_definition(definition),
+            )
+            budget_snapshot.require_allowed()
+            tenant_spent, tenant_cost = await self._usage_service.tenant_spent(
+                session, tenant_id=tenant_id
+            )
+            tenant_block = evaluate_tenant_spend(
+                spent=tenant_spent,
+                spent_cost_micros=tenant_cost,
+                caps=self._tenant_spend_caps,
+            )
+            if tenant_block is not None:
+                raise ModelBudgetExceeded(tenant_block)
+            if self._platform_model_paused:
+                raise ModelBudgetExceeded(
+                    ModelBudgetBlock(
+                        ModelBudgetBlockCode.CIRCUIT_OPEN,
+                        "platform model calls are paused",
+                    )
+                )
+            opened = await self._breakers.open_for_model_calls(session, tenant_id=tenant_id)
+            if opened is not None:
+                raise ModelBudgetExceeded(
+                    ModelBudgetBlock(
+                        ModelBudgetBlockCode.CIRCUIT_OPEN,
+                        f"circuit breaker open ({opened.scope.value}): {opened.reason}",
+                    )
+                )
             self._compatibility.require_process(
                 process_type=process.process_type,
                 definition_version=process.definition_version,
@@ -255,4 +335,38 @@ class AgentTurnActivities:
                 deployment_id=process.deployment_id,
                 deployment_release_fingerprint=process.deployment_release_fingerprint,
                 temporal_task_queue=process.temporal_task_queue,
+            )
+
+    async def _record_model_usage(
+        self,
+        *,
+        tenant_id: UUID,
+        process_instance_id: UUID,
+        turn_id: UUID,
+        attempt_number: int,
+        execution_id: UUID,
+        outcome: ModelTurnOutcome,
+    ) -> None:
+        try:
+            cost_micros = estimate_cost_micros(
+                outcome.model, outcome.usage, prices=self._model_prices
+            )
+        except UnknownModelPrice as error:
+            raise ApplicationError(
+                str(error),
+                type="UnknownModelPrice",
+                non_retryable=True,
+            ) from error
+        async with self._session_factory.begin() as session:
+            await self._usage_service.record(
+                session,
+                tenant_id=tenant_id,
+                process_instance_id=process_instance_id,
+                agent_turn_id=turn_id,
+                execution_id=execution_id,
+                attempt_number=attempt_number,
+                model=outcome.model,
+                usage=outcome.usage,
+                cost_micros=cost_micros,
+                price_table_version=PRICE_TABLE_VERSION,
             )

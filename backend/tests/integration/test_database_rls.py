@@ -19,6 +19,7 @@ from tiramisu_agents.db.models.actions import (
     ActionRevision,
     ApprovalRequest,
 )
+from tiramisu_agents.db.models.breakers import CircuitBreaker
 from tiramisu_agents.db.models.events import (
     EventInbox,
     ExternalCorrelation,
@@ -38,6 +39,7 @@ from tiramisu_agents.db.models.tenancy import (
     TenantDeploymentEvent,
     TenantSafetyEvent,
 )
+from tiramisu_agents.db.models.usage import ModelUsageLedger
 from tiramisu_agents.db.session import create_engine, create_session_factory, set_tenant_context
 
 pytestmark = pytest.mark.skipif(
@@ -67,6 +69,8 @@ _TENANT_TABLES = (
     "approval_decisions",
     "review_threads",
     "review_messages",
+    "model_usage_ledger",
+    "circuit_breakers",
 )
 
 _CONTROL_PLANE_READ_ONLY_TABLES = frozenset(
@@ -411,15 +415,36 @@ async def _seed_tenant_graph(session: AsyncSession, tenant_id: UUID) -> None:
         )
     )
     await session.flush()
-    session.add(
-        ReviewMessage(
-            tenant_id=tenant_id,
-            process_instance_id=process_id,
-            review_thread_id=review_thread_id,
-            actor_id=actor_id,
-            message_type="comment",
-            content="Exercise tenant isolation",
-            proposal_revision=1,
+    session.add_all(
+        (
+            ReviewMessage(
+                tenant_id=tenant_id,
+                process_instance_id=process_id,
+                review_thread_id=review_thread_id,
+                actor_id=actor_id,
+                message_type="comment",
+                content="Exercise tenant isolation",
+                proposal_revision=1,
+            ),
+            ModelUsageLedger(
+                tenant_id=tenant_id,
+                process_instance_id=process_id,
+                agent_turn_id=uuid4(),
+                attempt_number=1,
+                model="rls-audit-model",
+                input_tokens=100,
+                output_tokens=50,
+                cost_micros=1000,
+                price_table_version=1,
+            ),
+            CircuitBreaker(
+                tenant_id=tenant_id,
+                scope="model_calls",
+                target="",
+                tripped=True,
+                reason="Exercise tenant isolation",
+                actor_id=actor_id,
+            ),
         )
     )
 

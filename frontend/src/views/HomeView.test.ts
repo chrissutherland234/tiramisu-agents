@@ -82,6 +82,29 @@ const detail = {
     quiet_hours_start_local: "20:00",
     quiet_hours_end_local: "08:00",
   },
+  model_budget: {
+    evaluated_at: now,
+    model_allowed_now: true,
+    blocks: [],
+    spent_input_tokens: 1200,
+    max_input_tokens_per_process: 1000000,
+    spent_output_tokens: 300,
+    max_output_tokens_per_process: 250000,
+    spent_total_tokens: 1500,
+    max_total_tokens_per_process: 1000000,
+    spent_cost_micros: 1500000,
+    max_cost_micros_per_process: 20000000,
+  },
+  breakers: [
+    {
+      scope: "capability",
+      target: "send_message",
+      tripped: true,
+      reason: "Pause customer messaging",
+      actor_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      transitioned_at: now,
+    },
+  ],
   interventions: [
     {
       id: interventionId,
@@ -242,6 +265,11 @@ describe("operator console", () => {
     expect(communicationSafety.text()).toContain("Customer opted out of email contact.");
     expect(communicationSafety.text()).toContain("2 / 20");
     expect(communicationSafety.text()).toContain("Pacific/Auckland");
+    const modelBudget = wrapper.get('[data-testid="model-budget"]');
+    expect(modelBudget.text()).toContain("Process budget available");
+    expect(modelBudget.text()).toContain("1500 / 1000000");
+    expect(modelBudget.text()).toContain("1.50 / 20.00");
+    expect(modelBudget.text()).toContain("Open · capability (send_message)");
     expect(wrapper.get('[data-testid="review-queue"]').text()).toContain("Hello there");
     expect(wrapper.get('[data-testid="timeline"]').text()).toContain("Agent decision");
     const turnGroups = wrapper.get('[data-testid="timeline"]').findAll(".turn-group");

@@ -99,7 +99,7 @@ TIRAMISU_DEPLOYMENT_TENANT_IDS=["00000000-0000-0000-0000-000000000001"]
 
 Client-pack API and worker processes also require a stable `TIRAMISU_DEPLOYMENT_ID`, an immutable `TIRAMISU_DEPLOYMENT_BUILD_ID`, and a durable matching tenant assignment created by `tiramisu-admin assign-tenant-deployment`. Tiramisu derives the Temporal queue from that release identity; it is not configured separately. See the [configuration guide](docs/configuration.md) for the local command and rollout rules.
 
-To enable model-backed orchestration for the fictional process, set `TIRAMISU_OPENAI_MODEL` to an explicit model name for both API and worker and `OPENAI_API_KEY` to a nonblank key for the worker. Worker startup fails closed before connecting if the key or deployment configuration is absent. This can make live OpenAI requests; ordinary tests continue using scripted Activities and require no API key.
+To enable model-backed orchestration for the fictional process, set `TIRAMISU_OPENAI_MODEL` to an explicit model name for both API and worker and `OPENAI_API_KEY` to a nonblank key for the worker. Worker startup fails closed before connecting if the key or deployment configuration is absent, or if the model has no entry in the versioned price table (extend it with `TIRAMISU_MODEL_PRICE_OVERRIDES`). This can make live OpenAI requests; ordinary tests continue using scripted Activities and require no API key.
 
 The runtime role cannot enumerate tenants. Signed provider-webhook verification, managed tenant provisioning, production browser identity, and rate limits remain required before exposing ingestion externally.
 

@@ -3,8 +3,22 @@
 from dataclasses import dataclass
 from typing import Protocol
 
+from tiramisu_agents.budgets.policy import ModelUsage
 from tiramisu_agents.core.contracts.decisions import AgentDecision
 from tiramisu_agents.core.contracts.processes import AgentTurnInput
+
+
+@dataclass(frozen=True, slots=True)
+class ModelTurnOutcome:
+    """A typed proposal with the provider-reported cost of producing it."""
+
+    decision: AgentDecision
+    usage: ModelUsage
+    model: str
+
+    def __post_init__(self) -> None:
+        if not self.model.strip():
+            raise ValueError("a model name is required on a turn outcome")
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +42,6 @@ class AgentTurnRunner(Protocol):
         turn_input: AgentTurnInput,
         *,
         correction: ProposalCorrection | None = None,
-    ) -> AgentDecision:
+    ) -> ModelTurnOutcome:
         """Produce a typed proposal without executing mutating provider actions."""
         ...

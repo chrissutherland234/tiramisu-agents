@@ -21,6 +21,7 @@ from tiramisu_agents.core.contracts.knowledge import FactKind, FactObservation
 from tiramisu_agents.db.models.events import EventInbox, ExternalCorrelation, OutboxMessage
 from tiramisu_agents.db.models.processes import ProcessInstance
 from tiramisu_agents.db.models.tenancy import Tenant, TenantSafetyEvent
+from tiramisu_agents.db.models.usage import ModelUsageLedger
 from tiramisu_agents.db.session import create_engine, create_session_factory
 from tiramisu_agents.events.ingestion import EventIngestionService, ProcessBootstrap
 from tiramisu_agents.processes.compatibility import DeploymentCompatibility
@@ -39,6 +40,9 @@ async def _delete_tenant_data(
     admin_factory: async_sessionmaker[AsyncSession], tenant_id: UUID
 ) -> None:
     async with admin_factory.begin() as session:
+        await session.execute(
+            delete(ModelUsageLedger).where(ModelUsageLedger.tenant_id == tenant_id)
+        )
         await session.execute(delete(OutboxMessage).where(OutboxMessage.tenant_id == tenant_id))
         await session.execute(delete(EventInbox).where(EventInbox.tenant_id == tenant_id))
         await session.execute(
